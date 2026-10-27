@@ -19,6 +19,14 @@ def test_access_key_flow():
         assert status["isHost"] is False  # TestClient is not a loopback address
 
 
+def test_client_files_are_revalidated_on_every_load():
+    with TestClient(app) as client:
+        first = client.get("/static/app.js")
+        assert first.status_code == 200 and first.headers["cache-control"] == "no-cache"
+        again = client.get("/static/app.js", headers={"if-none-match": first.headers["etag"]})
+        assert again.status_code == 304
+
+
 def test_hls_paths_are_restricted():
     with TestClient(app, cookies={"cw_key": KEY}) as client:
         assert client.get("/hls/abc/index.m3u8").status_code == 404

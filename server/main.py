@@ -514,7 +514,20 @@ async def index(request: Request):
 # Windows can map .js/.css to odd types through the registry; browsers then refuse them.
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/css", ".css")
-app.mount("/static", StaticFiles(directory=cfg.web_dir), name="static")
+
+
+class FreshStaticFiles(StaticFiles):
+    """Without Cache-Control, browsers reuse app.js for a while without asking, so after a
+    `git pull` a normal refresh could still run the old client. `no-cache` makes them ask
+    every time; unchanged files answer with a quick 304."""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/static", FreshStaticFiles(directory=cfg.web_dir), name="static")
 
 HLS_FILE = re.compile(r"^(index\.m3u8|init\.mp4|seg_\d{5}\.m4s)$")
 
