@@ -1,0 +1,2 @@
+# Sample subtitles keep their legacy encodings (cp1254, cp1251) byte for byte.
+samples/*.srt -text

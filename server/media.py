@@ -247,9 +247,16 @@ class HlsStream:
             self._log_file = None
 
     def read_playlist(self) -> tuple[list[tuple[str, float]], bool]:
-        try:
-            text = self.playlist_path.read_text(encoding="utf-8", errors="replace")
-        except (FileNotFoundError, PermissionError):
+        text = None
+        for _ in range(3):
+            try:
+                text = self.playlist_path.read_text(encoding="utf-8", errors="replace")
+                break
+            except FileNotFoundError:
+                return [], False
+            except PermissionError:  # Windows: ffmpeg is swapping the file in right now
+                time.sleep(0.02)
+        if text is None:
             return [], False
         segments: list[tuple[str, float]] = []
         duration: Optional[float] = None

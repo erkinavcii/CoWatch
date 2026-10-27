@@ -1,0 +1,95 @@
+1
+00:00:00,000 --> 00:00:04,500
+Second 0 · English subtitles
+
+2
+00:00:05,000 --> 00:00:09,500
+Second 5 · English subtitles
+
+3
+00:00:10,000 --> 00:00:14,500
+Second 10 · English subtitles
+
+4
+00:00:15,000 --> 00:00:19,500
+Second 15 · English subtitles
+
+5
+00:00:20,000 --> 00:00:24,500
+Second 20 · English subtitles
+
+6
+00:00:25,000 --> 00:00:29,500
+Second 25 · English subtitles
+
+7
+00:00:30,000 --> 00:00:34,500
+Second 30 · English subtitles
+
+8
+00:00:35,000 --> 00:00:39,500
+Second 35 · English subtitles
+
+9
+00:00:40,000 --> 00:00:44,500
+Second 40 · English subtitles
+
+10
+00:00:45,000 --> 00:00:49,500
+Second 45 · English subtitles
+
+11
+00:00:50,000 --> 00:00:54,500
+Second 50 · English subtitles
+
+12
+00:00:55,000 --> 00:00:59,500
+Second 55 · English subtitles
+
+13
+00:01:00,000 --> 00:01:04,500
+Second 60 · English subtitles
+
+14
+00:01:05,000 --> 00:01:09,500
+Second 65 · English subtitles
+
+15
+00:01:10,000 --> 00:01:14,500
+Second 70 · English subtitles
+
+16
+00:01:15,000 --> 00:01:19,500
+Second 75 · English subtitles
+
+17
+00:01:20,000 --> 00:01:24,500
+Second 80 · English subtitles
+
+18
+00:01:25,000 --> 00:01:29,500
+Second 85 · English subtitles
+
+19
+00:01:30,000 --> 00:01:34,500
+Second 90 · English subtitles
+
+20
+00:01:35,000 --> 00:01:39,500
+Second 95 · English subtitles
+
+21
+00:01:40,000 --> 00:01:44,500
+Second 100 · English subtitles
+
+22
+00:01:45,000 --> 00:01:49,500
+Second 105 · English subtitles
+
+23
+00:01:50,000 --> 00:01:54,500
+Second 110 · English subtitles
+
+24
+00:01:55,000 --> 00:01:59,500
+Second 115 · English subtitles

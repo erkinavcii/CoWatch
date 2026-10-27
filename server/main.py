@@ -486,6 +486,8 @@ async def hls_file(stream_id: str, name: str):
             data = path.read_bytes()  # ffmpeg replaces this file while we serve it
         except FileNotFoundError:
             raise HTTPException(404) from None
+        except PermissionError:  # Windows: caught mid-replace; hls.js simply retries
+            raise HTTPException(503) from None
         return Response(data, media_type="application/vnd.apple.mpegurl", headers={"Cache-Control": "no-cache"})
     if not path.is_file():
         raise HTTPException(404)
