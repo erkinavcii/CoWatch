@@ -19,7 +19,7 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Optional
 
 from .config import Settings
@@ -157,8 +157,15 @@ def _audio_args(cfg: Settings) -> list[str]:
     return args
 
 
+def _ffmpeg_out(path: PurePath) -> str:
+    """Output path for ffmpeg, always with '/'. The HLS muxer puts init.mp4 next to the
+    playlist by looking for the last '/' in the playlist path; with Windows backslashes it
+    finds none and writes init.mp4 to the current directory instead."""
+    return path.as_posix()
+
+
 def build_command(
-    cfg: Settings, source: str, out_dir: Path, start: float, mode: str,
+    cfg: Settings, source: str, out_dir: PurePath, start: float, mode: str,
     info: ProbeInfo, audio: Optional[dict],
 ) -> list[str]:
     cmd = [cfg.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning", "-y"]
@@ -182,9 +189,9 @@ def build_command(
         "-hls_playlist_type", "event",
         "-hls_segment_type", "fmp4",
         "-hls_fmp4_init_filename", "init.mp4",
-        "-hls_segment_filename", str(out_dir / "seg_%05d.m4s"),
+        "-hls_segment_filename", _ffmpeg_out(out_dir / "seg_%05d.m4s"),
         "-hls_flags", "independent_segments+temp_file",
-        str(out_dir / "index.m3u8"),
+        _ffmpeg_out(out_dir / "index.m3u8"),
     ]
     return cmd
 
@@ -246,7 +253,22 @@ class HlsStream:
             self._log_file.close()
             self._log_file = None
 
+    def _finish_playlist_swap(self) -> None:
+        """ffmpeg writes index.m3u8.tmp, then renames it over index.m3u8. On Windows that
+        rename fails if we are reading the old file at that moment. For the last playlist
+        ffmpeg then exits with the finished version (and its ENDLIST) still in the .tmp
+        file, so finish the swap ourselves once it has exited cleanly."""
+        if self.proc is None or self.proc.poll() != 0:
+            return
+        tmp = self.playlist_path.with_name(self.playlist_path.name + ".tmp")
+        if tmp.exists():
+            try:
+                os.replace(tmp, self.playlist_path)
+            except OSError:
+                pass  # the old file is still open somewhere; the next read tries again
+
     def read_playlist(self) -> tuple[list[tuple[str, float]], bool]:
+        self._finish_playlist_swap()
         text = None
         for _ in range(3):
             try:

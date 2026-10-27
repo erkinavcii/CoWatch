@@ -56,6 +56,12 @@ def clean_name(value) -> str:
     return text[:24] or "?"
 
 
+def local_path(text: Optional[str]) -> Path:
+    """A file path typed or pasted by the host. Windows Explorer's "Copy as path" wraps it
+    in double quotes; PowerShell users tend to paste single quotes."""
+    return Path((text or "").strip().strip("\"'").strip()).expanduser()
+
+
 class Controller:
     def __init__(self) -> None:
         self.room = Room()
@@ -211,7 +217,7 @@ class Controller:
                 kind="torrent", url=self.helper.file_url(info_hash, index), title=entry["name"], size=size,
                 media_key=key, moviehash=moviehash, info_hash=info_hash, file_index=index,
             )
-        file_path = Path(path or "").expanduser()
+        file_path = local_path(path)
         if not file_path.is_file():
             raise ValueError(f"file not found: {file_path}")
         moviehash = await asyncio.to_thread(hash_file, file_path)
