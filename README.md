@@ -46,13 +46,14 @@ winget install Tailscale.Tailscale
 Windows (PowerShell, in the project folder):
 
 ```powershell
-py -m pip install -r requirements.txt
-cd torrent-helper; npm install; cd ..
+py -m venv .venv
+.\.venv\Scripts\python -m pip install -r requirements.txt
+cd torrent-helper; npm.cmd install; cd ..
 copy .env.example .env      # optional: settings and OpenSubtitles key
-py run.py
+.\.venv\Scripts\python run.py
 ```
 
-If `py` is not available, use `python`. On macOS/Linux: `pip install -r requirements.txt`, `cd torrent-helper && npm install && cd ..`, `python3 run.py`.
+Python packages go into the project's `.venv` folder. `npm.cmd` instead of `npm` avoids PowerShell's script execution policy. If `py` is not available, use `python` in the first line. On macOS/Linux: `pip install -r requirements.txt`, `cd torrent-helper && npm install && cd ..`, `python3 run.py`.
 
 `run.py` prints two links (its console messages are in Turkish):
 
@@ -84,7 +85,7 @@ On one computer, with two browser windows:
    ```powershell
    ffmpeg -f lavfi -i testsrc=size=1280x720:rate=24 -f lavfi -i "sine=frequency=440" -t 120 -c:v libx264 -g 48 -pix_fmt yuv420p -af volume=0.1 -c:a ac3 -ac 6 samples\test-video.mkv
    ```
-2. Start with `py run.py`, open the "Bu bilgisayardan" (this computer) link, type your name and press Join.
+2. Start with `.\.venv\Scripts\python run.py`, open the "Bu bilgisayardan" (this computer) link, type your name and press Join.
 3. Paste the full path of `samples\test-video.mkv` into "File path on this computer". In File Explorer you can right-click the file and choose "Copy as path"; the quotes are fine.
 4. Open the same link in a private window and join under another name.
 5. Under "Add subtitles", upload `samples\test.tr.srt` with language `tr` in the first window and `samples\test.ru.srt` with `ru` in the second. Both use old encodings (cp1254 and cp1251); Turkish and Russian letters should show correctly.
