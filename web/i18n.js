@@ -81,6 +81,11 @@ const I18N = {
     fwd: '10 sn ileri (→)',
     mute: 'Sesi kapat',
     fullscreen: 'Tam ekran (f)',
+    tool_pen: 'Kalem: video üstüne herkes için çiz (d)',
+    tool_color: 'Rengin (top ve kalem)',
+    tool_clear: 'Çizimleri herkes için temizle',
+    tool_sfx: 'Dürtme sesi',
+    drawings_cleared: '{name} çizimleri temizledi',
   },
   en: {
     join_title: 'Join the room',
@@ -162,6 +167,11 @@ const I18N = {
     fwd: 'Forward 10 s (→)',
     mute: 'Mute',
     fullscreen: 'Fullscreen (f)',
+    tool_pen: 'Pen: draw on the video for everyone (d)',
+    tool_color: 'Your colour (ball and pen)',
+    tool_clear: 'Clear the drawings for everyone',
+    tool_sfx: 'Poke sound',
+    drawings_cleared: '{name} cleared the drawings',
   },
   ru: {
     join_title: 'Войти в комнату',
@@ -243,6 +253,11 @@ const I18N = {
     fwd: 'Вперёд 10 с (→)',
     mute: 'Без звука',
     fullscreen: 'Полный экран (f)',
+    tool_pen: 'Карандаш: рисовать на видео для всех (d)',
+    tool_color: 'Ваш цвет (шарик и карандаш)',
+    tool_clear: 'Стереть рисунки у всех',
+    tool_sfx: 'Звук тычка',
+    drawings_cleared: '{name}: рисунки стёрты',
   },
 };
 

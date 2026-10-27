@@ -72,8 +72,10 @@ On first run, Windows asks for firewall permission; allow Python. If your friend
 
 1. **Open a film:** for your own file, type its full path into "File path on this computer" (for security, this field only appears on the host computer). For a torrent, paste the magnet link and press "Add torrent"; if it holds several videos, pick one from the list.
 2. **Add subtitles:** under "Add subtitles", search OpenSubtitles by language codes (e.g. `tr,en,ru`) or upload an `.srt/.ass/.vtt` file. Old encodings such as Turkish `cp1254` and Russian `cp1251` are fixed automatically.
-3. **Pick your own subtitles:** everyone sets their own main and second subtitle, timing offset, text size and height. Preferred languages are remembered, so in a new film a subtitle in that language is selected automatically.
-4. **Shortcuts:** space play/pause, ← → 10 s, `f` fullscreen, `m` mute. On touch screens, tapping the video only shows the controls; pausing for everyone takes the button.
+3. **Pick your own subtitles:** uploaded subtitles go to everyone's list, but each viewer picks what shows on their own screen. The "main subtitle" is the large white line at the bottom. The "second subtitle" is optional and shows as a smaller yellow line above it, for watching in two languages at once (you TR + EN, your friend RU + EN). Timing offset, text size and height are personal too. Preferred languages are remembered, so in a new film a subtitle in that language is selected automatically.
+4. **Pointers and pokes:** everyone's pointer shows over the video as a ball with eyes, their name and their colour (it fades after 4 s without movement). Clicking the video makes your ball blink, sends out a ring and plays a short sound for everyone, pitched by colour. The bell on the right turns the sound off. Clicking the video does not pause the film; use space or the button.
+5. **Drawing:** draw on the video for everyone with the pen on the right (`d`); strokes appear live and land on the same spot of the film whatever the screen size. While the film plays, strokes fade after a few seconds; while it is paused, they stay. The colour button changes your colour (ball and pen), the bin clears everyone's drawings.
+6. **Shortcuts:** space play/pause, ← → 10 s, `f` fullscreen, `m` mute, `d` pen, `Esc` pen off. On touch screens, tapping the video only shows the controls; pausing for everyone takes the button.
 
 The interface is available in Turkish, English and Russian.
 
@@ -90,6 +92,7 @@ On one computer, with two browser windows:
 4. Open the same link in a private window and join under another name.
 5. Under "Add subtitles", upload `samples\test.tr.srt` with language `tr` in the first window and `samples\test.ru.srt` with `ru` in the second. Both use old encodings (cp1254 and cp1251); Turkish and Russian letters should show correctly.
 6. Press play. The second in the subtitle should match the big number on screen, and both windows should stay on the same frame. Try seeking, pausing and the ±0.5 offset.
+7. Move the mouse over the video in one window: the other window shows a ball with your name and colour. Click: the ball blinks and both windows play a sound. Press `d` and draw; the stroke appears at the same spot in the other window.
 
 For a real torrent, use Sintel, the Blender Foundation's openly licensed (CC BY) film:
 
@@ -148,13 +151,13 @@ python -m pytest            # media tests run too when ffmpeg is installed
 
 In the browser console, `cowatchDebug()` shows the sync values (film time, expected position, drift).
 
-Layout: `server/` (FastAPI: room, sync, media, subtitles), `torrent-helper/` (Node: magnet → HTTP stream), `web/` (client; hls.js lives in `web/vendor`, Apache-2.0).
+Layout: `server/` (FastAPI: room, sync, media, subtitles, pointers and drawing), `torrent-helper/` (Node: magnet → HTTP stream), `web/` (client; hls.js lives in `web/vendor`, Apache-2.0).
 
 ## Next phases
 
 2. Subtitle automation: language-preference fallback chain, alignment with alass, two-pass LLM translation.
 3. Joining with just a link (DataChannel + TURN), automatic conversion when the bitrate does not fit.
-4. Laser drawing, camera and voice chat.
+4. Camera and voice chat.
 5. Two-sided torrent sync and an extension for DRM platforms.
 
 ## License

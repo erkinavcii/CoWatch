@@ -19,6 +19,8 @@
     searchLangs: $('#searchLangs'), osOff: $('#osOff'), uploadForm: $('#uploadForm'), subFile: $('#subFile'),
     subLang: $('#subLang'), trackList: $('#trackList'), joinOverlay: $('#joinOverlay'), joinForm: $('#joinForm'),
     nameInput: $('#nameInput'), joinLang: $('#joinLang'), toasts: $('#toasts'),
+    drawCanvas: $('#drawCanvas'), cursors: $('#cursors'), toolbar: $('#toolbar'), penBtn: $('#penBtn'),
+    colorBtn: $('#colorBtn'), palette: $('#palette'), clearBtn: $('#clearBtn'), sfxBtn: $('#sfxBtn'),
   };
   const video = el.video;
 
@@ -26,7 +28,7 @@
   const PREFS_KEY = 'cowatch.prefs.v1';
   const DEFAULT_PREFS = {
     name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '', offsetMs: 0,
-    fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false,
+    fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false, color: '', sfx: true,
   };
   const prefs = (() => {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULT_PREFS }; }
@@ -61,6 +63,8 @@
     joined: false, hls: null, streamId: null, primary: '', secondary: '',
     bufferingSent: false, waitTimer: null, dragging: false, isHost: false, autoplayBlocked: false,
     torrent: null, downloadThrottled: false,
+    palette: ['#ff6b6b', '#4dabf7', '#51cf66', '#fcc419', '#cc5de8', '#ff922b', '#22b8cf', '#f06595'],
+    penMode: false,
   };
 
   // ---------------------------------------------------------------- helpers
@@ -151,7 +155,7 @@
     ws.onopen = () => {
       S.connected = true;
       setConn('connected');
-      if (S.joined) send({ type: 'hello', name: prefs.name });
+      if (S.joined) send({ type: 'hello', name: prefs.name, color: prefs.color });
       startPings();
     };
     ws.onmessage = (event) => {
@@ -183,18 +187,30 @@
         S.opening = !!msg.opening;
         S.room = msg.state;
         S.members = msg.members || [];
+        if (Array.isArray(msg.palette) && msg.palette.length) S.palette = msg.palette;
         S.progress = msg.progress;
+        onMembers();
         applyMedia(msg.media);
         applyTracks(msg.tracks || []);
         renderAll();
         break;
       case 'pong': onPong(msg); break;
-      case 'state': S.room = msg; renderControls(); renderCenter(); break;
-      case 'members': S.members = msg.members || []; renderMembers(); renderCenter(); break;
+      case 'state': {
+        const wasRunning = roomRunning();
+        S.room = msg;
+        if (wasRunning !== roomRunning()) retimeStrokes();
+        renderControls(); renderCenter();
+        break;
+      }
+      case 'members': S.members = msg.members || []; onMembers(); renderMembers(); renderCenter(); break;
       case 'media': applyMedia(msg.media); break;
       case 'progress': S.progress = msg; renderMediaInfo(); break;
       case 'subtitles': applyTracks(msg.tracks || []); break;
       case 'status': onStatus(msg); break;
+      case 'cursor': onCursor(msg); break;
+      case 'poke': if (msg.from !== S.clientId) pokeEffect(msg.from, [msg.x, msg.y]); break;
+      case 'draw': onDraw(msg); break;
+      case 'draw_clear': clearStrokes(msg.from); break;
       default: break;
     }
   }
@@ -368,13 +384,11 @@
     }
   }
   el.fsBtn.addEventListener('click', toggleFullscreen);
-  el.stage.addEventListener('dblclick', (e) => { if (!el.controls.contains(e.target)) toggleFullscreen(); });
+  el.stage.addEventListener('dblclick', (e) => { if (!isUi(e.target) && !S.penMode) toggleFullscreen(); });
+  // A click on the picture pokes the others (see presence below); pausing for everyone
+  // takes the button or the space key, so nobody stops the film by accident.
   el.stage.addEventListener('click', (e) => {
-    if (el.controls.contains(e.target)) return;
-    if (S.autoplayBlocked) { video.play().catch(() => {}); return; }
-    // On touch screens a tap only reveals the controls; pausing for everyone needs the button.
-    if (e.pointerType && e.pointerType !== 'mouse') return;
-    togglePlay();
+    if (!isUi(e.target) && S.autoplayBlocked) video.play().catch(() => {});
   });
 
   document.addEventListener('keydown', (e) => {
@@ -385,6 +399,8 @@
     else if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(expectedPosition() + 10); }
     else if (e.key === 'f') toggleFullscreen();
     else if (e.key === 'm') el.muteBtn.click();
+    else if (e.key === 'd') setPen(!S.penMode);
+    else if (e.key === 'Escape') { el.palette.hidden = true; if (S.penMode) setPen(false); }
   });
 
   // Hide the controls while playing and the mouse is still.
@@ -396,6 +412,441 @@
   }
   el.stage.addEventListener('mousemove', wake);
   el.stage.addEventListener('touchstart', wake, { passive: true });
+
+  // ---------------------------------------------------------------- presence: pointers, pokes, pen
+  // Everyone's pointer shows as a ball with their name and colour; a click pokes (the ball
+  // blinks and chirps for everyone); the pen draws for everyone. Positions are fractions of
+  // the video picture, not of the window, so they land on the same spot of the film on
+  // every screen, whatever its size or letterboxing.
+  const CURSOR_SEND_MS = 40;
+  const CURSOR_IDLE_MS = 4000;
+  const STROKE_HOLD_MS = 4000; // a finished stroke stays this long while the film plays
+  const STROKE_FADE_MS = 900;
+  const MAX_STROKES = 300;
+  const MAX_STROKE_POINTS = 4000;
+
+  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .center-msg.clickable'));
+  const hovers = (e) => e.pointerType === 'mouse' || e.pointerType === 'pen';
+  const memberById = (id) => S.members.find((m) => m.id === id);
+  const colorOf = (id) => { const m = memberById(id); return (m && m.color) || '#ffffff'; };
+  const myColor = () => { const m = memberById(S.clientId); return (m && m.color) || prefs.color || S.palette[0]; };
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const round4 = (v) => Math.round(v * 10000) / 10000;
+
+  // Where the picture sits inside the stage: object-fit: contain leaves bars around it.
+  function geom () {
+    const r = el.stage.getBoundingClientRect();
+    let w = r.width; let h = r.height;
+    const vw = video.videoWidth; const vh = video.videoHeight;
+    if (S.media && vw && vh && w && h) {
+      const scale = Math.min(w / vw, h / vh);
+      w = vw * scale; h = vh * scale;
+    }
+    return {
+      left: r.left, top: r.top, width: r.width, height: r.height,
+      ox: (r.width - w) / 2, oy: (r.height - h) / 2, w: w || 1, h: h || 1,
+    };
+  }
+  const toPicture = (e, g) => [round4((e.clientX - g.left - g.ox) / g.w), round4((e.clientY - g.top - g.oy) / g.h)];
+  const toStage = (p, g) => [g.ox + p[0] * g.w, g.oy + p[1] * g.h];
+
+  // ---- balls
+  function makeBall (me) {
+    const node = document.createElement('div');
+    node.className = me ? 'ball me gone' : 'ball gone';
+    node.innerHTML = '<div class="body"><span class="eye"><i></i></span><span class="eye"><i></i></span></div><span class="tag"></span>';
+    el.cursors.appendChild(node);
+    return { node, tag: node.querySelector('.tag'), x: 0, y: 0, tx: 0, ty: 0, lx: 0, ly: 0, seen: 0, visible: false };
+  }
+  const balls = new Map(); // clientId -> the ball of another viewer
+  const mine = Object.assign(makeBall(true), { inside: false, overUi: false, sent: false, sx: null, sy: null });
+
+  function paintBall (ball, color, name) {
+    ball.node.style.setProperty('--c', color);
+    if (ball.tag.textContent !== name) ball.tag.textContent = name;
+  }
+  function ballFor (id) {
+    let ball = balls.get(id);
+    if (!ball) {
+      ball = makeBall(false);
+      balls.set(id, ball);
+      const m = memberById(id);
+      paintBall(ball, colorOf(id), m ? m.name : '?');
+    }
+    return ball;
+  }
+  function showBall (ball, p) {
+    ball.tx = p[0]; ball.ty = p[1]; ball.seen = performance.now();
+    if (!ball.visible) {
+      ball.x = p[0]; ball.y = p[1]; ball.visible = true;
+      ball.node.classList.remove('gone');
+    }
+  }
+  function hideBall (ball) {
+    ball.visible = false;
+    ball.node.classList.add('gone');
+  }
+  function onCursor (msg) {
+    if (!msg.from || msg.from === S.clientId) return;
+    const ball = ballFor(msg.from);
+    if (msg.hidden) hideBall(ball);
+    else showBall(ball, [msg.x, msg.y]);
+  }
+  function onMembers () {
+    const ids = new Set(S.members.map((m) => m.id));
+    for (const [id, ball] of balls) {
+      if (!ids.has(id)) { ball.node.remove(); balls.delete(id); continue; }
+      const m = memberById(id);
+      paintBall(ball, m.color || '#ffffff', m.name);
+    }
+    for (const stroke of strokes.values()) if (!stroke.done && !ids.has(stroke.owner)) finishStroke(stroke);
+    const me = memberById(S.clientId);
+    if (me && me.color && me.color !== prefs.color) { prefs.color = me.color; savePrefs(); }
+    renderToolbar();
+  }
+
+  // My own ball replaces the mouse pointer over the picture, so I see what the others see.
+  function placeMine (e, g) {
+    const sx = e.clientX - g.left; const sy = e.clientY - g.top;
+    if (mine.sx !== null) {
+      mine.lx = clamp((sx - mine.sx) * 0.6, -2.2, 2.2);
+      mine.ly = clamp((sy - mine.sy) * 0.6, -2.2, 2.2);
+    }
+    mine.sx = sx; mine.sy = sy;
+    mine.node.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
+    renderMine();
+  }
+  function renderMine () {
+    const show = !!(S.joined && mine.inside && !mine.overUi && !S.penMode && mine.sx !== null);
+    mine.node.classList.toggle('gone', !show);
+    el.stage.classList.toggle('ball-cursor', show);
+  }
+
+  let cursorTimer = null; let lastCursorAt = 0; let pendingCursor = null;
+  function sendCursor (p) {
+    pendingCursor = p;
+    const wait = CURSOR_SEND_MS - (performance.now() - lastCursorAt);
+    if (wait <= 0) flushCursor();
+    else if (!cursorTimer) cursorTimer = setTimeout(flushCursor, wait);
+  }
+  function flushCursor () {
+    clearTimeout(cursorTimer); cursorTimer = null;
+    if (!pendingCursor) return;
+    lastCursorAt = performance.now();
+    send({ type: 'cursor', x: pendingCursor[0], y: pendingCursor[1] });
+    pendingCursor = null;
+    mine.sent = true;
+  }
+  function withdrawCursor () {
+    clearTimeout(cursorTimer); cursorTimer = null; pendingCursor = null;
+    if (mine.sent) { send({ type: 'cursor', hidden: true }); mine.sent = false; }
+  }
+
+  el.stage.addEventListener('pointermove', (e) => {
+    if (!hovers(e) || !S.joined) return;
+    const g = geom();
+    mine.inside = true;
+    mine.overUi = isUi(e.target);
+    placeMine(e, g);
+    if (!S.penMode) sendCursor(toPicture(e, g));
+  });
+  el.stage.addEventListener('pointerleave', (e) => {
+    if (!hovers(e)) return;
+    mine.inside = false;
+    renderMine();
+    withdrawCursor();
+  });
+
+  // ---- pokes
+  let lastPokeAt = 0;
+  el.stage.addEventListener('pointerdown', (e) => {
+    if (!hovers(e) || e.button !== 0 || !S.joined) return;
+    if (S.penMode || S.autoplayBlocked || isUi(e.target)) return;
+    const now = performance.now();
+    if (now - lastPokeAt < 150) return; // the server drops pokes this close together
+    lastPokeAt = now;
+    const g = geom();
+    const p = toPicture(e, g);
+    send({ type: 'poke', x: p[0], y: p[1] });
+    pokeEffect(S.clientId, p, g);
+  });
+
+  function pokeEffect (id, p, g = geom()) {
+    const me = id === S.clientId;
+    const ball = me ? mine : ballFor(id);
+    if (!me) showBall(ball, p);
+    const node = ball.node;
+    node.classList.remove('blink');
+    void node.offsetWidth; // restart the blink animation
+    node.classList.add('blink');
+    clearTimeout(ball.blinkTimer);
+    ball.blinkTimer = setTimeout(() => node.classList.remove('blink'), 420);
+    const color = me ? myColor() : colorOf(id);
+    const [x, y] = toStage(p, g);
+    const ring = document.createElement('span');
+    ring.className = 'ripple';
+    ring.style.setProperty('--c', color);
+    ring.style.left = `${x}px`;
+    ring.style.top = `${y}px`;
+    el.cursors.appendChild(ring);
+    setTimeout(() => ring.remove(), 700);
+    if (prefs.sfx) chirp(color);
+  }
+
+  // ---- sound: a short synthesised "boop", a whole tone apart per colour, so you hear who poked
+  let audioCtx = null;
+  function audio () {
+    try {
+      if (!audioCtx) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return null;
+        audioCtx = new Ctx();
+      }
+      if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    } catch { return null; }
+    return audioCtx;
+  }
+  function chirp (color) {
+    const ctx = audio();
+    if (!ctx || ctx.state !== 'running') return;
+    const step = Math.max(0, S.palette.indexOf(color));
+    const base = 392 * 2 ** ((step * 2) / 12);
+    const t = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.2, t + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+    gain.connect(ctx.destination);
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(base * 1.9, t);
+    osc.frequency.exponentialRampToValueAtTime(base, t + 0.09);
+    osc.connect(gain);
+    osc.start(t);
+    osc.stop(t + 0.26);
+  }
+
+  // ---- pen
+  const strokes = new Map(); // `${owner}:${id}` -> { id, owner, color, pts, done, fadeAt }
+  const drawCtx = el.drawCanvas.getContext('2d');
+  let drawDirty = true; let geomKey = '';
+  let myStroke = null; let strokeQueue = []; let strokeTimer = null;
+
+  function addStroke (key, id, owner, color) {
+    if (strokes.size >= MAX_STROKES) strokes.delete(strokes.keys().next().value);
+    const stroke = { id, owner, color, pts: [], done: false, fadeAt: null };
+    strokes.set(key, stroke);
+    return stroke;
+  }
+  // While the film plays, a finished stroke fades after a few seconds. While it is paused,
+  // strokes stay until playback resumes or someone clears them.
+  function finishStroke (stroke) {
+    stroke.done = true;
+    stroke.fadeAt = roomRunning() ? performance.now() + STROKE_HOLD_MS : null;
+    drawDirty = true;
+  }
+  function retimeStrokes () {
+    const running = roomRunning(); const now = performance.now();
+    for (const stroke of strokes.values()) {
+      if (!stroke.done) continue;
+      if (running && stroke.fadeAt === null) stroke.fadeAt = now + 1500;
+      else if (!running && stroke.fadeAt !== null && stroke.fadeAt > now) stroke.fadeAt = null;
+    }
+    drawDirty = true;
+  }
+  function onDraw (msg) {
+    if (!msg.from || msg.from === S.clientId) return;
+    const key = `${msg.from}:${msg.stroke}`;
+    const stroke = strokes.get(key) || addStroke(key, msg.stroke, msg.from, msg.color || colorOf(msg.from));
+    for (const p of msg.points || []) if (stroke.pts.length < MAX_STROKE_POINTS) stroke.pts.push(p);
+    if (msg.end) finishStroke(stroke);
+    drawDirty = true;
+  }
+  function clearStrokes (fromId) {
+    strokes.clear();
+    myStroke = null; strokeQueue = [];
+    drawDirty = true;
+    if (fromId && fromId !== S.clientId) {
+      const m = memberById(fromId);
+      toast(t('drawings_cleared', { name: m ? m.name : '?' }), 'info', 2500);
+    }
+  }
+
+  function setPen (on) {
+    S.penMode = on;
+    el.stage.classList.toggle('drawing', on);
+    el.penBtn.classList.toggle('active', on);
+    el.palette.hidden = true;
+    if (on) withdrawCursor(); // while drawing, the stroke itself shows where you are
+    renderMine();
+  }
+  el.penBtn.addEventListener('click', () => setPen(!S.penMode));
+
+  el.drawCanvas.addEventListener('pointerdown', (e) => {
+    if (!S.penMode || !S.joined || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    e.preventDefault();
+    el.drawCanvas.setPointerCapture(e.pointerId);
+    const id = Math.random().toString(36).slice(2, 10);
+    const p = toPicture(e, geom());
+    const color = myColor();
+    myStroke = addStroke(`${S.clientId}:${id}`, id, S.clientId, color);
+    myStroke.pts.push(p);
+    strokeQueue = [];
+    send({ type: 'draw', id, start: true, color, points: [p] });
+    drawDirty = true;
+  });
+  el.drawCanvas.addEventListener('pointermove', (e) => {
+    if (!myStroke) return;
+    const g = geom();
+    const coalesced = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+    for (const ev of (coalesced.length ? coalesced : [e])) {
+      const p = toPicture(ev, g);
+      const last = myStroke.pts[myStroke.pts.length - 1];
+      if (Math.hypot((p[0] - last[0]) * g.w, (p[1] - last[1]) * g.h) < 2) continue; // under 2 px
+      if (myStroke.pts.length >= MAX_STROKE_POINTS) break;
+      myStroke.pts.push(p);
+      strokeQueue.push(p);
+    }
+    drawDirty = true;
+    if (strokeQueue.length && !strokeTimer) strokeTimer = setTimeout(() => flushStroke(false), 40);
+  });
+  function flushStroke (end) {
+    clearTimeout(strokeTimer); strokeTimer = null;
+    if (!myStroke) return;
+    do {
+      const points = strokeQueue.splice(0, 200);
+      const last = end && !strokeQueue.length;
+      if (points.length || last) {
+        send(last ? { type: 'draw', id: myStroke.id, points, end: true } : { type: 'draw', id: myStroke.id, points });
+      }
+    } while (strokeQueue.length);
+  }
+  function endStroke () {
+    if (!myStroke) return;
+    flushStroke(true);
+    finishStroke(myStroke);
+    myStroke = null;
+  }
+  el.drawCanvas.addEventListener('pointerup', endStroke);
+  el.drawCanvas.addEventListener('pointercancel', endStroke);
+
+  function renderStrokes (now, g) {
+    const canvas = el.drawCanvas;
+    const dpr = window.devicePixelRatio || 1;
+    const cw = Math.max(1, Math.round(g.width * dpr)); const ch = Math.max(1, Math.round(g.height * dpr));
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; drawDirty = true; }
+    const key = `${g.ox.toFixed(1)},${g.oy.toFixed(1)},${g.w.toFixed(1)},${g.h.toFixed(1)}`;
+    if (key !== geomKey) { geomKey = key; drawDirty = true; }
+    let fading = false;
+    for (const stroke of strokes.values()) {
+      if (stroke.fadeAt !== null && now >= stroke.fadeAt) { fading = true; break; }
+    }
+    if (!drawDirty && !fading) return;
+    drawDirty = false;
+    const ctx = drawCtx;
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = Math.max(4, g.h * 0.009) * dpr; // a marker: about 10 px on a 1080p picture
+    ctx.shadowColor = 'rgba(0, 0, 0, .55)';
+    ctx.shadowBlur = 3 * dpr;
+    const at = (p) => [(g.ox + p[0] * g.w) * dpr, (g.oy + p[1] * g.h) * dpr];
+    for (const [strokeKey, stroke] of strokes) {
+      let alpha = 1;
+      if (stroke.fadeAt !== null && now >= stroke.fadeAt) {
+        alpha = 1 - (now - stroke.fadeAt) / STROKE_FADE_MS;
+        if (alpha <= 0) { strokes.delete(strokeKey); continue; }
+      }
+      const pts = stroke.pts;
+      if (!pts.length) continue;
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = stroke.color;
+      ctx.fillStyle = stroke.color;
+      const first = at(pts[0]);
+      ctx.beginPath();
+      if (pts.length === 1) {
+        ctx.arc(first[0], first[1], ctx.lineWidth / 2, 0, Math.PI * 2);
+        ctx.fill();
+        continue;
+      }
+      ctx.moveTo(first[0], first[1]);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const a = at(pts[i]); const b = at(pts[i + 1]);
+        ctx.quadraticCurveTo(a[0], a[1], (a[0] + b[0]) / 2, (a[1] + b[1]) / 2);
+      }
+      const last = at(pts[pts.length - 1]);
+      ctx.lineTo(last[0], last[1]);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  let lastFrameAt = 0;
+  function animateBalls (now, g) {
+    const dt = Math.min(100, now - (lastFrameAt || now));
+    lastFrameAt = now;
+    const k = 1 - Math.exp(-dt / 50);
+    for (const ball of balls.values()) {
+      if (!ball.visible) continue;
+      if (now - ball.seen > CURSOR_IDLE_MS) { hideBall(ball); continue; }
+      const nx = ball.x + (ball.tx - ball.x) * k; const ny = ball.y + (ball.ty - ball.y) * k;
+      // The eyes look where the ball is heading.
+      ball.lx += (clamp((nx - ball.x) * g.w * 0.8, -2.2, 2.2) - ball.lx) * 0.3;
+      ball.ly += (clamp((ny - ball.y) * g.h * 0.8, -2.2, 2.2) - ball.ly) * 0.3;
+      ball.x = nx; ball.y = ny;
+      const [x, y] = toStage([nx, ny], g);
+      ball.node.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)`;
+      ball.node.style.setProperty('--lx', `${ball.lx.toFixed(2)}px`);
+      ball.node.style.setProperty('--ly', `${ball.ly.toFixed(2)}px`);
+    }
+    if (Math.abs(mine.lx) > 0.02 || Math.abs(mine.ly) > 0.02) {
+      mine.lx *= 0.88; mine.ly *= 0.88;
+      mine.node.style.setProperty('--lx', `${mine.lx.toFixed(2)}px`);
+      mine.node.style.setProperty('--ly', `${mine.ly.toFixed(2)}px`);
+    }
+  }
+
+  // ---- toolbar
+  function renderToolbar () {
+    const color = myColor();
+    el.stage.style.setProperty('--me', color);
+    el.sfxBtn.classList.toggle('off', !prefs.sfx);
+    paintBall(mine, color, prefs.name || '?');
+    if (!el.palette.hidden) renderPalette();
+  }
+  function renderPalette () {
+    el.palette.replaceChildren();
+    const current = myColor();
+    for (const color of S.palette) {
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
+      swatch.style.setProperty('--c', color);
+      swatch.classList.toggle('sel', color === current);
+      swatch.addEventListener('click', () => pickColor(color));
+      el.palette.appendChild(swatch);
+    }
+  }
+  function pickColor (color) {
+    prefs.color = color; savePrefs();
+    const me = memberById(S.clientId);
+    if (me) me.color = color; // shown right away; the server confirms with a members message
+    send({ type: 'color', color });
+    el.palette.hidden = true;
+    onMembers();
+    renderMembers();
+  }
+  el.colorBtn.addEventListener('click', () => {
+    el.palette.hidden = !el.palette.hidden;
+    if (!el.palette.hidden) renderPalette();
+  });
+  el.clearBtn.addEventListener('click', () => { clearStrokes(); send({ type: 'draw_clear' }); });
+  el.sfxBtn.addEventListener('click', () => {
+    prefs.sfx = !prefs.sfx; savePrefs(); renderToolbar();
+    if (prefs.sfx) chirp(myColor());
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!el.palette.hidden && !el.toolbar.contains(e.target)) el.palette.hidden = true;
+  });
 
   // ---------------------------------------------------------------- subtitles
   function activeText (trackId, time) {
@@ -601,9 +1052,11 @@
     savePrefs();
     S.joined = true;
     el.joinOverlay.hidden = true;
-    // Called inside the click, so the browser allows sound for later play() calls.
+    // Called inside the click, so the browser allows sound for later play() calls
+    // and for the poke sounds.
     video.play().then(() => { if (!roomRunning()) video.pause(); }).catch(() => {});
-    send({ type: 'hello', name: prefs.name });
+    audio();
+    send({ type: 'hello', name: prefs.name, color: prefs.color });
     applyI18n();
   });
 
@@ -624,6 +1077,7 @@
   // ---------------------------------------------------------------- rendering
   function renderAll () {
     renderControls(); renderMembers(); renderMediaPanel(); renderTracks(); renderSubStyle(); renderCenter();
+    renderToolbar();
     el.uiLang.value = prefs.uiLang;
     el.joinLang.value = prefs.uiLang;
     if (document.activeElement !== el.searchLangs) {
@@ -645,6 +1099,7 @@
     for (const m of S.members) {
       const chip = document.createElement('span');
       chip.className = 'member';
+      if (m.color) chip.style.setProperty('--c', m.color);
       if (m.id === S.clientId) chip.classList.add('me');
       if (m.buffering) { chip.classList.add('buffering'); chip.title = t('buffering'); }
       chip.textContent = m.id === S.clientId ? `${m.name} (${t('you')})` : m.name;
@@ -774,6 +1229,9 @@
 
   let lastUi = 0;
   function frame (now) {
+    const g = geom();
+    animateBalls(now, g);
+    renderStrokes(now, g);
     if (S.media) {
       const time = filmTime() - prefs.offsetMs / 1000;
       setSubText(el.subPrimary, S.primary ? activeText(S.primary, time) : '');
@@ -784,6 +1242,7 @@
     }
     if (now - lastUi > 250) {
       lastUi = now;
+      el.clearBtn.disabled = !strokes.size;
       const duration = S.media ? S.media.duration : 0;
       el.seekBar.max = String(Math.max(duration, 1));
       if (!S.dragging) {
@@ -809,6 +1268,7 @@
     filmTime: filmTime(), expected: expectedPosition(), drift: filmTime() - expectedPosition(),
     room: S.room, media: S.media, clockOffset: S.clock.offset, rate: video.playbackRate,
     readyState: video.readyState, primary: S.primary, secondary: S.secondary,
+    clientId: S.clientId, members: S.members, penMode: S.penMode, strokes: strokes.size, balls: [...balls.keys()],
   });
 
   // ---------------------------------------------------------------- start

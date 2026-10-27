@@ -25,6 +25,8 @@ class Client:
         self.id = uuid.uuid4().hex[:8]
         self.ws = ws
         self.name = "?"
+        self.color = ""
+        self.last_poke = 0.0
         self.buffering_since: Optional[float] = None
         self.alive = True
         self._lock = asyncio.Lock()
@@ -33,8 +35,12 @@ class Client:
     def buffering(self) -> bool:
         return self.buffering_since is not None
 
-    async def send(self, msg: dict) -> bool:
+    async def send(self, msg: dict, lossy: bool = False) -> bool:
+        """`lossy`: skip the message if one is still on its way to this client. For cursor
+        positions, where only the newest one matters and a slow link should not pile up."""
         if not self.alive or self.ws is None:
+            return False
+        if lossy and self._lock.locked():
             return False
         try:
             async with self._lock:
@@ -156,10 +162,13 @@ class Room:
     def members_msg(self) -> dict:
         return {
             "type": "members",
-            "members": [{"id": c.id, "name": c.name, "buffering": c.buffering} for c in self.clients.values()],
+            "members": [
+                {"id": c.id, "name": c.name, "color": c.color, "buffering": c.buffering}
+                for c in self.clients.values()
+            ],
         }
 
-    async def broadcast(self, msg: dict) -> None:
-        clients = list(self.clients.values())
+    async def broadcast(self, msg: dict, exclude: Optional[Client] = None, lossy: bool = False) -> None:
+        clients = [c for c in self.clients.values() if c is not exclude]
         if clients:
-            await asyncio.gather(*(c.send(msg) for c in clients))
+            await asyncio.gather(*(c.send(msg, lossy=lossy) for c in clients))

@@ -72,8 +72,10 @@ Windows ilk çalıştırmada güvenlik duvarı izni sorar; Python'a izin ver. Ar
 
 1. **Film aç:** kendi dosyan için "Bu bilgisayardaki dosya yolu"na tam yolu yaz (bu alan güvenlik için sadece host bilgisayarda görünür). Torrent için magnet linkini yapıştırıp "Torrent ekle"ye bas; torrent'te birden fazla video varsa listeden seç.
 2. **Altyazı ekle:** "Altyazı ekle" altında dil kodlarını yazıp OpenSubtitles'ta ara (ör. `tr,en,ru`) ya da `.srt/.ass/.vtt` dosyası yükle. Türkçe `cp1254`, Rusça `cp1251` gibi eski kodlamalar otomatik düzeltilir.
-3. **Kendi altyazını seç:** herkes ana ve ikinci altyazısını, zaman kaydırmayı, yazı boyutunu ve yüksekliği kendisi ayarlar. Tercih edilen dil hatırlanır; yeni filmde o dilde altyazı varsa otomatik seçilir.
-4. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` ses. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
+3. **Kendi altyazını seç:** yüklenen altyazılar odadaki herkesin listesine gelir ama kimin ekranında ne görüneceğini herkes kendisi seçer. "Ana altyazı" alttaki büyük beyaz satırdır. "İkinci altyazı" isteğe bağlıdır ve üstte küçük sarı satır olarak çıkar; iki dili aynı anda izlemek içindir (sen TR + EN, arkadaşın RU + EN gibi). Zaman kaydırma, yazı boyutu ve yükseklik de kişiye özel. Tercih edilen dil hatırlanır; yeni filmde o dilde altyazı varsa otomatik seçilir.
+4. **İmleç ve dürtme:** videonun üstünde herkesin imleci, adı ve rengiyle gözlü bir top olarak görünür (4 sn kıpırdamayınca kaybolur). Videoya tıklamak topun gözlerini kırptırır, bir halka yayar ve herkese kısa bir ses çalar; ses her renkte farklı perdede. Sesi sağdaki çan kapatır. Videoya tıklamak filmi durdurmaz; oynat/durdur için boşluk tuşu ya da buton.
+5. **Çizim:** sağdaki kalemle (`d`) video üstüne çiz; herkes canlı görür, çizgiler ekran boyutundan bağımsız olarak filmin aynı yerine düşer. Film oynarken çizgiler birkaç saniyede silinir, durdurulmuşken kalır. Renk düğmesi rengini değiştirir (top ve kalem aynı renk), çöp kutusu herkesin çizimini temizler.
+6. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` ses, `d` kalem, `Esc` kalemi kapat. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
 
 Arayüz Türkçe, İngilizce ve Rusça kullanılabiliyor.
 
@@ -90,6 +92,7 @@ Tek bilgisayarda, iki tarayıcı penceresiyle:
 4. Aynı linki gizli pencerede aç ve başka bir adla katıl.
 5. "Altyazı ekle" altında ilk pencerede `samples\test.tr.srt` dosyasını `tr` diliyle, ikinci pencerede `samples\test.ru.srt` dosyasını `ru` diliyle yükle. İki dosya da eski kodlamalı (cp1254 ve cp1251); Türkçe ve Rusça harfler düzgün görünmeli.
 6. Oynat. Altyazıdaki saniye ekrandaki büyük rakamla aynı olmalı ve iki pencere aynı karede kalmalı. İleri sarmayı, durdurmayı ve ±0.5 kaydırmayı dene.
+7. Fareyi bir pencerede videonun üstünde gezdir: diğer pencerede adın ve renginle top görünür. Tıkla: top göz kırpar, iki pencerede de ses çalar. `d` ile kalemi açıp çiz; çizgi diğer pencerede aynı yerde belirir.
 
 Gerçek bir torrent için Blender Vakfı'nın açık lisanslı (CC BY) filmi Sintel'i kullanabilirsin:
 
@@ -148,13 +151,13 @@ python -m pytest            # ffmpeg kuruluysa medya testleri de çalışır
 
 Tarayıcı konsolunda `cowatchDebug()` senkron değerlerini gösterir (film zamanı, beklenen konum, fark).
 
-Dosyalar: `server/` (FastAPI: oda, senkron, medya, altyazı), `torrent-helper/` (Node: magnet → HTTP akış), `web/` (istemci; hls.js `web/vendor` içinde, Apache-2.0).
+Dosyalar: `server/` (FastAPI: oda, senkron, medya, altyazı, imleç ve çizim), `torrent-helper/` (Node: magnet → HTTP akış), `web/` (istemci; hls.js `web/vendor` içinde, Apache-2.0).
 
 ## Sonraki fazlar
 
 2. Altyazı otomasyonu: dil tercihli fallback zinciri, alass ile hizalama, iki aşamalı LLM çevirisi.
 3. Sadece link ile katılım (DataChannel + TURN), bitrate yetmezse otomatik dönüştürme.
-4. Lazer çizim, kamera ve sesli sohbet.
+4. Kamera ve sesli sohbet.
 5. Çift taraflı torrent senkronu ve DRM'li platformlar için eklenti.
 
 ## Lisans

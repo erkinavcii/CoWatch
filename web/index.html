@@ -23,7 +23,23 @@
         <div class="sub primary" id="subPrimary" hidden></div>
       </div>
       <div class="empty" id="empty"><p data-i18n="no_media"></p></div>
+      <canvas class="draw" id="drawCanvas"></canvas>
+      <div class="cursors" id="cursors"></div>
       <div class="center-msg" id="centerMsg" hidden></div>
+      <div class="toolbar" id="toolbar">
+        <button type="button" id="penBtn" class="tool" data-i18n-title="tool_pen">
+          <svg viewBox="0 0 24 24"><path d="M3.5 20.5l1.3-5L15.6 4.7a1.8 1.8 0 0 1 2.5 0l1.2 1.2a1.8 1.8 0 0 1 0 2.5L8.5 19.2z"/></svg>
+        </button>
+        <button type="button" id="colorBtn" class="tool" data-i18n-title="tool_color"><span class="dot"></span></button>
+        <div class="palette" id="palette" hidden></div>
+        <button type="button" id="clearBtn" class="tool" data-i18n-title="tool_clear">
+          <svg viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4zM6 9h12l-1 11.2A2 2 0 0 1 15 22H9a2 2 0 0 1-2-1.8z"/></svg>
+        </button>
+        <button type="button" id="sfxBtn" class="tool" data-i18n-title="tool_sfx">
+          <svg class="i-on" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-6 6v4.5L4 17v1h16v-1l-2-3.5V9a6 6 0 0 0-6-6zm-2.2 16a2.2 2.2 0 0 0 4.4 0z"/></svg>
+          <svg class="i-off" viewBox="0 0 24 24"><path opacity=".4" d="M12 3a6 6 0 0 0-6 6v4.5L4 17v1h16v-1l-2-3.5V9a6 6 0 0 0-6-6zm-2.2 16a2.2 2.2 0 0 0 4.4 0z"/><path d="M4.4 3l17 17-1.4 1.4-17-17z"/></svg>
+        </button>
+      </div>
       <div class="controls" id="controls">
         <div class="seek">
           <div class="seek-track"><div class="seek-produced" id="produced"></div></div>

@@ -16,6 +16,7 @@ import math
 import mimetypes
 import re
 import secrets
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -28,6 +29,7 @@ from pydantic import BaseModel
 from .config import get_settings
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
+from .presence import PALETTE, POKE_INTERVAL_S, pick_color, point, stroke_message
 from .room import Client, Room, now_ms
 from .subtitles import (
     MAX_SUBTITLE_BYTES,
@@ -76,6 +78,7 @@ class Controller:
         self.last_progress: dict = {}
         self.download_throttled = False
         self.tasks: list[asyncio.Task] = []
+        self._relays: set[asyncio.Task] = set()
 
     # ---- messages -------------------------------------------------------------
     @property
@@ -115,15 +118,49 @@ class Controller:
             "tracks": self.tracks(),
             "osEnabled": self.os.enabled,
             "opening": self.opening,
+            "palette": list(PALETTE),
         }
+
+    def _relay(self, sender: Client, msg: dict, lossy: bool = False) -> None:
+        """Pass a pointer or drawing message to everyone else without waiting for it, so a
+        slow viewer never holds up the sender's own commands (play, pause, seek)."""
+        task = asyncio.create_task(self.room.broadcast(msg, exclude=sender, lossy=lossy))
+        self._relays.add(task)
+        task.add_done_callback(self._relays.discard)
 
     # ---- websocket commands ---------------------------------------------------------
     async def handle(self, client: Client, msg: dict) -> None:
         kind = msg.get("type")
         if kind == "ping":
             await client.send({"type": "pong", "t0": msg.get("t0"), "ts": now_ms()})
+        elif kind == "cursor":
+            if msg.get("hidden"):
+                self._relay(client, {"type": "cursor", "from": client.id, "hidden": True})
+            else:
+                at = point(msg.get("x"), msg.get("y"))
+                if at is not None:
+                    self._relay(client, {"type": "cursor", "from": client.id, "x": at[0], "y": at[1]}, lossy=True)
+        elif kind == "poke":
+            at = point(msg.get("x"), msg.get("y"))
+            now = time.monotonic()
+            if at is not None and now - client.last_poke >= POKE_INTERVAL_S:
+                client.last_poke = now
+                self._relay(client, {"type": "poke", "from": client.id, "x": at[0], "y": at[1]})
+        elif kind == "draw":
+            out = stroke_message(msg, client.id, client.color or PALETTE[0])
+            if out is not None:
+                self._relay(client, out)
+        elif kind == "draw_clear":
+            self._relay(client, {"type": "draw_clear", "from": client.id})
+        elif kind == "color":
+            color = str(msg.get("color", "")).lower()
+            if color in PALETTE and color != client.color:
+                client.color = color
+                await self.room.broadcast(self.room.members_msg())
         elif kind == "hello":
             client.name = clean_name(msg.get("name"))
+            taken = {c.color for c in self.room.clients.values() if c is not client and c.color}
+            client.color = pick_color(msg.get("color"), taken)
             await self.room.broadcast(self.room.members_msg())
         elif kind == "buffering":
             value = bool(msg.get("value"))
