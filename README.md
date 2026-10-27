@@ -1,38 +1,38 @@
 # Co-Watch
 
-**EN:** Self-hosted watch party where every viewer picks their own subtitle languages: synced playback in original quality, dual subtitles, OpenSubtitles hash matching. The documentation below is in Turkish.
+**English** · [Türkçe](README.tr.md)
 
-Uzaktaki arkadaşlarınla aynı filmi aynı anda izle; herkes kendi altyazı dilini seçsin. Sen Türkçe + İngilizce görürken karşı taraf Rusça + İngilizce görebilir.
+Watch the same film at the same time with friends far away, while everyone picks their own subtitle language. You can watch with Turkish + English subtitles while your friend sees Russian + English.
 
-Faz 1 (MVP): kendi video dosyan ya da bir torrent → orijinal kalitede akış (yeniden encode yok) → herkesin tarayıcısında senkron oynatma + kişiye özel çift altyazı.
+Phase 1 (MVP): your own video file or a torrent → streamed in original quality (no re-encoding) → synced playback in everyone's browser + personal dual subtitles.
 
-## Nasıl çalışıyor
+## How it works
 
 ```
-yerel dosya ───────────────────────────────────────┐
-magnet ──> torrent yardımcısı (Node, webtorrent) ──┴──> ffmpeg (video kopya, ses AAC stereo) ──> HLS
-                                                                                                  │
-           Oda + senkron sunucusu (FastAPI, WebSocket) <──── play/pause/seek ──── tarayıcılar (hls.js)
+local file ────────────────────────────────────┐
+magnet ──> torrent helper (Node, webtorrent) ──┴──> ffmpeg (video copy, audio AAC stereo) ──> HLS
+                                                                                               │
+           Room + sync server (FastAPI, WebSocket) <──── play/pause/seek ──── browsers (hls.js)
 ```
 
-- Herkes aynı HLS akışını kendi tarayıcısında oynatır; ekran paylaşımı yok, kalite kaybı yok.
-- Sunucu tek doğru kaynaktır: `playing`, `position`, `updatedAt`. İstemci farkı 1 sn'yi aşarsa seek yapar, 0,1–1 sn arasında hızı %5 oynatarak yakalar.
-- Biri takılırsa (buffer) oda onun durduğu yerde bekler, en az 4 sn'lik tampon oluşunca herkes birlikte devam eder. 20 sn'den uzun takılan izleyici odayı tutamaz.
-- Altyazılar videoya gömülmez: her tarayıcı seçtiği altyazıyı filmin saniyesine göre kendisi çizer (`film zamanı = video.currentTime + streamStart`). Kaydırma (±ms), boyut ve yükseklik kişiye özeldir.
-- Altyazılar dosyanın OpenSubtitles hash'ine göre saklanır; aynı film tekrar açılınca (torrent ya da yerel dosya fark etmez) hazır gelir.
-- Henüz hazırlanmamış bir yere atlanırsa ffmpeg o noktadan yeniden başlatılır; torrent o kısmı öncelikli indirir.
+- Everyone plays the same HLS stream in their own browser: no screen sharing, no quality loss.
+- The server is the single source of truth: `playing`, `position`, `updatedAt`. A client that drifts more than 1 s seeks; between 0.1 and 1 s it catches up by changing playback speed by 5%.
+- If someone stalls (buffering), the room waits where they stopped, and everyone continues together once they have at least 4 s buffered. A viewer stuck for more than 20 s no longer holds the room.
+- Subtitles are never burned into the video: each browser draws its chosen subtitles against the film's clock (`film time = video.currentTime + streamStart`). Offset (±ms), size and height are personal.
+- Subtitles are stored by the file's OpenSubtitles hash, so they are ready when the same film is opened again, whether from a torrent or a local file.
+- Jumping to a part that is not prepared yet restarts ffmpeg from that point; the torrent downloads that part first.
 
-## Gereksinimler
+## Requirements
 
-| | Kimde | Not |
+| | Who | Note |
 |---|---|---|
 | Python 3.10+ | host | |
-| Node.js 22+ | host | sadece torrent için |
-| ffmpeg + ffprobe | host | PATH'te olmalı |
-| Tailscale | host + izleyiciler | ücretsiz kişisel plan yeter |
-| Güncel tarayıcı | herkes | Chrome, Edge, Firefox, Safari |
+| Node.js 22+ | host | torrents only |
+| ffmpeg + ffprobe | host | must be on PATH |
+| Tailscale | host + viewers | the free personal plan is enough |
+| A current browser | everyone | Chrome, Edge, Firefox, Safari |
 
-Windows'ta hızlı kurulum (her satır ayrı komut):
+Quick install on Windows (one command per line):
 
 ```powershell
 winget install Python.Python.3.12
@@ -41,101 +41,103 @@ winget install Gyan.FFmpeg
 winget install Tailscale.Tailscale
 ```
 
-## Kurulum
+## Setup
 
-Windows (PowerShell, proje klasöründe):
+Windows (PowerShell, in the project folder):
 
 ```powershell
 py -m pip install -r requirements.txt
 cd torrent-helper; npm install; cd ..
-copy .env.example .env      # isteğe bağlı: ayarlar ve OpenSubtitles anahtarı
+copy .env.example .env      # optional: settings and OpenSubtitles key
 py run.py
 ```
 
-`py` komutu yoksa yerine `python` yaz. macOS/Linux'ta: `pip install -r requirements.txt`, `cd torrent-helper && npm install && cd ..`, `python3 run.py`.
+If `py` is not available, use `python`. On macOS/Linux: `pip install -r requirements.txt`, `cd torrent-helper && npm install && cd ..`, `python3 run.py`.
 
-`run.py` iki linki yazar:
+`run.py` prints two links (its console messages are in Turkish):
 
 ```
-Bu bilgisayardan:  http://localhost:8000/?k=ANAHTAR
-Tailscale linki:   http://100.x.y.z:8000/?k=ANAHTAR   <- arkadaşına bunu gönder
+Bu bilgisayardan:  http://localhost:8000/?k=KEY     <- this computer
+Tailscale linki:   http://100.x.y.z:8000/?k=KEY     <- send this one to your friend
 ```
 
-Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olarak kaydedilir. Anahtar `data/access_key.txt` içinde durur; silersen yeni anahtar üretilir ve eski linkler çalışmaz.
+The key in the link is the room's password; the browser stores it as a cookie on first visit. It lives in `data/access_key.txt`; delete that file to generate a new key, and old links stop working.
 
-Windows ilk çalıştırmada güvenlik duvarı izni sorar; Python'a izin ver. Arkadaşın Tailscale linkiyle bağlanamıyorsa izni "Ortak ağlar" için de ver: Tailscale bağlantısı Windows'ta ortak ağ olarak görünebiliyor.
+On first run, Windows asks for firewall permission; allow Python. If your friend cannot connect through the Tailscale link, allow it on public networks too: Windows can list the Tailscale connection as a public network.
 
-**Arkadaşın için:** Tailscale'i kursun, sen de bu bilgisayarı Tailscale yönetim panelinden onunla paylaş (ya da onu tailnet'ine davet et). Sonra linki açıp adını yazsın ve "Katıl"a bassın.
+**For your friend:** they install Tailscale, and you share this computer with them from the Tailscale admin console (or invite them to your tailnet). Then they open the link, type their name and press "Join".
 
-## Kullanım
+## Usage
 
-1. **Film aç:** kendi dosyan için "Bu bilgisayardaki dosya yolu"na tam yolu yaz (bu alan güvenlik için sadece host bilgisayarda görünür). Torrent için magnet linkini yapıştırıp "Torrent ekle"ye bas; torrent'te birden fazla video varsa listeden seç.
-2. **Altyazı ekle:** "Altyazı ekle" altında dil kodlarını yazıp OpenSubtitles'ta ara (ör. `tr,en,ru`) ya da `.srt/.ass/.vtt` dosyası yükle. Türkçe `cp1254`, Rusça `cp1251` gibi eski kodlamalar otomatik düzeltilir.
-3. **Kendi altyazını seç:** herkes ana ve ikinci altyazısını, zaman kaydırmayı, yazı boyutunu ve yüksekliği kendisi ayarlar. Tercih edilen dil hatırlanır; yeni filmde o dilde altyazı varsa otomatik seçilir.
-4. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` ses. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
+1. **Open a film:** for your own file, type its full path into "File path on this computer" (for security, this field only appears on the host computer). For a torrent, paste the magnet link and press "Add torrent"; if it holds several videos, pick one from the list.
+2. **Add subtitles:** under "Add subtitles", search OpenSubtitles by language codes (e.g. `tr,en,ru`) or upload an `.srt/.ass/.vtt` file. Old encodings such as Turkish `cp1254` and Russian `cp1251` are fixed automatically.
+3. **Pick your own subtitles:** everyone sets their own main and second subtitle, timing offset, text size and height. Preferred languages are remembered, so in a new film a subtitle in that language is selected automatically.
+4. **Shortcuts:** space play/pause, ← → 10 s, `f` fullscreen, `m` mute. On touch screens, tapping the video only shows the controls; pausing for everyone takes the button.
 
-## Upload hızı (izleyici başına)
+The interface is available in Turkish, English and Russian.
 
-Gereken upload ≈ dosyanın bitrate'i × 1,3. Dosyanın bitrate'ini bilmiyorsan: 2 saatlik filmde dosya boyutu (GB) × 1,1 ≈ Mbps.
+## Upload speed (per viewer)
 
-| Kaynak | Bitrate | Rahat upload |
+Required upload ≈ the file's bitrate × 1.3. If you don't know the bitrate: for a 2-hour film, file size in GB × 1.1 ≈ Mbps.
+
+| Source | Bitrate | Comfortable upload |
 |---|---|---|
-| Kompakt 1080p (2 saatlik film 2-3 GB) | 2,5-3,5 Mbps | 5 Mbps |
+| Compact 1080p (2-hour film, 2-3 GB) | 2.5-3.5 Mbps | 5 Mbps |
 | 1080p WEB-DL (4-7 GB) | 5-8 Mbps | 8-10 Mbps |
-| 1080p BluRay encode (8-12 GB) | 9-14 Mbps | 15+ Mbps ya da dönüştür |
-| Telefonla çekilmiş video (1080p) | ~15-20 Mbps | dönüştürmek şart |
-| Dönüştürülmüş akış (`TRANSCODE_KBPS=5000`) | 5 Mbps | 8 Mbps |
+| 1080p BluRay encode (8-12 GB) | 9-14 Mbps | 15+ Mbps or convert |
+| Phone recording (1080p) | ~15-20 Mbps | convert |
+| Converted stream (`TRANSCODE_KBPS=5000`) | 5 Mbps | 8 Mbps |
 
-İki izleyici varsa ikiyle çarp. Upload'un düşükse `.env` içinde `MAX_COPY_KBPS` ver (ör. `6000`): bundan ağır dosyalar otomatik dönüştürülür. H.264 olmayan (HEVC/x265, 10-bit) videolar zaten her zaman dönüştürülür. Ekran kartın varsa `VIDEO_ENCODER=h264_nvenc` (NVIDIA), `h264_qsv` (Intel) ya da `h264_amf` (AMD) işlemciyi rahatlatır.
+Multiply by two for two viewers. With a slow upload, set `MAX_COPY_KBPS` in `.env` (e.g. `6000`): heavier files are then converted automatically. Videos that are not H.264 (HEVC/x265, 10-bit) are always converted. With a graphics card, `VIDEO_ENCODER=h264_nvenc` (NVIDIA), `h264_qsv` (Intel) or `h264_amf` (AMD) takes the load off the CPU.
 
-## Ayarlar (.env)
+## Settings (.env)
 
-| Değişken | Varsayılan | Açıklama |
+| Variable | Default | Description |
 |---|---|---|
-| `PORT` | 8000 | Web sunucusu portu |
-| `TORRENT_UPLOAD_LIMIT` | 64 | Torrent'in upload sınırı (KB/s), 0 = sınırsız |
-| `MAX_COPY_KBPS` | 0 | Bunun üstündeki H.264 dosyalar dönüştürülür, 0 = hep orijinal |
-| `TRANSCODE_KBPS` | 5000 | Dönüştürülen akışın hedef bitrate'i |
-| `VIDEO_ENCODER` | libx264 | Dönüştürme encoder'ı |
-| `MAX_HEIGHT` | 1080 | Dönüştürmede en fazla yükseklik |
-| `AUDIO_FILTER` | dynaudnorm | Ses dengeleme; boş bırakırsan kapanır |
-| `OPENSUBTITLES_API_KEY` | – | [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) adresinden alınır |
-| `OPENSUBTITLES_USERNAME` / `_PASSWORD` | – | Ücretsiz hesapla günde ~20 altyazı indirilebilir |
+| `PORT` | 8000 | Web server port |
+| `TORRENT_UPLOAD_LIMIT` | 64 | Torrent upload limit (KB/s), 0 = unlimited |
+| `MAX_COPY_KBPS` | 0 | H.264 files above this are converted, 0 = always original |
+| `TRANSCODE_KBPS` | 5000 | Target bitrate of a converted stream |
+| `VIDEO_ENCODER` | libx264 | Encoder used for conversion |
+| `MAX_HEIGHT` | 1080 | Maximum height when converting |
+| `AUDIO_FILTER` | dynaudnorm | Evens out loud and quiet parts; leave empty to turn off |
+| `OPENSUBTITLES_API_KEY` | – | Get one at [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) |
+| `OPENSUBTITLES_USERNAME` / `_PASSWORD` | – | A free account allows about 20 subtitle downloads a day |
 
-Torrent, ffmpeg playback'in 10 dakikadan fazla önüne geçince indirmeyi kendiliğinden yavaşlatır; böylece indirme, arkadaşına giden akışla aynı hatta yarışmaz.
+Once ffmpeg is more than 10 minutes ahead of playback, the torrent download slows down by itself, so it does not compete with the stream going to your friend on the same connection.
 
-## Bilinen sınırlar
+## Known limitations
 
-- Tek oda, tek film. Odayı link anahtarı korur.
-- HDR videolar dönüştürülünce renkler soluk görünür (ton eşleme yok).
-- iPhone'da tam ekranda altyazı görünmez (Safari sadece videoyu tam ekran yapabiliyor); yatay modda tam ekransız izle.
-- DRM'li platformlar (Netflix vb.) bu modda yok; yol haritasında tarayıcı eklentisi olarak duruyor.
-- `data/torrents` indirilen filmlerle büyür; işin bitince elle temizle.
+- One room, one film. The room is protected by the link key.
+- HDR videos look washed out once converted (no tone mapping).
+- On iPhone, subtitles do not show in fullscreen (Safari can only make the video itself fullscreen); watch in landscape without fullscreen.
+- DRM platforms (Netflix etc.) are not supported in this mode; a browser extension for them is on the roadmap.
+- `data/torrents` grows with downloaded films; clean it up by hand.
 
-## Yasal not
+## Legal note
 
-Co-Watch içerik sağlamaz, aramaz ve dağıtmaz. Kendi dosyaların ya da izleme ve paylaşma hakkın olan içerik için tasarlandı. Torrent desteği protokolün kendisi içindir; telifli içerikte torrent kullanmak IP adresini swarm'da görünür kılar ve izlerken yükleme de yapılır. Kullanımdan doğan sorumluluk kullanana aittir.
+Co-Watch does not provide, search for or distribute any content. It is made for your own files or content you have the right to watch and share. Torrent support is for the protocol itself; using torrents for copyrighted content makes your IP address visible in the swarm, and you upload while you watch. Users are responsible for how they use it.
 
-## Geliştirme
+## Development
 
 ```bash
 pip install pytest
-python -m pytest            # ffmpeg kuruluysa medya testleri de çalışır
+python -m pytest            # media tests run too when ffmpeg is installed
 ```
 
-Tarayıcı konsolunda `cowatchDebug()` senkron değerlerini gösterir (film zamanı, beklenen konum, fark).
+In the browser console, `cowatchDebug()` shows the sync values (film time, expected position, drift).
 
-Dosyalar: `server/` (FastAPI: oda, senkron, medya, altyazı), `torrent-helper/` (Node: magnet → HTTP akış), `web/` (istemci; hls.js `web/vendor` içinde, Apache-2.0).
+Layout: `server/` (FastAPI: room, sync, media, subtitles), `torrent-helper/` (Node: magnet → HTTP stream), `web/` (client; hls.js lives in `web/vendor`, Apache-2.0).
 
-## Sonraki fazlar
+## Next phases
 
-2. Altyazı otomasyonu: dil tercihli fallback zinciri, alass ile hizalama, iki aşamalı LLM çevirisi.
-3. Sadece link ile katılım (DataChannel + TURN), bitrate yetmezse otomatik dönüştürme.
-4. Lazer çizim, kamera ve sesli sohbet.
-5. Çift taraflı torrent senkronu ve DRM'li platformlar için eklenti.
+2. Subtitle automation: language-preference fallback chain, alignment with alass, two-pass LLM translation.
+3. Joining with just a link (DataChannel + TURN), automatic conversion when the bitrate does not fit.
+4. Laser drawing, camera and voice chat.
+5. Two-sided torrent sync and an extension for DRM platforms.
 
-## Lisans
+## License
 
-[GNU AGPL v3.0](LICENSE) ya da sonraki sürümleri. Kısaca: kullanabilir, değiştirebilir ve dağıtabilirsin; değiştirdiğin bir sürümü başkalarına ağ üzerinden sunarsan kaynak kodunu da onlara açman gerekir. Bu yüzden uygulamanın giriş ekranında kaynak koda link var.
+[GNU AGPL v3.0](LICENSE) or later. In short: you can use, modify and share it; if you offer a modified version to others over a network, you have to share its source code with them too. That is why the app's join screen links to the source code.
 
 `web/vendor/hls.light.min.js`: [hls.js](https://github.com/video-dev/hls.js), Apache-2.0 (`web/vendor/hls.js.LICENSE`).
