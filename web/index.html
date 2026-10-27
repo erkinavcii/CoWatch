@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Co-Watch</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">Co<span>·</span>Watch</div>
+    <div class="film-title" id="filmTitle"></div>
+    <div class="members" id="members"></div>
+    <span class="conn" id="conn"></span>
+    <select id="uiLang" class="lang-select" aria-label="Language"></select>
+  </header>
+
+  <main class="layout">
+    <div class="stage" id="stage">
+      <video id="video" playsinline preload="auto"></video>
+      <div class="subs" id="subs">
+        <div class="sub secondary" id="subSecondary" hidden></div>
+        <div class="sub primary" id="subPrimary" hidden></div>
+      </div>
+      <div class="empty" id="empty"><p data-i18n="no_media"></p></div>
+      <div class="center-msg" id="centerMsg" hidden></div>
+      <div class="controls" id="controls">
+        <div class="seek">
+          <div class="seek-track"><div class="seek-produced" id="produced"></div></div>
+          <input type="range" id="seekBar" min="0" max="1" step="0.1" value="0" aria-label="seek">
+        </div>
+        <div class="bar">
+          <button id="playBtn" class="icon" data-i18n-title="play">
+            <svg class="i-play" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            <svg class="i-pause" viewBox="0 0 24 24"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+          </button>
+          <button id="backBtn" class="icon text" data-i18n-title="back">−10</button>
+          <button id="fwdBtn" class="icon text" data-i18n-title="fwd">+10</button>
+          <span id="timeLabel" class="time">0:00 / 0:00</span>
+          <span class="spacer"></span>
+          <button id="muteBtn" class="icon" data-i18n-title="mute">
+            <svg class="i-vol" viewBox="0 0 24 24"><path d="M4 9v6h4l5 5V4L8 9zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
+            <svg class="i-muted" viewBox="0 0 24 24"><path d="M4 9v6h4l5 5V4L8 9zm15.6 3 2.1-2.1-1.4-1.4-2.1 2.1-2.1-2.1-1.4 1.4 2.1 2.1-2.1 2.1 1.4 1.4 2.1-2.1 2.1 2.1 1.4-1.4z"/></svg>
+          </button>
+          <input type="range" id="volume" class="volume" min="0" max="1" step="0.05" aria-label="volume">
+          <button id="fsBtn" class="icon" data-i18n-title="fullscreen">
+            <svg viewBox="0 0 24 24"><path d="M5 5h5v2H7v3H5zm9 0h5v5h-2V7h-3zM5 14h2v3h3v2H5zm12 3v-3h2v5h-5v-2z"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cards">
+      <section class="card" id="mediaCard">
+        <h2 data-i18n="panel_media"></h2>
+        <form id="magnetForm" class="inline-form">
+          <input id="magnetInput" placeholder="magnet:?xt=urn:btih:…" autocomplete="off" spellcheck="false">
+          <button type="submit" class="primary" data-i18n="add_torrent"></button>
+        </form>
+        <div id="fileList" class="file-list" hidden></div>
+        <form id="pathForm" class="inline-form" hidden>
+          <input id="pathInput" data-i18n-placeholder="local_path" autocomplete="off" spellcheck="false">
+          <button type="submit" data-i18n="open_file"></button>
+        </form>
+        <p class="hint" id="hostHint" data-i18n="host_only" hidden></p>
+        <div class="info" id="mediaInfo"></div>
+        <div class="info" id="torrentInfo"></div>
+        <button id="closeMedia" class="ghost" data-i18n="close_media" hidden></button>
+      </section>
+
+      <section class="card" id="subsCard">
+        <h2 data-i18n="panel_subs"></h2>
+        <div class="grid2">
+          <label class="field"><span data-i18n="subs_primary"></span><select id="primarySel"></select></label>
+          <label class="field"><span data-i18n="subs_secondary"></span><select id="secondarySel"></select></label>
+        </div>
+        <div class="field">
+          <span data-i18n="subs_offset"></span>
+          <div class="offset-row">
+            <button type="button" data-off="-500">−0.5</button>
+            <button type="button" data-off="-100">−0.1</button>
+            <output id="offsetOut">0.0 s</output>
+            <button type="button" data-off="100">+0.1</button>
+            <button type="button" data-off="500">+0.5</button>
+            <button type="button" data-off="reset" class="ghost">0</button>
+          </div>
+          <p class="hint" data-i18n="offset_hint"></p>
+        </div>
+        <div class="grid2">
+          <label class="field"><span data-i18n="subs_size"></span><input type="range" id="sizeRange" min="60" max="200" step="5"></label>
+          <label class="field"><span data-i18n="subs_position"></span><input type="range" id="bottomRange" min="2" max="40" step="1"></label>
+        </div>
+        <details class="add-subs">
+          <summary data-i18n="subs_add"></summary>
+          <form id="searchForm" class="inline-form">
+            <input id="searchLangs" data-i18n-placeholder="subs_search_langs" autocomplete="off">
+            <button type="submit" data-i18n="subs_search"></button>
+          </form>
+          <p class="hint" id="osOff" data-i18n="subs_search_off" hidden></p>
+          <form id="uploadForm" class="inline-form">
+            <input type="file" id="subFile" accept=".srt,.ass,.ssa,.vtt,.sub,.txt">
+            <input id="subLang" class="short" list="langList" data-i18n-placeholder="subs_upload_lang" autocomplete="off">
+            <button type="submit" data-i18n="subs_upload_button"></button>
+          </form>
+        </details>
+        <h3 data-i18n="subs_tracks"></h3>
+        <ul id="trackList" class="track-list"></ul>
+      </section>
+    </div>
+  </main>
+
+  <datalist id="langList">
+    <option value="tr"></option><option value="en"></option><option value="ru"></option>
+    <option value="de"></option><option value="fr"></option><option value="es"></option>
+    <option value="it"></option><option value="pt-br"></option><option value="uk"></option>
+    <option value="ar"></option><option value="fa"></option><option value="az"></option>
+  </datalist>
+
+  <div class="overlay" id="joinOverlay">
+    <form class="join-card" id="joinForm">
+      <h1>Co<span>·</span>Watch</h1>
+      <p class="join-sub" data-i18n="join_title"></p>
+      <label class="field"><span data-i18n="join_name"></span><input id="nameInput" maxlength="24" required autocomplete="nickname"></label>
+      <label class="field"><span data-i18n="join_lang"></span><select id="joinLang"></select></label>
+      <button type="submit" class="primary big" data-i18n="join_button"></button>
+      <p class="hint" data-i18n="join_hint"></p>
+      <p class="hint source-link"><a href="https://github.com/erkinavcii/CoWatch" target="_blank" rel="noopener" data-i18n="source_code"></a></p>
+    </form>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script src="/static/vendor/hls.light.min.js"></script>
+  <script src="/static/i18n.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

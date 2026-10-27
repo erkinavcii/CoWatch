@@ -1,0 +1,13 @@
+{
+  "name": "cowatch-torrent-helper",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "main": "index.mjs",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node index.mjs" },
+  "dependencies": {
+    "webtorrent": "^3.0.21"
+  }
+}
