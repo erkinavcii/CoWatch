@@ -23,8 +23,18 @@ def find_tool(name: str) -> str | None:
     return shutil.which(name)
 
 
-def tailscale_ip() -> str | None:
+def tailscale_exe() -> str | None:
+    """On PATH, or where the Windows installer puts it: a console opened before Tailscale was
+    installed does not see the new PATH yet."""
     exe = find_tool("tailscale")
+    if exe or os.name != "nt":
+        return exe
+    default = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tailscale" / "tailscale.exe"
+    return str(default) if default.is_file() else None
+
+
+def tailscale_ip() -> str | None:
+    exe = tailscale_exe()
     if not exe:
         return None
     try:
@@ -51,7 +61,7 @@ def start_serve(cfg) -> tuple[subprocess.Popen, str] | None:
     """HTTPS for friends through Tailscale Serve: browsers open the camera and microphone only
     on secure pages. It runs in the foreground and stops with us; `--bg` would keep forwarding
     to a closed port after we exit, even across reboots."""
-    exe = find_tool("tailscale")
+    exe = tailscale_exe()
     if not exe:
         return None
     name = tailscale_dns_name(exe)

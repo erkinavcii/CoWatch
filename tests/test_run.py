@@ -20,5 +20,17 @@ def test_tailscale_dns_name_from_status(monkeypatch):
 
 
 def test_no_serve_without_tailscale(monkeypatch):
-    monkeypatch.setattr(run, "find_tool", lambda _name: None)
+    monkeypatch.setattr(run, "tailscale_exe", lambda: None)
     assert run.start_serve(run.get_settings()) is None
+
+
+def test_tailscale_found_in_the_default_windows_folder(monkeypatch, tmp_path):
+    exe = tmp_path / "Tailscale" / "tailscale.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"")
+    monkeypatch.setattr(run, "find_tool", lambda _name: None)
+    monkeypatch.setattr(run.os, "name", "nt")
+    monkeypatch.setenv("ProgramFiles", str(tmp_path))
+    assert run.tailscale_exe() == str(exe)
+    exe.unlink()
+    assert run.tailscale_exe() is None
