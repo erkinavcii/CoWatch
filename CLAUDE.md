@@ -43,15 +43,16 @@ cd torrent-helper; npm.cmd install; cd ..
 - **Film zamanı** = `video.currentTime + streamStart`. ffmpeg `-copyts` ile çalışır; akış yeniden başlatılınca ilk parçanın zamanı ölçülür.
 - **İmleç ve çizim konumları** pencereye değil, video görüntüsüne göre orandır (0–1); `object-fit: contain`'in bıraktığı bantlar hesaba katılır.
 - **İmleç ve çizim mesajları** sunucuda arka planda iletilir (`Controller._relay`); yavaş bir izleyici oynat/durdur komutlarını bekletmesin diye.
-- **Yerel dosya açma** sadece loopback'ten gelen isteklere açık (`is_local`). Tailscale Serve'e geçilince bu kontrol `Tailscale-User-Login` başlığına da bakmalı (kamera-ses planı, 1. adım).
+- **Yerel dosya açma** sadece loopback'ten gelen isteklere açık (`is_local`). Tailscale Serve istekleri de `127.0.0.1`'den getirdiği için bu kontrol `Host` başlığına ve `Tailscale-User-Login` / `X-Forwarded-For` başlıklarına da bakmalı (kamera-ses planı, 1. adım).
 - **Statik dosyalar** `no-cache` ile sunulur; tarayıcı her açılışta yeni sürümü sorar.
 
 ## Durum (28 Ekim 2026)
 
 - Faz 1 Windows'ta denendi: yerel dosya, iki pencerede senkron, kişiye özel altyazı (TR + EN).
 - İmleç topu, dürtme sesi ve çizim eklendi; iki tarayıcı penceresiyle denendi.
-- Henüz denenmedi: Windows'ta torrent (README'deki Sintel magnet'i) ve Tailscale üzerinden arkadaşla izleme.
+- Henüz denenmedi: Windows'ta torrent (README'deki Sintel magnet'i) ve Tailscale üzerinden arkadaşla izleme. Tailscale bu bilgisayarda kurulu değil.
+- Tarayıcı testi (`tests/e2e/two_viewers.py`) ilk oturumda yazıldı ama depoya girmedi; Playwright da kurulu değil. Kamera-ses planının 1. adımında yeniden yazılacak.
 
 ## Sıradaki iş: kamera ve ses
 
-Plan: [docs/kamera-ses-plani.md](docs/kamera-ses-plani.md). Plandaki dört karar proje sahibinde; cevap gelmediyse önerilen varsayılanlarla ilerle. İlk adım HTTPS (Tailscale Serve) ve host kontrolünün düzeltilmesi.
+Plan: [docs/kamera-ses-plani.md](docs/kamera-ses-plani.md). Plandaki beş karar proje sahibinde; cevap gelmediyse önerilen varsayılanlarla ilerle. İlk adım HTTPS (Tailscale Serve), host kontrolünün düzeltilmesi ve tarayıcı testi.
