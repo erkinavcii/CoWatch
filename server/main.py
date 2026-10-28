@@ -25,6 +25,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, Web
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.websockets import WebSocketState
 
 from .config import get_settings
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, probe
@@ -744,7 +745,11 @@ async def ws_endpoint(ws: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception:
-        log.exception("websocket error")
+        # A viewer that vanished (browser closed, network gone) often first fails a send to
+        # it; the socket is then marked closed and receiving raises a RuntimeError, not
+        # WebSocketDisconnect. That is a normal leave, not an error.
+        if WebSocketState.DISCONNECTED not in (ws.client_state, ws.application_state):
+            log.exception("websocket error")
     finally:
         changed = ctl.room.remove(client.id)
         await ctl.room.broadcast(ctl.room.members_msg())

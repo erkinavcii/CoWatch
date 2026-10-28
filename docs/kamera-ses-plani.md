@@ -119,7 +119,7 @@ Her izleyici çifti arasında bir `RTCPeerConnection` kurulur (mesh). Sunucu SDP
 | `{type: "av", mic, cam}` | istemci → sunucu | `Client.mic` ve `Client.cam`'i günceller, herkese `members` yayınlar |
 | `members` | sunucu → herkes | Her üyede yeni `mic` ve `cam` alanları |
 
-`data` ya `{description}` ya da `{candidate}`; perfect negotiation düzeni ([MDN](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation)). `hello` de `mic` ve `cam` taşır, böylece yeniden bağlanan biri durumunu hemen bildirir.
+`data` ya `{description}`, ya `{candidate}` ya da `{reset: true}` (bağlantı yeniden kuruldu, karşı taraf da kursun); perfect negotiation düzeni ([MDN](https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation)). `hello` de `mic` ve `cam` taşır, böylece yeniden bağlanan biri durumunu hemen bildirir.
 
 **Bağlantının kuruluşu:**
 
@@ -168,6 +168,7 @@ Dört adım var; her biri ayrı bir commit ve host bilgisayarda bir deneme. Her 
 4. **Cila:**
    - Meet'teki gibi giriş ekranında önizleme, kutuların sürüklenmesi ve küçültülmesi, gerekirse %100'ün üstünde kişi başına ses.
    - Ölçüt: Tailscale üzerinden, arkadaşlarla gerçek ağlarda başından sonuna bir film.
+   - Durum (28 Ekim): önizleme, kutuları sürükleme ve küçültme, kendiliğinden onarım kodlandı. Onarım iki katmanlı: WebSocket kendiliğinden döner (ağ gelince hemen); eş bağlantısında önce `restartIce`, 20 sn'de düzelmezse teklif eden taraf bağlantıyı yeniden kurar ve karşıya `rtc` içinde `{reset: true}` gönderir. Tarayıcı testi üçüncü bir izleyiciyle önizlemeden girişi, 3 kişilik bağlantıyı, sürüklemeyi, küçültmeyi, yeniden kurmayı ve ayrılmayı deniyor. %100 üstü kişi başına ses yapılmadı. Ölçüt elle denenecek.
 
 ## Riskler
 

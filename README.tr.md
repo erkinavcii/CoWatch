@@ -76,8 +76,10 @@ Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olara
 4. **İmleç ve dürtme:** videonun üstünde herkesin imleci, adı ve rengiyle gözlü bir top olarak görünür (4 sn kıpırdamayınca kaybolur). Videoya tıklamak topun gözlerini kırptırır, bir halka yayar ve herkese kısa bir ses çalar; ses her renkte farklı perdede. Sesi sağdaki çan kapatır. Videoya tıklamak filmi durdurmaz; oynat/durdur için boşluk tuşu ya da buton.
 5. **Çizim:** sağdaki kalemle (`d`) video üstüne çiz; herkes canlı görür, çizgiler ekran boyutundan bağımsız olarak filmin aynı yerine düşer. Film oynarken çizgiler birkaç saniyede silinir, durdurulmuşken kalır. Renk düğmesi rengini değiştirir (top ve kalem aynı renk), çöp kutusu herkesin çizimini temizler.
 6. **Ses:** zamanın yanındaki mikrofon tuşu (`Ctrl+D`) mikrofonunu açıp kapatır; kapalı başlar, kırmızıysa kapalıdır. Ses sunucudan geçmeden doğrudan diğerlerine gider. Kapatınca mikrofon gerçekten bırakılır (sekmedeki kırmızı nokta söner), adının yanında üstü çizili mikrofon görünür. Konuşan kişi üstte ve topunda kendi renginde parlar, film sesi o sırada kısılır. Tuşun yanındaki ok mikrofonu seçtirir ve kısmayı kapatır. Üstte birinin adına tıklayıp onu ne kadar yüksek duyacağını ayarlayabilirsin. Yankı hoparlörle denenene kadar kulaklık kullan. Arkadaşların için HTTPS linki gerekir (Kurulum'a bak); tarayıcılar düz http'de mikrofonu açmıyor.
-7. **Kamera:** kamera tuşu (`Ctrl+E`) aynı şekilde çalışır; kapatınca kameranın ışığı söner. Birinin kamerası açıkken videonun sağ üstünde, filmi küçültmeden küçük kutular çıkar: kamerası açık olanın görüntüsü, kapalı olanın renkli topu, en altta ayna gibi çevrilmiş kendi görüntün. Kutular tam ekranda da kalır; telefonda üstte yan yana dizilir. Tuşun yanındaki ok kamerayı seçtirir, kendi kutunu ya da bütün kutuları gizler. Bir kutuya tıklayınca o kişinin ses seviyesi açılır. Kamera her izleyiciye en fazla yaklaşık 0,5 Mbps gönderir.
-8. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` film sesi, `d` kalem, `Ctrl+D` mikrofon, `Ctrl+E` kamera, `Esc` kalemi kapat. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
+7. **Kamera:** kamera tuşu (`Ctrl+E`) aynı şekilde çalışır; kapatınca kameranın ışığı söner. Birinin kamerası açıkken videonun sağ üstünde, filmi küçültmeden küçük kutular çıkar: kamerası açık olanın görüntüsü, kapalı olanın renkli topu, en altta ayna gibi çevrilmiş kendi görüntün. Kutular tam ekranda da kalır; telefonda üstte yan yana dizilir. Tuşun yanındaki ok kamerayı seçtirir, kendi kutunu ya da bütün kutuları gizler. Bir kutuya tıklayınca o kişinin ses seviyesi açılır. Kutuları sürükleyip istediğin köşeye taşıyabilirsin; köşelerindeki küçük tuş onları küçültür. Kamera her izleyiciye en fazla yaklaşık 0,5 Mbps gönderir.
+8. **Girmeden önce:** giriş ekranında Meet'teki gibi önizlemeli mikrofon ve kamera tuşları ve ses göstergesi var; orada açtığın şey odaya girince de açık kalır. İkisi de kapalı başlar.
+9. **Bağlantı koparsa:** sayfa odaya kendiliğinden yeniden bağlanır; kopan ses ve kamera bağlantıları (Wi-Fi değişimi, dizüstünün uykuya geçmesi) kendiliğinden yeniden kurulur.
+10. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` film sesi, `d` kalem, `Ctrl+D` mikrofon, `Ctrl+E` kamera, `Esc` kalemi kapat. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
 
 Arayüz Türkçe, İngilizce ve Rusça kullanılabiliyor.
 
@@ -165,7 +167,7 @@ Dosyalar: `server/` (FastAPI: oda, senkron, medya, altyazı, imleç ve çizim), 
 
 2. Altyazı otomasyonu: dil tercihli fallback zinciri, alass ile hizalama, iki aşamalı LLM çevirisi.
 3. Sadece link ile katılım (DataChannel + TURN), bitrate yetmezse otomatik dönüştürme.
-4. Ses ve kamera eklendi; sırada girişte önizleme, sürüklenebilen kutular, kendiliğinden yeniden bağlanma.
+4. Ses ve kamera eklendi; gerçek cihazlarla denenecek: hoparlörle yankı, telefon, Tailscale üzerinden iki bilgisayar.
 5. Çift taraflı torrent senkronu ve DRM'li platformlar için eklenti.
 
 ## Lisans

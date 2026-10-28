@@ -113,6 +113,10 @@ const I18N = {
     err_cam_missing: 'Kamera bulunamadı.',
     err_cam_busy: 'Kamera açılamadı; başka bir uygulama kullanıyor olabilir.',
     err_cam_insecure: "Kamera bu linkte açılamaz: tarayıcı sadece HTTPS'te izin veriyor. Host'tan https linkini iste.",
+    preview_off: 'Kameran kapalı. Odaya girmeden mikrofonunu ve kameranı buradan açabilirsin.',
+    cams_small: 'Kutuları küçült',
+    cams_big: 'Kutuları büyüt',
+    cams_move: 'Başka bir köşeye sürükleyebilirsin',
   },
   en: {
     join_title: 'Join the room',
@@ -226,6 +230,10 @@ const I18N = {
     err_cam_missing: 'No camera found.',
     err_cam_busy: 'Could not open the camera; another app may be using it.',
     err_cam_insecure: 'The camera cannot open on this link: browsers only allow it over HTTPS. Ask the host for the https link.',
+    preview_off: 'Your camera is off. You can turn your microphone and camera on here before joining.',
+    cams_small: 'Make the tiles smaller',
+    cams_big: 'Make the tiles bigger',
+    cams_move: 'Drag to another corner',
   },
   ru: {
     join_title: 'Войти в комнату',
@@ -339,6 +347,10 @@ const I18N = {
     err_cam_missing: 'Камера не найдена.',
     err_cam_busy: 'Не удалось открыть камеру; возможно, её занимает другое приложение.',
     err_cam_insecure: 'На этой ссылке камера не откроется: браузеры разрешают её только по HTTPS. Попросите у хоста https-ссылку.',
+    preview_off: 'Камера выключена. Микрофон и камеру можно включить здесь, ещё до входа.',
+    cams_small: 'Уменьшить окна камер',
+    cams_big: 'Увеличить окна камер',
+    cams_move: 'Можно перетащить в другой угол',
   },
 };
 

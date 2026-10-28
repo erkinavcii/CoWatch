@@ -15,9 +15,12 @@ _ICE_URL = re.compile(r"^(stun|turns?):[^\s,]+$")
 
 
 def rtc_data(raw) -> Optional[dict]:
-    """`{"description": {type, sdp}}` or `{"candidate": {...} | null}`, else None."""
+    """`{"description": {type, sdp}}`, `{"candidate": {...} | null}` or `{"reset": true}` (the
+    sender rebuilt a connection that would not come back; the receiver rebuilds its side), else None."""
     if not isinstance(raw, dict) or len(raw) != 1:
         return None
+    if "reset" in raw:
+        return {"reset": True} if raw["reset"] is True else None
     if "description" in raw:
         desc = raw["description"]
         if not isinstance(desc, dict) or desc.get("type") not in _DESCRIPTION_TYPES:

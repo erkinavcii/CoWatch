@@ -25,6 +25,9 @@
     duckCheck: $('#duckCheck'), peerPop: $('#peerPop'), peerPopName: $('#peerPopName'), peerVol: $('#peerVol'),
     voices: $('#voices'), camBtn: $('#camBtn'), camMenuBtn: $('#camMenuBtn'), camMenu: $('#camMenu'),
     camDevice: $('#camDevice'), selfCheck: $('#selfCheck'), camsCheck: $('#camsCheck'), cams: $('#cams'),
+    preview: $('#preview'), previewVideo: $('#previewVideo'), previewMeter: $('#previewMeter'),
+    preMicBtn: $('#preMicBtn'), preCamBtn: $('#preCamBtn'),
+    camsBox: $('#camsBox'), camsSizeBtn: $('#camsSizeBtn'), sideLeft: $('#sideLeft'), sideRight: $('#sideRight'),
   };
   const video = el.video;
 
@@ -34,6 +37,7 @@
     name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '', offsetMs: 0,
     fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false, color: '', sfx: true,
     micDevice: '', duck: true, peerVolume: {}, micHintShown: false, camDevice: '', showSelf: true, showCams: true,
+    camCorner: 'tr', camsSmall: false,
   };
   const prefs = (() => {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULT_PREFS }; }
@@ -173,10 +177,16 @@
       clearInterval(pingTimer);
       if (S.ws === ws) {
         setConn('disconnected');
-        setTimeout(connect, 2000);
+        clearTimeout(reconnectTimer);
+        reconnectTimer = setTimeout(connect, 2000);
       }
     };
   }
+  // Back on the network (Wi-Fi again, laptop woke up): reconnect now instead of at the next try.
+  let reconnectTimer = null;
+  window.addEventListener('online', () => {
+    if (S.ws && S.ws.readyState === WebSocket.CLOSED) { clearTimeout(reconnectTimer); connect(); }
+  });
   function setConn (stateName) {
     el.conn.className = `conn ${stateName}`;
     el.conn.title = t(`conn_${stateName}`);
@@ -451,7 +461,7 @@
   const MAX_STROKES = 300;
   const MAX_STROKE_POINTS = 4000;
 
-  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams, .center-msg.clickable'));
+  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable'));
   const hovers = (e) => e.pointerType === 'mouse' || e.pointerType === 'pen';
   const memberById = (id) => S.members.find((m) => m.id === id);
   const colorOf = (id) => { const m = memberById(id); return (m && m.color) || '#ffffff'; };
@@ -877,7 +887,7 @@
     for (const menu of [el.micMenu, el.camMenu]) {
       if (!menu.hidden && !menu.parentNode.contains(e.target)) menu.hidden = true;
     }
-    if (!el.peerPop.hidden && !el.peerPop.contains(e.target) && !el.members.contains(e.target) && !el.cams.contains(e.target)) {
+    if (!el.peerPop.hidden && !el.peerPop.contains(e.target) && !el.members.contains(e.target) && !el.camsBox.contains(e.target)) {
       el.peerPop.hidden = true;
     }
   });
@@ -929,6 +939,7 @@
     const peer = {
       id, pc, audioEl, polite: S.clientId > id, makingOffer: false, ignoreOffer: false,
       audioTx: null, videoTx: null, videoStream: null, queue: Promise.resolve(),
+      badSince: performance.now(), restarted: false, // see peerWatch
     };
     peers.set(id, peer);
     pc.onicecandidate = ({ candidate }) => sendRtc(id, { candidate: candidate ? candidate.toJSON() : null });
@@ -954,7 +965,7 @@
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') limitSenders(peer);
-      else if (pc.connectionState === 'failed') pc.restartIce();
+      else if (pc.connectionState === 'failed' && !peer.restarted) { peer.restarted = true; pc.restartIce(); }
     };
     applyPeerVolume(peer);
     if (!peer.polite) {
@@ -977,6 +988,35 @@
   }
   function closeAllPeers () {
     for (const id of [...peers.keys()]) closePeer(id);
+  }
+
+  // A connection that drops (network change, sleep, Wi-Fi hop) mends itself: first a new ICE
+  // round on the same connection; if it is still down after PEER_RESET_MS, the offering side
+  // throws it away, builds a fresh one and tells the other side to do the same ("reset").
+  const PEER_RESET_MS = 20000;
+  function resetPeer (id) {
+    const old = peers.get(id);
+    if (!old) return;
+    closePeer(id);
+    makePeer(id);
+    sendRtc(id, { reset: true }); // sent before the new offer, which waits for negotiationneeded
+    renderCams();
+  }
+  function peerWatch () {
+    const now = performance.now();
+    for (const peer of [...peers.values()]) {
+      const state = peer.pc.connectionState;
+      if (state === 'connected') { peer.badSince = null; peer.restarted = false; continue; }
+      if (peer.badSince === null) peer.badSince = now;
+      const down = now - peer.badSince;
+      if (!peer.restarted && (state === 'failed' || (state === 'disconnected' && down > 4000))) {
+        peer.restarted = true;
+        peer.pc.restartIce();
+      } else if (down > PEER_RESET_MS && !peer.polite) {
+        console.info('[cowatch] rebuilding the connection to', peer.id);
+        resetPeer(peer.id);
+      }
+    }
   }
 
   // The polite side takes over the transceivers the offer created and sends on them too.
@@ -1012,10 +1052,17 @@
   }
 
   function onRtc (msg) {
+    const m = memberById(msg.from);
+    const allowed = S.joined && m && m.joined && window.RTCPeerConnection;
+    if (msg.data && msg.data.reset) { // the other side rebuilt: start over here too (no reset back)
+      closePeer(msg.from);
+      if (allowed) makePeer(msg.from);
+      renderCams();
+      return;
+    }
     let peer = peers.get(msg.from);
     if (!peer) {
-      const m = memberById(msg.from);
-      if (!S.joined || !m || !m.joined || !window.RTCPeerConnection) return;
+      if (!allowed) return;
       peer = makePeer(msg.from);
     }
     // One at a time per peer: a candidate must not overtake the description it belongs to.
@@ -1117,6 +1164,12 @@
   const toggleCam = () => setDevice('cam', !voice.cam);
   el.micBtn.addEventListener('click', toggleMic);
   el.camBtn.addEventListener('click', toggleCam);
+  // The join screen has the same two buttons, with a preview, as in Meet: whatever is on
+  // there is on when you join.
+  el.preMicBtn.innerHTML = el.micBtn.innerHTML;
+  el.preCamBtn.innerHTML = el.camBtn.innerHTML;
+  el.preMicBtn.addEventListener('click', toggleMic);
+  el.preCamBtn.addEventListener('click', toggleCam);
 
   async function switchDevice (what) {
     if (!voice[what] || voice.busy[what]) return;
@@ -1166,12 +1219,20 @@
   }
 
   function renderVoice () {
-    for (const [what, btn] of [['mic', el.micBtn], ['cam', el.camBtn]]) {
+    for (const [what, btn] of [['mic', el.micBtn], ['cam', el.camBtn], ['mic', el.preMicBtn], ['cam', el.preCamBtn]]) {
       const on = !!voice[what];
       btn.classList.toggle('off', !on);
       btn.title = t(on ? `${what}_off` : `${what}_on`);
       btn.disabled = voice.busy[what];
     }
+    el.preview.classList.toggle('live', !!voice.cam);
+    if (el.previewVideo.srcObject !== voice.camStream) el.previewVideo.srcObject = voice.camStream;
+    el.previewMeter.hidden = !voice.mic;
+  }
+  function renderPreviewMeter () {
+    if (el.joinOverlay.hidden || !voice.mic) return;
+    const bars = Math.min(5, Math.floor(Math.sqrt(myLevel()) * 12)); // about 1 bar at the talking level
+    el.previewMeter.querySelectorAll('i').forEach((bar, i) => bar.classList.toggle('on', i < bars));
   }
 
   // ---- camera tiles over the picture, top right. They show while anyone's camera is on:
@@ -1214,8 +1275,62 @@
       tile.name.textContent = isMe ? t('you') : m.name;
       if (!(isMe ? voice.mic : m.mic)) tile.name.insertAdjacentHTML('beforeend', MIC_OFF_ICON);
     }
+    el.camsBox.hidden = !list.length;
+    placeCams();
   }
+
+  // The tiles sit in a corner of the picture, top right at first: dragged anywhere, they
+  // settle in the nearest corner. On the right they share the side with the drawing toolbar.
+  const CORNERS = ['tl', 'tr', 'bl', 'br'];
+  function placeCams () {
+    const corner = CORNERS.includes(prefs.camCorner) ? prefs.camCorner : 'tr';
+    const side = corner[1] === 'l' ? el.sideLeft : el.sideRight;
+    if (el.camsBox.parentNode !== side) side.prepend(el.camsBox);
+    for (const s of [el.sideLeft, el.sideRight]) {
+      const here = !el.camsBox.hidden && s === side;
+      s.classList.toggle('top', here && corner[0] === 't');
+      s.classList.toggle('bottom', here && corner[0] === 'b');
+    }
+    el.camsBox.style.order = corner[0] === 't' ? '-1' : '1'; // above or below the toolbar
+    el.camsBox.classList.toggle('small', !!prefs.camsSmall);
+    el.camsBox.title = t('cams_move');
+    el.camsSizeBtn.title = t(prefs.camsSmall ? 'cams_big' : 'cams_small');
+  }
+  el.camsSizeBtn.addEventListener('click', () => { prefs.camsSmall = !prefs.camsSmall; savePrefs(); placeCams(); });
+
+  let camDrag = null; let dragEndedAt = 0;
+  el.camsBox.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('.cams-size')) return;
+    camDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!camDrag || e.pointerId !== camDrag.id) return;
+    const dx = e.clientX - camDrag.x; const dy = e.clientY - camDrag.y;
+    if (!camDrag.moved) {
+      if (Math.hypot(dx, dy) < 6) return; // still a click
+      camDrag.moved = true;
+      el.camsBox.classList.add('dragging');
+    }
+    el.camsBox.style.transform = `translate(${dx}px, ${dy}px)`;
+  });
+  function endCamDrag (e) {
+    if (!camDrag || e.pointerId !== camDrag.id) return;
+    const { moved } = camDrag;
+    camDrag = null;
+    if (!moved) return;
+    el.camsBox.classList.remove('dragging');
+    el.camsBox.style.transform = '';
+    const r = el.stage.getBoundingClientRect();
+    prefs.camCorner = (e.clientY < r.top + r.height / 2 ? 't' : 'b') + (e.clientX < r.left + r.width / 2 ? 'l' : 'r');
+    savePrefs();
+    placeCams();
+    dragEndedAt = performance.now(); // the click that follows the drop is not a click on a tile
+  }
+  window.addEventListener('pointerup', endCamDrag);
+  window.addEventListener('pointercancel', endCamDrag);
+
   el.cams.addEventListener('click', (e) => {
+    if (performance.now() - dragEndedAt < 300) return;
     const node = e.target.closest('.cam.others');
     if (node) openPeerPop(node.dataset.id, node);
   });
@@ -1248,6 +1363,7 @@
   }
 
   function voiceTick () {
+    renderPreviewMeter();
     const now = performance.now();
     const levels = new Map();
     if (S.clientId && voice.mic) levels.set(S.clientId, myLevel());
@@ -1770,6 +1886,8 @@
 
   // Drops the room connection, as a network hiccup would; the page reconnects by itself.
   window.cowatchDebug.reconnect = () => { if (S.ws) S.ws.close(); };
+  // Rebuilds every voice and camera connection, as peerWatch does for one that stays down.
+  window.cowatchDebug.resetPeers = () => { for (const id of [...peers.keys()]) resetPeer(id); };
 
   // ---------------------------------------------------------------- start
   applyI18n();
@@ -1778,5 +1896,6 @@
   setInterval(pollStatus, 3000);
   setInterval(syncTick, 250);
   setInterval(voiceTick, 100);
+  setInterval(peerWatch, 1000);
   requestAnimationFrame(frame);
 })();

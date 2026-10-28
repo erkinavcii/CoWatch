@@ -26,8 +26,15 @@
       <canvas class="draw" id="drawCanvas"></canvas>
       <div class="cursors" id="cursors"></div>
       <div class="center-msg" id="centerMsg" hidden></div>
-      <div class="side">
-      <div class="cams" id="cams"></div>
+      <div class="side left" id="sideLeft"></div>
+      <div class="side right" id="sideRight">
+      <div class="cams-box" id="camsBox" hidden>
+        <button type="button" class="cams-size" id="camsSizeBtn">
+          <svg class="i-small" viewBox="0 0 24 24"><path d="M5 11h14v2H5z"/></svg>
+          <svg class="i-big" viewBox="0 0 24 24"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
+        </button>
+        <div class="cams" id="cams"></div>
+      </div>
       <div class="toolbar" id="toolbar">
         <button type="button" id="penBtn" class="tool" data-i18n-title="tool_pen">
           <svg viewBox="0 0 24 24"><path d="M3.5 20.5l1.3-5L15.6 4.7a1.8 1.8 0 0 1 2.5 0l1.2 1.2a1.8 1.8 0 0 1 0 2.5L8.5 19.2z"/></svg>
@@ -168,6 +175,15 @@
       <p class="join-sub" data-i18n="join_title"></p>
       <label class="field"><span data-i18n="join_name"></span><input id="nameInput" maxlength="24" required autocomplete="nickname"></label>
       <label class="field"><span data-i18n="join_lang"></span><select id="joinLang"></select></label>
+      <div class="preview" id="preview">
+        <video id="previewVideo" autoplay playsinline muted></video>
+        <p class="preview-off" data-i18n="preview_off"></p>
+        <div class="preview-meter" id="previewMeter" hidden><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="preview-btns">
+          <button type="button" id="preMicBtn" class="round av off"></button>
+          <button type="button" id="preCamBtn" class="round av off"></button>
+        </div>
+      </div>
       <button type="submit" class="primary big" data-i18n="join_button"></button>
       <p class="hint" data-i18n="join_hint"></p>
       <p class="hint source-link"><a href="https://github.com/erkinavcii/CoWatch" target="_blank" rel="noopener" data-i18n="source_code"></a></p>

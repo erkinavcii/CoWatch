@@ -76,8 +76,10 @@ The key in the link is the room's password; the browser stores it as a cookie on
 4. **Pointers and pokes:** everyone's pointer shows over the video as a ball with eyes, their name and their colour (it fades after 4 s without movement). Clicking the video makes your ball blink, sends out a ring and plays a short sound for everyone, pitched by colour. The bell on the right turns the sound off. Clicking the video does not pause the film; use space or the button.
 5. **Drawing:** draw on the video for everyone with the pen on the right (`d`); strokes appear live and land on the same spot of the film whatever the screen size. While the film plays, strokes fade after a few seconds; while it is paused, they stay. The colour button changes your colour (ball and pen), the bin clears everyone's drawings.
 6. **Voice:** the microphone button next to the time (`Ctrl+D`) turns your microphone on and off; it starts off, and red means off. The sound goes straight to the others, not through the server. Off really releases the microphone (the red dot on the tab goes away), and a crossed-out microphone shows next to your name. Whoever talks glows in their colour, at the top and on their ball, and the film gets quieter for a moment. The arrow next to the button picks the microphone and turns that off. Click someone's name at the top to set how loud you hear them. Use headphones until echo has been tested with speakers. Friends need the HTTPS link (see Setup); browsers do not open the microphone over plain http.
-7. **Camera:** the camera button (`Ctrl+E`) works the same way; off turns the camera light off. While anyone's camera is on, small tiles appear over the top right of the video, without shrinking the film: the picture of those with their camera on, the coloured ball of the others, your own picture mirrored at the bottom. They stay in fullscreen; on a phone they line up along the top. The arrow next to the button picks the camera and hides your own tile or all tiles. Clicking a tile sets that person's volume. A camera sends at most about 0.5 Mbps to each viewer.
-8. **Shortcuts:** space play/pause, ← → 10 s, `f` fullscreen, `m` mute the film, `d` pen, `Ctrl+D` microphone, `Ctrl+E` camera, `Esc` pen off. On touch screens, tapping the video only shows the controls; pausing for everyone takes the button.
+7. **Camera:** the camera button (`Ctrl+E`) works the same way; off turns the camera light off. While anyone's camera is on, small tiles appear over the top right of the video, without shrinking the film: the picture of those with their camera on, the coloured ball of the others, your own picture mirrored at the bottom. They stay in fullscreen; on a phone they line up along the top. The arrow next to the button picks the camera and hides your own tile or all tiles. Clicking a tile sets that person's volume. Drag the tiles to any corner; the small button on their corner makes them smaller. A camera sends at most about 0.5 Mbps to each viewer.
+8. **Before joining:** the join screen has the same microphone and camera buttons with a preview and a level meter, as in Meet; whatever is on there is on when you join. Both start off.
+9. **Connection drops:** the page reconnects to the room by itself, and voice and camera connections that drop (Wi-Fi change, laptop sleep) are rebuilt by themselves.
+10. **Shortcuts:** space play/pause, ← → 10 s, `f` fullscreen, `m` mute the film, `d` pen, `Ctrl+D` microphone, `Ctrl+E` camera, `Esc` pen off. On touch screens, tapping the video only shows the controls; pausing for everyone takes the button.
 
 The interface is available in Turkish, English and Russian.
 
@@ -165,7 +167,7 @@ Layout: `server/` (FastAPI: room, sync, media, subtitles, pointers and drawing),
 
 2. Subtitle automation: language-preference fallback chain, alignment with alass, two-pass LLM translation.
 3. Joining with just a link (DataChannel + TURN), automatic conversion when the bitrate does not fit.
-4. Voice and camera are in; next: a preview before joining, movable tiles, reconnecting by itself.
+4. Voice and camera are in; to try with real devices: echo with speakers, phones, two computers over Tailscale.
 5. Two-sided torrent sync and an extension for DRM platforms.
 
 ## License

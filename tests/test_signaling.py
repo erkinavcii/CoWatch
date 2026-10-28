@@ -13,6 +13,8 @@ def test_rtc_data_keeps_descriptions_and_candidates_only():
     candidate = {"candidate": {"candidate": "candidate:1 1 udp 1 100.64.0.7 5000 typ host", "sdpMid": "0"}}
     assert rtc_data(candidate) == candidate
     assert rtc_data({"candidate": None}) == {"candidate": None}  # end of candidates
+    assert rtc_data({"reset": True}) == {"reset": True}
+    assert rtc_data({"reset": "yes"}) is None
     assert rtc_data({"description": {"type": "hack", "sdp": ""}}) is None
     assert rtc_data({"description": {"type": "offer", "sdp": 5}}) is None
     assert rtc_data({"candidate": "x"}) is None

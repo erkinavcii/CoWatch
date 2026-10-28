@@ -138,11 +138,17 @@ def stage_point(page: Page, fx: float, fy: float) -> tuple[float, float]:
     return box["x"] + box["width"] * fx, box["y"] + box["height"] * fy
 
 
-def peers_connected(page: Page) -> None:
+def peers_connected(page: Page, count: int = 1) -> None:
     page.wait_for_function(
-        "(() => { const v = cowatchDebug().voice;"
-        " return v.peers.length === 1 && v.peers[0].state === 'connected' && v.peers[0].transceivers === 2; })()",
-        timeout=15000)
+        f"(() => {{ const v = cowatchDebug().voice; return v.peers.length === {count}"
+        " && v.peers.every(p => p.state === 'connected' && p.transceivers === 2); })()",
+        timeout=20000)
+
+
+def tile_plays(page: Page, member_id: str) -> None:
+    page.wait_for_function(
+        f"(() => {{ const v = document.querySelector('.cam.live[data-id=\"{member_id}\"] video');"
+        " return !!v && v.videoWidth > 0 && v.currentTime > 0.5; })()", timeout=20000)
 
 
 def hears(page: Page) -> None:
@@ -189,9 +195,7 @@ def check_camera(host: Page, guest: Page) -> None:
 
     guest.click("#camBtn")
     guest.wait_for_function("cowatchDebug().voice.camLive")
-    host.wait_for_function(
-        f"(() => {{ const v = document.querySelector('.cam.live[data-id=\"{guest_id}\"] video');"
-        " return !!v && v.videoWidth > 0 && v.currentTime > 0.5; })()", timeout=15000)
+    tile_plays(host, guest_id)
     assert host.locator(".cam.me:not(.live) .cam-face").is_visible(), "the host's own tile should show the ball"
     guest.wait_for_selector(".cam.me.live", timeout=5000)
     ok("the guest's camera plays in the host's tile; the host's tile shows a ball")
@@ -231,6 +235,67 @@ def check_camera(host: Page, guest: Page) -> None:
     host.wait_for_function(f"cowatchDebug().members.some(m => m.id === '{guest_id}' && !m.cam)", timeout=10000)
     assert not debug(guest)["penMode"]
     ok("Ctrl+E turns the camera on and off")
+
+
+def check_third_viewer(browser, base: str, host: Page, guest: Page) -> None:
+    """A third viewer turns the camera and microphone on in the preview before joining."""
+    ctx = browser.new_context(viewport={"width": 1100, "height": 720},
+                              extra_http_headers={"Tailscale-User-Login": "third@example.com"})
+    third = ctx.new_page()
+    third.goto(f"{base}/?k={KEY}")
+    third.fill("#nameInput", "Üçüncü")
+    third.click("#preCamBtn")
+    third.click("#preMicBtn")
+    third.wait_for_function("(() => { const v = document.querySelector('#previewVideo');"
+                            " return document.querySelector('#preview').classList.contains('live') && v.videoWidth > 0; })()",
+                            timeout=10000)
+    third.wait_for_selector("#previewMeter i.on", state="attached", timeout=10000)
+    ok("preview: camera picture and microphone meter before joining")
+
+    third.click("#joinForm button[type=submit]")
+    third_id = third.evaluate("cowatchDebug().clientId")
+    for page in (host, guest):
+        page.wait_for_function(f"cowatchDebug().members.some(m => m.id === '{third_id}' && m.joined && m.mic && m.cam)")
+        tile_plays(page, third_id)
+    for page in (host, guest, third):
+        peers_connected(page, 2)
+    hears(host)
+    ok("joined with camera and microphone on; three viewers, each connected to the other two")
+
+    # Drag the tiles to the bottom left of the host's picture.
+    tile = host.locator(f".cam.others[data-id='{third_id}']")
+    box = tile.bounding_box()
+    stage = host.locator("#stage").bounding_box()
+    host.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    host.mouse.down()
+    host.mouse.move(stage["x"] + 80, stage["y"] + stage["height"] - 120, steps=10)
+    host.mouse.up()
+    host.wait_for_function("document.querySelector('#camsBox').parentNode.id === 'sideLeft'", timeout=3000)
+    box = tile.bounding_box()
+    assert box["x"] < stage["x"] + stage["width"] / 2 and box["y"] > stage["y"] + stage["height"] / 2, box
+    assert host.locator("#peerPop").is_hidden(), "dropping the tiles opened the volume box"
+    ok("tiles dragged to the bottom left corner")
+
+    width = tile.bounding_box()["width"]
+    tile.hover()
+    host.click("#camsSizeBtn")
+    host.wait_for_function(f"document.querySelector('.cam.others[data-id=\"{third_id}\"]').getBoundingClientRect().width < {width - 20}")
+    host.click("#camsSizeBtn")
+    host.wait_for_function(f"document.querySelector('.cam.others[data-id=\"{third_id}\"]').getBoundingClientRect().width > {width - 2}")
+    ok("one button shrinks and restores the tiles")
+
+    guest.evaluate("cowatchDebug.resetPeers()")
+    peers_connected(guest, 2)
+    peers_connected(host, 2)
+    peers_connected(third, 2)
+    tile_plays(guest, third_id)
+    ok("rebuilt connections come back, picture included")
+
+    ctx.close()
+    for page in (host, guest):
+        peers_connected(page, 1)
+        page.wait_for_function("document.querySelector('#camsBox').hidden", timeout=5000)
+    ok("the third viewer leaves: connection and tiles go")
 
 
 def run(headed: bool) -> None:
@@ -320,6 +385,7 @@ def run(headed: bool) -> None:
 
                 check_voice(host, guest)
                 check_camera(host, guest)
+                check_third_viewer(browser, base, host, guest)
 
                 host.click("#closeMedia")
                 print("\nall good")
