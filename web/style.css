@@ -111,8 +111,8 @@ button, input, select { font: inherit; color: inherit; }
 .av-group { position: relative; display: flex; align-items: center; margin-left: 6px; }
 .icon.av.off { background: rgba(255, 107, 107, .85); }
 .icon.av.off:hover { background: var(--danger); }
-#micBtn .i-off, #micBtn.off .i-on { display: none; }
-#micBtn.off .i-off { display: block; }
+.icon.av .i-off, .icon.av.off .i-on { display: none; }
+.icon.av.off .i-off { display: block; }
 .icon.caret { width: 22px; }
 .icon.caret svg { width: 18px; height: 18px; }
 .av-menu {
@@ -166,9 +166,44 @@ button, input, select { font: inherit; color: inherit; }
 }
 @keyframes ripple { from { transform: scale(.2); opacity: .95; } to { transform: scale(1.6); opacity: 0; } }
 
-/* ---- toolbar on the right: pen, colour, clear, sound ---- */
+/* ---- right side: camera tiles on top, the drawing toolbar right under them ---- */
+.side {
+  position: absolute; z-index: 7; right: 10px; top: 10px; bottom: 84px;
+  display: flex; flex-direction: column; align-items: flex-end; justify-content: safe center; gap: 10px;
+  pointer-events: none; --cam-w: clamp(112px, 15vw, 220px);
+}
+.side > * { pointer-events: auto; }
+.stage:fullscreen .side { --cam-w: clamp(140px, 14vw, 300px); }
+.cams { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow: hidden; }
+.cams:empty { display: none; }
+.cam {
+  position: relative; flex: none; width: var(--cam-w); aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden;
+  background: rgba(22, 24, 29, .9); border: 2px solid rgba(255, 255, 255, .12); box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
+  cursor: default; transition: border-color .15s ease, box-shadow .15s ease;
+}
+.cam.others { cursor: pointer; }
+.cam.speaking { border-color: var(--c, var(--accent)); box-shadow: 0 0 14px var(--c, var(--accent)); }
+.cam video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; display: none; }
+.cam.live video { display: block; }
+.cam.me video { transform: scaleX(-1); } /* a mirror, as people expect to see themselves */
+.cam-face {
+  position: absolute; left: 50%; top: 45%; width: 34%; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; gap: 8%;
+  background: radial-gradient(circle at 34% 28%, rgba(255, 255, 255, .5), transparent 52%), var(--c, #fff);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .45), inset 0 -3px 0 rgba(0, 0, 0, .16);
+}
+.cam.live .cam-face { display: none; }
+.cam-face .eye { position: relative; width: 22%; height: 28%; border-radius: 50%; background: #fff; overflow: hidden; }
+.cam-face .eye i { position: absolute; left: 25%; top: 30%; width: 50%; height: 40%; border-radius: 50%; background: #15161a; }
+.cam-name {
+  position: absolute; left: 6px; bottom: 5px; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 0 7px 1px; border-radius: 999px; background: rgba(0, 0, 0, .6); font-size: 12px; font-weight: 600;
+}
+.cam-name .mic-off { width: 11px; height: 11px; margin-left: 3px; vertical-align: -1px; fill: #fff; opacity: .8; }
+
+/* ---- toolbar: pen, colour, clear, sound ---- */
 .toolbar {
-  position: absolute; z-index: 7; right: 10px; top: 50%; transform: translateY(-50%);
+  position: relative; flex: none;
   display: flex; flex-direction: column; gap: 4px; padding: 5px;
   background: rgba(10, 11, 14, .82); border: 1px solid rgba(255, 255, 255, .1); border-radius: 12px;
   backdrop-filter: blur(6px); transition: opacity .25s ease; cursor: default;
@@ -257,6 +292,11 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
   .film-title { display: none; }
   .bar .volume { display: none; }
   .grid2 { grid-template-columns: 1fr; }
-  .toolbar { right: 6px; padding: 3px; gap: 2px; }
+  /* A phone's picture is short: tiles go in a row along the top, the toolbar beside them. */
+  .side { right: 6px; top: 6px; bottom: 70px; gap: 6px; --cam-w: 84px; flex-direction: row; align-items: flex-start; justify-content: flex-end; }
+  .cams { gap: 5px; flex-direction: row; min-width: 0; }
+  #backBtn, #fwdBtn { display: none; } /* the bar is too narrow; the seek bar and arrow keys remain */
+  .cam-name { font-size: 10px; left: 3px; bottom: 3px; padding: 0 5px; }
+  .toolbar { padding: 3px; gap: 2px; }
   .toolbar .tool { width: 32px; height: 32px; }
 }

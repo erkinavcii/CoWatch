@@ -164,6 +164,7 @@ Dört adım var; her biri ayrı bir commit ve host bilgisayarda bir deneme. Her 
 3. **Kamera:**
    - Kamera tuşu (`Ctrl+E`), video üstünde kutular, kamera kapalıyken renkli top, cihaz seçimi, bant sınırı.
    - Ölçüt: iki yönde görüntü var, kamera kapanınca ışığı söner, tam ekranda kutular yerinde, kutuya tıklamak kimseyi dürtmez.
+   - Durum (28 Ekim): kodlandı. Kutular biri kamerasını açınca görünür, hepsi kapanınca kaybolur; kamerası kapalı olanlar kutuda renkli topla durur. Kutuya tıklamak o kişinin ses seviyesini açar. Telefonda kutular üstte yan yana dizilir, −10/+10 tuşları gizlenir. Tarayıcı testinde görüntünün karşıya gitmesi, 500 kbps sınırı, transceiver sayısının değişmemesi, tam ekran, kutuya tıklama, kapatma ve `Ctrl+E` geçiyor. Gerçek kamerayla ışık ve telefon elle denenecek.
 4. **Cila:**
    - Meet'teki gibi giriş ekranında önizleme, kutuların sürüklenmesi ve küçültülmesi, gerekirse %100'ün üstünde kişi başına ses.
    - Ölçüt: Tailscale üzerinden, arkadaşlarla gerçek ağlarda başından sonuna bir film.

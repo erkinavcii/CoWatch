@@ -21,6 +21,7 @@ cd torrent-helper; npm.cmd install; cd ..
 ```
 
 - PowerShell `npm.ps1`'i engelliyor; `npm` yerine `npm.cmd` kullan.
+- Dosyaları PowerShell 5.1'in `Get-Content` / `Set-Content`'i ile düzenleme: BOM'suz UTF-8'i ANSI sanıp Türkçe ve Rusça harfleri bozuyor, yazarken BOM ekliyor. Edit aracı ya da Bash (`sed`) kullan.
 - Test videosu komutu ve iki pencereli deneme adımları README'nin "Hızlı deneme" bölümünde.
 - Çalışan sunucu kodu hafızada tutar: Python tarafında değişiklik varsa `run.py` yeniden başlatılır.
 
@@ -36,7 +37,7 @@ cd torrent-helper; npm.cmd install; cd ..
 | `server/subtitles.py` | Altyazı çözme (cp1254, cp1251 gibi eski kodlamalar), OpenSubtitles, saklama |
 | `server/oshash.py`, `server/torrent_client.py` | OpenSubtitles hash'i; Node torrent yardımcısıyla konuşma |
 | `torrent-helper/index.mjs` | webtorrent: magnet linkinden HTTP Range akışı |
-| `web/app.js` | İstemci: senkron, altyazı çizimi, imleç topları, kalem, ses (eş bağlantıları, konuşan göstergesi, film sesini kısma) |
+| `web/app.js` | İstemci: senkron, altyazı çizimi, imleç topları, kalem, ses ve kamera (eş bağlantıları, konuşan göstergesi, film sesini kısma, kamera kutuları) |
 | `run.py` | Başlatıcı: torrent yardımcısı, Tailscale Serve (HTTPS linki), Uvicorn |
 | `tests/` | pytest testleri |
 | `tests/e2e/two_viewers.py` | İki Chromium penceresiyle uçtan uca test (Playwright, sahte kamera ve mikrofon); pytest'e girmez |
@@ -50,10 +51,12 @@ cd torrent-helper; npm.cmd install; cd ..
 - **Yerel dosya açma** sadece host'a açık (`is_local`): loopback adresi, `Host` başlığı yerel bir ad ve vekil başlığı (`Tailscale-User-Login`, `X-Forwarded-For`, `Forwarded`) yok. Tailscale Serve istekleri de `127.0.0.1`'den getirdiği için tek başına adres yetmez. Tarayıcı testi misafiri bu başlıkla taklit eder.
 - **Tailscale Serve** `run.py`'nin alt süreci olarak ön planda çalışır; `--bg` kullanma (yeniden başlatmalardan sonra da açık kalır). Serve açıkken `HOST` boşsa `127.0.0.1` olur, düz http linkleri yazılmaz.
 - **Statik dosyalar** `no-cache` ile sunulur; tarayıcı her açılışta yeni sürümü sorar.
-- **Eş bağlantıları:** kimliği küçük olan taraf teklif eder ve iki transceiver'ı (ses, görüntü) o ekler; diğeri teklifteki transceiver'ları `sendrecv` yapar. İki taraf da eklerse dört olur. Mikrofon aç/kapa sadece `replaceTrack`; yeniden pazarlık yok. Kamera 3. adımda aynı görüntü transceiver'ına binecek.
+- **Eş bağlantıları:** kimliği küçük olan taraf teklif eder ve iki transceiver'ı (ses, görüntü) o ekler; diğeri teklifteki transceiver'ları `sendrecv` yapar. İki taraf da eklerse dört olur. Mikrofon ve kamera aç/kapa sadece `replaceTrack`; yeniden pazarlık yok. Gönderici sınırları (`SENDER_LIMITS`: kamera 500 kbps, 24 kare) bağlantı kurulunca `setParameters` ile verilir; öncesinde `encodings` boş.
+- **Kamera kutuları** `#stage` içindeki `.side` sütununda, çizim araç çubuğunun üstünde; tam ekranda bu yüzden kalırlar. Biri kamerasını açınca görünürler (kapalı olanlar renkli topla). `isUi` kutuları da sayar: tıklamak dürtme değil, ses seviyesi.
 - **WebSocket yeniden bağlanınca** sunucu yeni `clientId` verir; istemci `welcome`'da bütün eş bağlantılarını kapatır, `members` gelince yeniden kurar. Aynı eşe giden `rtc` mesajları sunucuda sırayla iletilir (`Controller._relay_to`), istemcide de eş başına sırayla işlenir (`peer.queue`).
 - **Konuşan tespiti:** karşı tarafın seviyesi `getSynchronizationSources()`'tan okunur, uzak ses WebAudio'ya bağlanmaz (Chrome'da sessizlik verir). Film sesini kısma kaydırıcıyı oynatmaz: `video.volume = prefs.volume × duck`.
-- **Kısayollar:** değiştirici tuşlu basışlar (`Ctrl`, `Cmd`, `Alt`) tek harfli kısayolları tetiklemez; `Ctrl+D` mikrofon, `d` kalem.
+- **Kısayollar:** değiştirici tuşlu basışlar (`Ctrl`, `Cmd`, `Alt`) tek harfli kısayolları tetiklemez; `Ctrl+D` mikrofon, `Ctrl+E` kamera, `d` kalem.
+- **Tarayıcı testindeki sahte mikrofon** ffmpeg'in `flite` filtresiyle sentezlenmiş konuşma çalar. Chrome'un kendi sahte mikrofonu kısa bipler çıkarıyor, düz bir tonu da gürültü bastırma yarım saniyede siliyor; ikisiyle de konuşan göstergesi güvenilir denenemiyor.
 
 ## Durum (28 Ekim 2026)
 
@@ -68,4 +71,5 @@ Plan: [docs/kamera-ses-plani.md](docs/kamera-ses-plani.md). Plandaki beş karar 
 
 - 1. adımda kalan: Tailscale'i kurup Serve üzerinden oda ve WebSocket'i denemek (elle).
 - 2. adım (ses) kodlandı; tarayıcı testinde sahte mikrofonla bağlantı, konuşan göstergesi, film sesini kısma ve yeniden bağlanma geçiyor. Kalan elle deneme: hoparlörle yankı (Chrome ve Edge) ve iki ayrı bilgisayar.
-- Sıradaki: 3. adım, kamera.
+- 3. adım (kamera) kodlandı; tarayıcı testinde iki yönlü görüntü, bant sınırı, tam ekran, kutuya tıklama ve `Ctrl+E` geçiyor. Kalan elle deneme: gerçek kamerayla ışığın sönmesi, telefon.
+- Sıradaki: 4. adım, cila (girişte önizleme, kutuları sürükleme ve küçültme, kendiliğinden yeniden bağlanma).

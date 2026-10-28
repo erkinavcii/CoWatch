@@ -23,7 +23,8 @@
     colorBtn: $('#colorBtn'), palette: $('#palette'), clearBtn: $('#clearBtn'), sfxBtn: $('#sfxBtn'),
     micBtn: $('#micBtn'), micMenuBtn: $('#micMenuBtn'), micMenu: $('#micMenu'), micDevice: $('#micDevice'),
     duckCheck: $('#duckCheck'), peerPop: $('#peerPop'), peerPopName: $('#peerPopName'), peerVol: $('#peerVol'),
-    voices: $('#voices'),
+    voices: $('#voices'), camBtn: $('#camBtn'), camMenuBtn: $('#camMenuBtn'), camMenu: $('#camMenu'),
+    camDevice: $('#camDevice'), selfCheck: $('#selfCheck'), camsCheck: $('#camsCheck'), cams: $('#cams'),
   };
   const video = el.video;
 
@@ -32,7 +33,7 @@
   const DEFAULT_PREFS = {
     name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '', offsetMs: 0,
     fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false, color: '', sfx: true,
-    micDevice: '', duck: true, peerVolume: {}, micHintShown: false,
+    micDevice: '', duck: true, peerVolume: {}, micHintShown: false, camDevice: '', showSelf: true, showCams: true,
   };
   const prefs = (() => {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULT_PREFS }; }
@@ -407,9 +408,11 @@
 
   document.addEventListener('keydown', (e) => {
     if (!S.joined) return;
-    // Ctrl+D (Cmd+D on a Mac) toggles the microphone, as in Meet, even while typing.
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'd') {
-      e.preventDefault(); toggleMic(); return;
+    // Ctrl+D microphone, Ctrl+E camera (Cmd on a Mac), as in Meet, even while typing.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && ['d', 'e'].includes(e.key.toLowerCase())) {
+      e.preventDefault();
+      if (e.key.toLowerCase() === 'd') toggleMic(); else toggleCam();
+      return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return; // browser shortcuts, not ours
     const tag = (e.target && e.target.tagName) || '';
@@ -421,7 +424,7 @@
     else if (e.key === 'm') el.muteBtn.click();
     else if (e.key === 'd') setPen(!S.penMode);
     else if (e.key === 'Escape') {
-      el.palette.hidden = true; el.micMenu.hidden = true; el.peerPop.hidden = true;
+      el.palette.hidden = true; el.micMenu.hidden = true; el.camMenu.hidden = true; el.peerPop.hidden = true;
       if (S.penMode) setPen(false);
     }
   });
@@ -448,7 +451,7 @@
   const MAX_STROKES = 300;
   const MAX_STROKE_POINTS = 4000;
 
-  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .center-msg.clickable'));
+  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams, .center-msg.clickable'));
   const hovers = (e) => e.pointerType === 'mouse' || e.pointerType === 'pen';
   const memberById = (id) => S.members.find((m) => m.id === id);
   const colorOf = (id) => { const m = memberById(id); return (m && m.color) || '#ffffff'; };
@@ -527,6 +530,7 @@
     if (me && me.color && me.color !== prefs.color) { prefs.color = me.color; savePrefs(); }
     renderToolbar();
     syncPeers();
+    renderCams();
   }
 
   // My own ball replaces the mouse pointer over the picture, so I see what the others see.
@@ -870,30 +874,43 @@
   });
   document.addEventListener('pointerdown', (e) => {
     if (!el.palette.hidden && !el.toolbar.contains(e.target)) el.palette.hidden = true;
-    if (!el.micMenu.hidden && !el.micMenu.parentNode.contains(e.target)) el.micMenu.hidden = true;
-    if (!el.peerPop.hidden && !el.peerPop.contains(e.target) && !el.members.contains(e.target)) el.peerPop.hidden = true;
+    for (const menu of [el.micMenu, el.camMenu]) {
+      if (!menu.hidden && !menu.parentNode.contains(e.target)) menu.hidden = true;
+    }
+    if (!el.peerPop.hidden && !el.peerPop.contains(e.target) && !el.members.contains(e.target) && !el.cams.contains(e.target)) {
+      el.peerPop.hidden = true;
+    }
   });
 
-  // ---------------------------------------------------------------- voice
-  // Sound goes straight between the viewers' browsers (WebRTC), one connection per pair; the
-  // server only passes the setup messages ("rtc") along. The viewer with the smaller id makes
-  // the offer and adds both transceivers (sound now, camera later); the other one takes them
-  // over from the offer. Turning the microphone on or off only swaps the track on those
-  // transceivers (replaceTrack), so it never needs a new offer. Perfect negotiation:
+  // ---------------------------------------------------------------- voice and camera
+  // Sound and picture go straight between the viewers' browsers (WebRTC), one connection per
+  // pair; the server only passes the setup messages ("rtc") along. The viewer with the smaller
+  // id makes the offer and adds both transceivers (sound, camera); the other one takes them
+  // over from the offer. Turning the microphone or camera on or off only swaps the track on
+  // those transceivers (replaceTrack), so it never needs a new offer. Perfect negotiation:
   // https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation
   const SPEAK_LEVEL = 0.025; // audio level (0-1, linear) that counts as talking
   const SPEAK_AFTER_MS = 150; // loud this long before someone counts as talking
   const QUIET_AFTER_MS = 300; // the glow goes after this much quiet
   const UNDUCK_AFTER_MS = 800; // the film comes back up after this much quiet
   const DUCK_TO = 0.5;
+  // Small tiles need little: this keeps a camera at about half a megabit per viewer, and
+  // under congestion the picture gives way before the sound.
+  const SENDER_LIMITS = {
+    audio: { priority: 'high', networkPriority: 'high' },
+    video: { maxBitrate: 500000, maxFramerate: 24, priority: 'low', networkPriority: 'low' },
+  };
   const peers = new Map(); // member id -> peer
-  const voice = { mic: null, busy: false, analyser: null, source: null, buf: null };
+  const voice = {
+    mic: null, cam: null, camStream: null, busy: { mic: false, cam: false }, analyser: null, source: null, buf: null,
+  };
   const loud = new Map(); // member id -> { since, last }: when they started, and last were, loud
   const speaking = new Set();
 
   function sendHello () {
-    send({ type: 'hello', name: prefs.name, color: prefs.color, mic: !!voice.mic, cam: false });
+    send({ type: 'hello', name: prefs.name, color: prefs.color, mic: !!voice.mic, cam: !!voice.cam });
   }
+  const sendAv = () => send({ type: 'av', mic: !!voice.mic, cam: !!voice.cam });
   const sendRtc = (to, data) => send({ type: 'rtc', to, data });
 
   function syncPeers () {
@@ -911,7 +928,7 @@
     el.voices.appendChild(audioEl);
     const peer = {
       id, pc, audioEl, polite: S.clientId > id, makingOffer: false, ignoreOffer: false,
-      audioTx: null, videoTx: null, queue: Promise.resolve(),
+      audioTx: null, videoTx: null, videoStream: null, queue: Promise.resolve(),
     };
     peers.set(id, peer);
     pc.onicecandidate = ({ candidate }) => sendRtc(id, { candidate: candidate ? candidate.toJSON() : null });
@@ -927,12 +944,17 @@
       }
     };
     pc.ontrack = ({ track }) => {
-      if (track.kind !== 'audio') return; // camera: next step
+      if (track.kind === 'video') {
+        peer.videoStream = new MediaStream([track]); // shown in their tile while their camera is on
+        renderCams();
+        return;
+      }
       audioEl.srcObject = new MediaStream([track]);
       audioEl.play().catch(() => {});
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') pc.restartIce();
+      if (pc.connectionState === 'connected') limitSenders(peer);
+      else if (pc.connectionState === 'failed') pc.restartIce();
     };
     applyPeerVolume(peer);
     if (!peer.polite) {
@@ -969,8 +991,23 @@
     applyLocalTracks(peer);
   }
   function applyLocalTracks (peer) {
-    if (peer.audioTx && peer.audioTx.sender.track !== voice.mic) {
-      peer.audioTx.sender.replaceTrack(voice.mic).catch((err) => console.warn('[cowatch] replaceTrack', err));
+    for (const [tx, track] of [[peer.audioTx, voice.mic], [peer.videoTx, voice.cam]]) {
+      if (tx && tx.sender.track !== track) {
+        tx.sender.replaceTrack(track).catch((err) => console.warn('[cowatch] replaceTrack', err));
+      }
+    }
+    limitSenders(peer);
+  }
+  // Encodings exist only once the connection is negotiated; until then this does nothing and
+  // runs again when the connection comes up.
+  async function limitSenders (peer) {
+    for (const [tx, limits] of [[peer.audioTx, SENDER_LIMITS.audio], [peer.videoTx, SENDER_LIMITS.video]]) {
+      if (!tx || peer.pc.signalingState === 'closed') continue;
+      const params = tx.sender.getParameters();
+      const enc = params.encodings && params.encodings[0];
+      if (!enc || Object.entries(limits).every(([k, v]) => enc[k] === v)) continue;
+      Object.assign(enc, limits);
+      try { await tx.sender.setParameters(params); } catch (err) { console.warn('[cowatch] setParameters', err); }
     }
   }
 
@@ -1007,99 +1044,181 @@
     }
   }
 
-  // ---- microphone
-  function micErrorText (err) {
+  // ---- microphone and camera: the same steps for both
+  const DEVICES = {
+    mic: {
+      media: 'audio', kind: 'audioinput', pref: 'micDevice',
+      constraints: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    },
+    cam: {
+      media: 'video', kind: 'videoinput', pref: 'camDevice',
+      constraints: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24, max: 30 } },
+    },
+  };
+  function deviceErrorText (what, err) {
     const name = err && err.name;
-    if (name === 'NotAllowedError' || name === 'SecurityError') return t('err_mic_denied');
-    if (name === 'NotFoundError') return t('err_mic_missing');
-    if (name === 'NotReadableError' || name === 'AbortError') return t('err_mic_busy');
+    if (name === 'NotAllowedError' || name === 'SecurityError') return t(`err_${what}_denied`);
+    if (name === 'NotFoundError') return t(`err_${what}_missing`);
+    if (name === 'NotReadableError' || name === 'AbortError') return t(`err_${what}_busy`);
     return t('err_generic', { detail: (err && err.message) || String(err) });
   }
-  async function openMic () {
-    const base = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
-    const ask = (deviceId) => navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { ...base, deviceId: { exact: deviceId } } : base,
-    });
+  async function openDevice (what) {
+    const { media, pref, constraints } = DEVICES[what];
+    const ask = async (deviceId) => {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        [media]: deviceId ? { ...constraints, deviceId: { exact: deviceId } } : constraints,
+      });
+      return stream.getTracks()[0];
+    };
     try {
-      return (await ask(prefs.micDevice)).getAudioTracks()[0];
+      return await ask(prefs[pref]);
     } catch (err) {
-      if (!prefs.micDevice || !['OverconstrainedError', 'NotFoundError'].includes(err.name)) throw err;
-      prefs.micDevice = ''; savePrefs(); // the saved one was unplugged: take the default
-      return (await ask('')).getAudioTracks()[0];
+      if (!prefs[pref] || !['OverconstrainedError', 'NotFoundError'].includes(err.name)) throw err;
+      prefs[pref] = ''; savePrefs(); // the saved one was unplugged: take the default
+      return ask('');
     }
   }
-  function useMic (track) {
-    const old = voice.mic;
-    voice.mic = track;
-    if (old && old !== track) old.stop();
+  function useTrack (what, track) {
+    const old = voice[what];
+    voice[what] = track;
+    if (old && old !== track) old.stop(); // releases the device: the tab's red dot or the camera light goes off
     if (track) {
       track.onended = () => { // unplugged
-        if (voice.mic !== track) return;
-        toast(t('mic_lost'), 'error');
-        useMic(null);
+        if (voice[what] !== track) return;
+        toast(t(`${what}_lost`), 'error');
+        useTrack(what, null);
       };
     }
-    meterMic(track);
+    if (what === 'mic') meterMic(track);
+    else voice.camStream = track ? new MediaStream([track]) : null;
     for (const peer of peers.values()) applyLocalTracks(peer);
-    send({ type: 'av', mic: !!track, cam: false });
+    sendAv();
     renderVoice();
     renderMembers();
+    renderCams();
   }
-  async function setMic (on) {
-    if (voice.busy || on === !!voice.mic) return;
-    if (!on) { useMic(null); return; }
+  async function setDevice (what, on) {
+    if (voice.busy[what] || on === !!voice[what]) return;
+    if (!on) { useTrack(what, null); return; }
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      toast(t('err_mic_insecure'), 'error'); return;
+      toast(t(`err_${what}_insecure`), 'error'); return;
     }
-    voice.busy = true; renderVoice();
+    voice.busy[what] = true; renderVoice();
     try {
-      useMic(await openMic());
-      if (!prefs.micHintShown) { prefs.micHintShown = true; savePrefs(); toast(t('mic_headphones'), 'info', 8000); }
+      useTrack(what, await openDevice(what));
+      if (what === 'mic' && !prefs.micHintShown) { prefs.micHintShown = true; savePrefs(); toast(t('mic_headphones'), 'info', 8000); }
     } catch (err) {
-      toast(micErrorText(err), 'error');
+      toast(deviceErrorText(what, err), 'error');
     } finally {
-      voice.busy = false; renderVoice();
+      voice.busy[what] = false; renderVoice();
     }
   }
-  const toggleMic = () => setMic(!voice.mic);
+  const toggleMic = () => setDevice('mic', !voice.mic);
+  const toggleCam = () => setDevice('cam', !voice.cam);
   el.micBtn.addEventListener('click', toggleMic);
+  el.camBtn.addEventListener('click', toggleCam);
 
-  async function switchMicDevice () {
-    if (!voice.mic || voice.busy) return;
-    voice.busy = true;
-    try { useMic(await openMic()); } catch (err) { toast(micErrorText(err), 'error'); } finally { voice.busy = false; renderVoice(); }
+  async function switchDevice (what) {
+    if (!voice[what] || voice.busy[what]) return;
+    voice.busy[what] = true;
+    try {
+      useTrack(what, await openDevice(what));
+    } catch (err) {
+      toast(deviceErrorText(what, err), 'error');
+    } finally {
+      voice.busy[what] = false; renderVoice();
+    }
   }
-  async function renderMicDevices () {
+  async function renderDevices (what) {
+    const select = what === 'mic' ? el.micDevice : el.camDevice;
+    const { kind, pref } = DEVICES[what];
     let inputs = [];
-    try { inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput'); } catch { /* no devices API */ }
-    el.micDevice.replaceChildren();
+    try { inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === kind); } catch { /* no devices API */ }
+    select.replaceChildren();
     const def = document.createElement('option');
     def.value = ''; def.textContent = t('mic_default');
-    el.micDevice.appendChild(def);
+    select.appendChild(def);
     inputs.filter((d) => d.deviceId && d.deviceId !== 'default').forEach((d, i) => {
       const option = document.createElement('option');
-      option.value = d.deviceId; option.textContent = d.label || t('mic_n', { n: i + 1 }); // names only after permission
-      el.micDevice.appendChild(option);
+      option.value = d.deviceId; option.textContent = d.label || t(`${what}_n`, { n: i + 1 }); // names only after permission
+      select.appendChild(option);
     });
-    el.micDevice.value = [...el.micDevice.options].some((o) => o.value === prefs.micDevice) ? prefs.micDevice : '';
+    select.value = [...select.options].some((o) => o.value === prefs[pref]) ? prefs[pref] : '';
     el.duckCheck.checked = prefs.duck;
+    el.selfCheck.checked = prefs.showSelf;
+    el.camsCheck.checked = prefs.showCams;
   }
-  el.micMenuBtn.addEventListener('click', () => {
-    el.micMenu.hidden = !el.micMenu.hidden;
-    if (!el.micMenu.hidden) renderMicDevices();
-  });
-  el.micDevice.addEventListener('change', () => { prefs.micDevice = el.micDevice.value; savePrefs(); switchMicDevice(); });
+  for (const [what, btn, menu, select] of [['mic', el.micMenuBtn, el.micMenu, el.micDevice], ['cam', el.camMenuBtn, el.camMenu, el.camDevice]]) {
+    btn.addEventListener('click', () => {
+      menu.hidden = !menu.hidden;
+      if (!menu.hidden) renderDevices(what);
+    });
+    select.addEventListener('change', () => { prefs[DEVICES[what].pref] = select.value; savePrefs(); switchDevice(what); });
+  }
   el.duckCheck.addEventListener('change', () => { prefs.duck = el.duckCheck.checked; savePrefs(); });
+  el.selfCheck.addEventListener('change', () => { prefs.showSelf = el.selfCheck.checked; savePrefs(); renderCams(); });
+  el.camsCheck.addEventListener('change', () => { prefs.showCams = el.camsCheck.checked; savePrefs(); renderCams(); });
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
-    navigator.mediaDevices.addEventListener('devicechange', () => { if (!el.micMenu.hidden) renderMicDevices(); });
+    navigator.mediaDevices.addEventListener('devicechange', () => {
+      if (!el.micMenu.hidden) renderDevices('mic');
+      if (!el.camMenu.hidden) renderDevices('cam');
+    });
   }
 
   function renderVoice () {
-    const on = !!voice.mic;
-    el.micBtn.classList.toggle('off', !on);
-    el.micBtn.title = t(on ? 'mic_off' : 'mic_on');
-    el.micBtn.disabled = voice.busy;
+    for (const [what, btn] of [['mic', el.micBtn], ['cam', el.camBtn]]) {
+      const on = !!voice[what];
+      btn.classList.toggle('off', !on);
+      btn.title = t(on ? `${what}_off` : `${what}_on`);
+      btn.disabled = voice.busy[what];
+    }
   }
+
+  // ---- camera tiles over the picture, top right. They show while anyone's camera is on:
+  // the picture for those whose camera is on, their coloured ball for the others, mine
+  // mirrored at the bottom. Inside the stage, so they stay in fullscreen.
+  const tiles = new Map(); // member id -> { node, video, name }
+  function makeTile (id, me) {
+    const node = document.createElement('div');
+    node.className = me ? 'cam me' : 'cam others';
+    node.dataset.id = id;
+    node.innerHTML = '<video autoplay playsinline muted></video>'
+      + '<div class="cam-face"><span class="eye"><i></i></span><span class="eye"><i></i></span></div><span class="cam-name"></span>';
+    const tile = { node, video: node.querySelector('video'), name: node.querySelector('.cam-name') };
+    tiles.set(id, tile);
+    return tile;
+  }
+  function renderCams () {
+    const others = S.joined ? S.members.filter((m) => m.joined && m.id !== S.clientId) : [];
+    const me = memberById(S.clientId);
+    const anyCam = !!voice.cam || others.some((m) => m.cam);
+    const list = prefs.showCams && anyCam ? [...others, ...(prefs.showSelf && me ? [me] : [])] : [];
+    const keep = new Set(list.map((m) => m.id));
+    for (const [id, tile] of tiles) {
+      if (!keep.has(id)) { tile.video.srcObject = null; tile.node.remove(); tiles.delete(id); }
+    }
+    for (const m of list) {
+      const isMe = m.id === S.clientId;
+      const tile = tiles.get(m.id) || makeTile(m.id, isMe);
+      el.cams.appendChild(tile.node); // also keeps the order of the member list
+      tile.node.style.setProperty('--c', m.color || '#ffffff');
+      tile.node.classList.toggle('speaking', speaking.has(m.id));
+      const camOn = isMe ? !!voice.cam : !!m.cam;
+      const peer = peers.get(m.id);
+      const stream = camOn ? (isMe ? voice.camStream : peer && peer.videoStream) : null;
+      if (tile.video.srcObject !== stream) {
+        tile.video.srcObject = stream || null;
+        if (stream) tile.video.play().catch(() => {});
+      }
+      tile.node.classList.toggle('live', !!stream);
+      tile.name.textContent = isMe ? t('you') : m.name;
+      if (!(isMe ? voice.mic : m.mic)) tile.name.insertAdjacentHTML('beforeend', MIC_OFF_ICON);
+    }
+  }
+  el.cams.addEventListener('click', (e) => {
+    const node = e.target.closest('.cam.others');
+    if (node) openPeerPop(node.dataset.id, node);
+  });
 
   // ---- who is talking: my own level from the microphone, the others' from the incoming
   // packets (getSynchronizationSources). Remote sound is not fed into WebAudio: Chrome plays
@@ -1162,28 +1281,36 @@
     if (ball) ball.node.classList.toggle('speaking', on);
     const chip = el.members.querySelector(`[data-id="${id}"]`);
     if (chip) chip.classList.toggle('speaking', on);
+    const tile = tiles.get(id);
+    if (tile) tile.node.classList.toggle('speaking', on);
   }
 
-  // ---- per-person volume: click someone's name at the top
+  // ---- per-person volume: click someone's name at the top, or their camera tile
   function applyPeerVolume (peer) {
     const m = memberById(peer.id);
     const vol = m && prefs.peerVolume[m.name];
     peer.audioEl.volume = typeof vol === 'number' ? Math.min(1, Math.max(0, vol)) : 1;
   }
   let popFor = null;
-  el.members.addEventListener('click', (e) => {
-    const chip = e.target.closest('.member.others');
-    if (!chip) return;
-    const m = memberById(chip.dataset.id);
+  function openPeerPop (id, anchor) {
+    const m = memberById(id);
     if (!m || (popFor === m.id && !el.peerPop.hidden)) { el.peerPop.hidden = true; return; }
     popFor = m.id;
+    // In fullscreen only the stage is drawn, so the box has to live inside it then.
+    const parent = document.fullscreenElement === el.stage ? el.stage : document.body;
+    if (el.peerPop.parentNode !== parent) parent.appendChild(el.peerPop);
     el.peerPopName.textContent = t('peer_volume', { name: m.name });
     const vol = prefs.peerVolume[m.name];
     el.peerVol.value = typeof vol === 'number' ? vol : 1;
-    const r = chip.getBoundingClientRect();
-    el.peerPop.style.top = `${r.bottom + 6}px`;
-    el.peerPop.style.left = `${Math.max(8, Math.min(window.innerWidth - 216, r.right - 200))}px`;
+    const r = anchor.getBoundingClientRect();
+    const beside = anchor.classList.contains('cam'); // a tile: to its left; a name: below it
+    el.peerPop.style.top = `${beside ? r.top : r.bottom + 6}px`;
+    el.peerPop.style.left = `${Math.max(8, Math.min(window.innerWidth - 216, beside ? r.left - 210 : r.right - 200))}px`;
     el.peerPop.hidden = false;
+  }
+  el.members.addEventListener('click', (e) => {
+    const chip = e.target.closest('.member.others');
+    if (chip) openPeerPop(chip.dataset.id, chip);
   });
   el.peerVol.addEventListener('input', () => {
     const m = memberById(popFor);
@@ -1422,7 +1549,7 @@
   // ---------------------------------------------------------------- rendering
   function renderAll () {
     renderControls(); renderMembers(); renderMediaPanel(); renderTracks(); renderSubStyle(); renderCenter();
-    renderToolbar(); renderVoice();
+    renderToolbar(); renderVoice(); renderCams();
     el.uiLang.value = prefs.uiLang;
     el.joinLang.value = prefs.uiLang;
     if (document.activeElement !== el.searchLangs) {
@@ -1628,11 +1755,16 @@
     readyState: video.readyState, primary: S.primary, secondary: S.secondary,
     clientId: S.clientId, members: S.members, penMode: S.penMode, strokes: strokes.size, balls: [...balls.keys()],
     voice: {
-      mic: !!voice.mic, duck, filmVolume: video.volume, speaking: [...speaking],
-      peers: [...peers.values()].map((p) => ({
-        id: p.id, polite: p.polite, state: p.pc.connectionState, level: peerLevel(p),
-        sending: !!(p.audioTx && p.audioTx.sender.track), transceivers: p.pc.getTransceivers().length,
-      })),
+      mic: !!voice.mic, cam: !!voice.cam, camLive: !!(voice.cam && voice.cam.readyState === 'live'),
+      duck, filmVolume: video.volume, speaking: [...speaking],
+      peers: [...peers.values()].map((p) => {
+        const enc = p.videoTx && (p.videoTx.sender.getParameters().encodings || [])[0];
+        return {
+          id: p.id, polite: p.polite, state: p.pc.connectionState, level: peerLevel(p),
+          sending: !!(p.audioTx && p.audioTx.sender.track), sendingVideo: !!(p.videoTx && p.videoTx.sender.track),
+          videoMaxBitrate: enc ? enc.maxBitrate : null, transceivers: p.pc.getTransceivers().length,
+        };
+      }),
     },
   });
 

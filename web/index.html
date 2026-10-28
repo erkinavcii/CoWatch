@@ -26,6 +26,8 @@
       <canvas class="draw" id="drawCanvas"></canvas>
       <div class="cursors" id="cursors"></div>
       <div class="center-msg" id="centerMsg" hidden></div>
+      <div class="side">
+      <div class="cams" id="cams"></div>
       <div class="toolbar" id="toolbar">
         <button type="button" id="penBtn" class="tool" data-i18n-title="tool_pen">
           <svg viewBox="0 0 24 24"><path d="M3.5 20.5l1.3-5L15.6 4.7a1.8 1.8 0 0 1 2.5 0l1.2 1.2a1.8 1.8 0 0 1 0 2.5L8.5 19.2z"/></svg>
@@ -39,6 +41,7 @@
           <svg class="i-on" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-6 6v4.5L4 17v1h16v-1l-2-3.5V9a6 6 0 0 0-6-6zm-2.2 16a2.2 2.2 0 0 0 4.4 0z"/></svg>
           <svg class="i-off" viewBox="0 0 24 24"><path opacity=".4" d="M12 3a6 6 0 0 0-6 6v4.5L4 17v1h16v-1l-2-3.5V9a6 6 0 0 0-6-6zm-2.2 16a2.2 2.2 0 0 0 4.4 0z"/><path d="M4.4 3l17 17-1.4 1.4-17-17z"/></svg>
         </button>
+      </div>
       </div>
       <div class="controls" id="controls">
         <div class="seek">
@@ -64,6 +67,20 @@
             <div class="av-menu" id="micMenu" hidden>
               <label class="field"><span data-i18n="mic_device"></span><select id="micDevice"></select></label>
               <label class="check"><input type="checkbox" id="duckCheck"><span data-i18n="duck_film"></span></label>
+            </div>
+          </span>
+          <span class="av-group">
+            <button id="camBtn" class="icon av off" type="button">
+              <svg class="i-on" viewBox="0 0 24 24"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11z"/></svg>
+              <svg class="i-off" viewBox="0 0 24 24"><path d="M21 6.5l-4 4V7a1 1 0 0 0-1-1H9.8L21 17.2zM3.3 2 2 3.3 4.7 6H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12c.2 0 .4-.1.5-.2l3.2 3.2 1.3-1.3z"/></svg>
+            </button>
+            <button id="camMenuBtn" class="icon caret" type="button" data-i18n-title="cam_settings">
+              <svg viewBox="0 0 24 24"><path d="M7 14.5 12 9.5l5 5z"/></svg>
+            </button>
+            <div class="av-menu" id="camMenu" hidden>
+              <label class="field"><span data-i18n="cam_device"></span><select id="camDevice"></select></label>
+              <label class="check"><input type="checkbox" id="selfCheck"><span data-i18n="show_self"></span></label>
+              <label class="check"><input type="checkbox" id="camsCheck"><span data-i18n="show_cams"></span></label>
             </div>
           </span>
           <span class="spacer"></span>

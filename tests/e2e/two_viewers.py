@@ -183,6 +183,56 @@ def check_voice(host: Page, guest: Page) -> None:
     ok("microphone off: shown to the guest, the film is back to full volume")
 
 
+def check_camera(host: Page, guest: Page) -> None:
+    guest_id = debug(guest)["clientId"]
+    assert host.locator("#cams .cam").count() == 0, "tiles while every camera is off"
+
+    guest.click("#camBtn")
+    guest.wait_for_function("cowatchDebug().voice.camLive")
+    host.wait_for_function(
+        f"(() => {{ const v = document.querySelector('.cam.live[data-id=\"{guest_id}\"] video');"
+        " return !!v && v.videoWidth > 0 && v.currentTime > 0.5; })()", timeout=15000)
+    assert host.locator(".cam.me:not(.live) .cam-face").is_visible(), "the host's own tile should show the ball"
+    guest.wait_for_selector(".cam.me.live", timeout=5000)
+    ok("the guest's camera plays in the host's tile; the host's tile shows a ball")
+
+    peer = debug(guest)["voice"]["peers"][0]
+    assert peer["sendingVideo"] and peer["videoMaxBitrate"] == 500000, peer
+    assert peer["transceivers"] == 2 and debug(host)["voice"]["peers"][0]["transceivers"] == 2
+    ok("camera capped at 500 kbps, no new transceivers")
+
+    tile = host.locator(f".cam.others[data-id='{guest_id}']")
+    tile.click()
+    host.wait_for_selector("#peerPop", state="visible", timeout=3000)
+    guest.wait_for_timeout(800)
+    assert guest.locator(".ripple").count() == 0, "a click on a tile poked"
+    host.keyboard.press("Escape")
+    ok("a click on a tile opens the volume, not a poke")
+
+    host.click("#fsBtn")
+    host.wait_for_function("document.fullscreenElement && document.fullscreenElement.id === 'stage'", timeout=5000)
+    assert tile.is_visible(), "tile gone in fullscreen"
+    box = tile.bounding_box()
+    viewport = host.viewport_size
+    assert box["x"] + box["width"] <= viewport["width"] + 1 and box["y"] >= 0, box
+    host.evaluate("document.exitFullscreen()")
+    host.wait_for_function("!document.fullscreenElement")
+    ok("tiles stay on screen in fullscreen")
+
+    guest.click("#camBtn")
+    guest.wait_for_function("!cowatchDebug().voice.cam")
+    host.wait_for_function("document.querySelectorAll('#cams .cam').length === 0", timeout=5000)
+    ok("camera off: released, and the tiles go away")
+
+    guest.locator("#stage").click(position={"x": 5, "y": 5})  # focus the page, not a field
+    guest.keyboard.press("Control+e")
+    host.wait_for_function(f"cowatchDebug().members.some(m => m.id === '{guest_id}' && m.cam)", timeout=10000)
+    guest.keyboard.press("Control+e")
+    host.wait_for_function(f"cowatchDebug().members.some(m => m.id === '{guest_id}' && !m.cam)", timeout=10000)
+    assert not debug(guest)["penMode"]
+    ok("Ctrl+E turns the camera on and off")
+
+
 def run(headed: bool) -> None:
     work = Path(tempfile.mkdtemp(prefix="cowatch-e2e-"))
     video = test_video(work)
@@ -269,6 +319,7 @@ def run(headed: bool) -> None:
                 ok("fake camera and microphone available")
 
                 check_voice(host, guest)
+                check_camera(host, guest)
 
                 host.click("#closeMedia")
                 print("\nall good")
