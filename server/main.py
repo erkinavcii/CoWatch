@@ -31,6 +31,7 @@ from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls
 from .oshash import CHUNK, hash_file, hash_from_chunks
 from .presence import PALETTE, POKE_INTERVAL_S, pick_color, point, stroke_message
 from .room import Client, Room, now_ms
+from .signaling import ice_servers, rtc_data
 from .subtitles import (
     MAX_SUBTITLE_BYTES,
     OpenSubtitlesClient,
@@ -122,6 +123,7 @@ class Controller:
             "osEnabled": self.os.enabled,
             "opening": self.opening,
             "palette": list(PALETTE),
+            "iceServers": ice_servers(cfg.ice_servers),
         }
 
     def _relay(self, sender: Client, msg: dict, lossy: bool = False) -> None:
@@ -130,6 +132,20 @@ class Controller:
         task = asyncio.create_task(self.room.broadcast(msg, exclude=sender, lossy=lossy))
         self._relays.add(task)
         task.add_done_callback(self._relays.discard)
+
+    def _relay_to(self, target: Client, msg: dict) -> None:
+        """Like `_relay`, to one viewer. Messages to the same viewer keep their order: each send
+        waits for the previous one on that viewer's lock, and the lock serves in turn."""
+        task = asyncio.create_task(target.send(msg))
+        self._relays.add(task)
+        task.add_done_callback(self._relays.discard)
+
+    @staticmethod
+    def _set_av(client: Client, msg: dict) -> bool:
+        mic, cam = bool(msg.get("mic")), bool(msg.get("cam"))
+        changed = (mic, cam) != (client.mic, client.cam)
+        client.mic, client.cam = mic, cam
+        return changed
 
     # ---- websocket commands ---------------------------------------------------------
     async def handle(self, client: Client, msg: dict) -> None:
@@ -160,8 +176,18 @@ class Controller:
             if color in PALETTE and color != client.color:
                 client.color = color
                 await self.room.broadcast(self.room.members_msg())
+        elif kind == "rtc":
+            target = self.room.clients.get(str(msg.get("to", "")))
+            data = rtc_data(msg.get("data"))
+            if target is not None and target is not client and data is not None:
+                self._relay_to(target, {"type": "rtc", "from": client.id, "data": data})
+        elif kind == "av":
+            if self._set_av(client, msg):
+                await self.room.broadcast(self.room.members_msg())
         elif kind == "hello":
             client.name = clean_name(msg.get("name"))
+            client.joined = True
+            self._set_av(client, msg)
             taken = {c.color for c in self.room.clients.values() if c is not client and c.color}
             client.color = pick_color(msg.get("color"), taken)
             await self.room.broadcast(self.room.members_msg())

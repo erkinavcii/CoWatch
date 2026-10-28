@@ -21,6 +21,9 @@
     nameInput: $('#nameInput'), joinLang: $('#joinLang'), toasts: $('#toasts'),
     drawCanvas: $('#drawCanvas'), cursors: $('#cursors'), toolbar: $('#toolbar'), penBtn: $('#penBtn'),
     colorBtn: $('#colorBtn'), palette: $('#palette'), clearBtn: $('#clearBtn'), sfxBtn: $('#sfxBtn'),
+    micBtn: $('#micBtn'), micMenuBtn: $('#micMenuBtn'), micMenu: $('#micMenu'), micDevice: $('#micDevice'),
+    duckCheck: $('#duckCheck'), peerPop: $('#peerPop'), peerPopName: $('#peerPopName'), peerVol: $('#peerVol'),
+    voices: $('#voices'),
   };
   const video = el.video;
 
@@ -29,6 +32,7 @@
   const DEFAULT_PREFS = {
     name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '', offsetMs: 0,
     fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false, color: '', sfx: true,
+    micDevice: '', duck: true, peerVolume: {}, micHintShown: false,
   };
   const prefs = (() => {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULT_PREFS }; }
@@ -64,7 +68,7 @@
     bufferingSent: false, waitTimer: null, dragging: false, isHost: false, autoplayBlocked: false,
     torrent: null, downloadThrottled: false,
     palette: ['#ff6b6b', '#4dabf7', '#51cf66', '#fcc419', '#cc5de8', '#ff922b', '#22b8cf', '#f06595'],
-    penMode: false,
+    penMode: false, iceServers: [],
   };
 
   // ---------------------------------------------------------------- helpers
@@ -155,7 +159,7 @@
     ws.onopen = () => {
       S.connected = true;
       setConn('connected');
-      if (S.joined) send({ type: 'hello', name: prefs.name, color: prefs.color });
+      if (S.joined) sendHello();
       startPings();
     };
     ws.onmessage = (event) => {
@@ -180,7 +184,10 @@
   function onMessage (msg) {
     switch (msg.type) {
       case 'welcome':
+        // A new connection means a new id: connections to the others were made for the old one.
+        closeAllPeers();
         S.clientId = msg.clientId;
+        S.iceServers = Array.isArray(msg.iceServers) ? msg.iceServers : [];
         S.clock.samples = [];
         S.clock.offset = msg.serverTime - performance.now();
         S.osEnabled = !!msg.osEnabled;
@@ -211,6 +218,7 @@
       case 'poke': if (msg.from !== S.clientId) pokeEffect(msg.from, [msg.x, msg.y]); break;
       case 'draw': onDraw(msg); break;
       case 'draw_clear': clearStrokes(msg.from); break;
+      case 'rtc': onRtc(msg); break;
       default: break;
     }
   }
@@ -361,13 +369,19 @@
     seekTo(Number(el.seekBar.value));
   });
 
-  video.volume = prefs.volume;
+  // The slider sets prefs.volume; while someone talks the film plays at a fraction of it (duck,
+  // see voice below), without moving the slider.
+  let duck = 1;
+  function applyFilmVolume () {
+    video.volume = Math.min(1, Math.max(0, prefs.volume * duck));
+  }
+  applyFilmVolume();
   video.muted = prefs.muted;
   el.volume.value = prefs.volume;
   el.volume.addEventListener('input', () => {
-    video.volume = Number(el.volume.value);
-    video.muted = video.volume === 0;
-    prefs.volume = video.volume; prefs.muted = video.muted; savePrefs(); renderControls();
+    prefs.volume = Number(el.volume.value);
+    video.muted = prefs.volume === 0;
+    prefs.muted = video.muted; savePrefs(); applyFilmVolume(); renderControls();
   });
   el.muteBtn.addEventListener('click', () => {
     video.muted = !video.muted;
@@ -392,15 +406,24 @@
   });
 
   document.addEventListener('keydown', (e) => {
+    if (!S.joined) return;
+    // Ctrl+D (Cmd+D on a Mac) toggles the microphone, as in Meet, even while typing.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'd') {
+      e.preventDefault(); toggleMic(); return;
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return; // browser shortcuts, not ours
     const tag = (e.target && e.target.tagName) || '';
-    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag) || !S.joined) return;
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
     if (e.code === 'Space' || e.key === 'k') { e.preventDefault(); togglePlay(); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); seekTo(expectedPosition() - 10); }
     else if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(expectedPosition() + 10); }
     else if (e.key === 'f') toggleFullscreen();
     else if (e.key === 'm') el.muteBtn.click();
     else if (e.key === 'd') setPen(!S.penMode);
-    else if (e.key === 'Escape') { el.palette.hidden = true; if (S.penMode) setPen(false); }
+    else if (e.key === 'Escape') {
+      el.palette.hidden = true; el.micMenu.hidden = true; el.peerPop.hidden = true;
+      if (S.penMode) setPen(false);
+    }
   });
 
   // Hide the controls while playing and the mouse is still.
@@ -503,6 +526,7 @@
     const me = memberById(S.clientId);
     if (me && me.color && me.color !== prefs.color) { prefs.color = me.color; savePrefs(); }
     renderToolbar();
+    syncPeers();
   }
 
   // My own ball replaces the mouse pointer over the picture, so I see what the others see.
@@ -846,6 +870,327 @@
   });
   document.addEventListener('pointerdown', (e) => {
     if (!el.palette.hidden && !el.toolbar.contains(e.target)) el.palette.hidden = true;
+    if (!el.micMenu.hidden && !el.micMenu.parentNode.contains(e.target)) el.micMenu.hidden = true;
+    if (!el.peerPop.hidden && !el.peerPop.contains(e.target) && !el.members.contains(e.target)) el.peerPop.hidden = true;
+  });
+
+  // ---------------------------------------------------------------- voice
+  // Sound goes straight between the viewers' browsers (WebRTC), one connection per pair; the
+  // server only passes the setup messages ("rtc") along. The viewer with the smaller id makes
+  // the offer and adds both transceivers (sound now, camera later); the other one takes them
+  // over from the offer. Turning the microphone on or off only swaps the track on those
+  // transceivers (replaceTrack), so it never needs a new offer. Perfect negotiation:
+  // https://developer.mozilla.org/en-US/docs/Web/API/WebRTC_API/Perfect_negotiation
+  const SPEAK_LEVEL = 0.025; // audio level (0-1, linear) that counts as talking
+  const SPEAK_AFTER_MS = 150; // loud this long before someone counts as talking
+  const QUIET_AFTER_MS = 300; // the glow goes after this much quiet
+  const UNDUCK_AFTER_MS = 800; // the film comes back up after this much quiet
+  const DUCK_TO = 0.5;
+  const peers = new Map(); // member id -> peer
+  const voice = { mic: null, busy: false, analyser: null, source: null, buf: null };
+  const loud = new Map(); // member id -> { since, last }: when they started, and last were, loud
+  const speaking = new Set();
+
+  function sendHello () {
+    send({ type: 'hello', name: prefs.name, color: prefs.color, mic: !!voice.mic, cam: false });
+  }
+  const sendRtc = (to, data) => send({ type: 'rtc', to, data });
+
+  function syncPeers () {
+    if (!S.joined || !S.clientId || !window.RTCPeerConnection) return;
+    const want = new Set(S.members.filter((m) => m.joined && m.id !== S.clientId).map((m) => m.id));
+    for (const id of peers.keys()) if (!want.has(id)) closePeer(id);
+    for (const id of want) if (!peers.has(id)) makePeer(id);
+    for (const peer of peers.values()) applyPeerVolume(peer);
+  }
+
+  function makePeer (id) {
+    const pc = new RTCPeerConnection({ iceServers: S.iceServers });
+    const audioEl = document.createElement('audio');
+    audioEl.autoplay = true;
+    el.voices.appendChild(audioEl);
+    const peer = {
+      id, pc, audioEl, polite: S.clientId > id, makingOffer: false, ignoreOffer: false,
+      audioTx: null, videoTx: null, queue: Promise.resolve(),
+    };
+    peers.set(id, peer);
+    pc.onicecandidate = ({ candidate }) => sendRtc(id, { candidate: candidate ? candidate.toJSON() : null });
+    pc.onnegotiationneeded = async () => {
+      try {
+        peer.makingOffer = true;
+        await pc.setLocalDescription();
+        sendRtc(id, { description: pc.localDescription.toJSON() });
+      } catch (err) {
+        console.warn('[cowatch] offer', err);
+      } finally {
+        peer.makingOffer = false;
+      }
+    };
+    pc.ontrack = ({ track }) => {
+      if (track.kind !== 'audio') return; // camera: next step
+      audioEl.srcObject = new MediaStream([track]);
+      audioEl.play().catch(() => {});
+    };
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed') pc.restartIce();
+    };
+    applyPeerVolume(peer);
+    if (!peer.polite) {
+      peer.audioTx = pc.addTransceiver('audio', { direction: 'sendrecv' });
+      peer.videoTx = pc.addTransceiver('video', { direction: 'sendrecv' });
+      applyLocalTracks(peer);
+    }
+    return peer;
+  }
+
+  function closePeer (id) {
+    const peer = peers.get(id);
+    if (!peer) return;
+    peers.delete(id);
+    peer.pc.close();
+    peer.audioEl.srcObject = null;
+    peer.audioEl.remove();
+    loud.delete(id);
+    speaking.delete(id);
+  }
+  function closeAllPeers () {
+    for (const id of [...peers.keys()]) closePeer(id);
+  }
+
+  // The polite side takes over the transceivers the offer created and sends on them too.
+  function adoptTransceivers (peer) {
+    for (const tx of peer.pc.getTransceivers()) {
+      const kind = tx.receiver.track.kind;
+      if (kind === 'audio' && !peer.audioTx) peer.audioTx = tx;
+      else if (kind === 'video' && !peer.videoTx) peer.videoTx = tx;
+      else continue;
+      if (tx.direction !== 'sendrecv') tx.direction = 'sendrecv';
+    }
+    applyLocalTracks(peer);
+  }
+  function applyLocalTracks (peer) {
+    if (peer.audioTx && peer.audioTx.sender.track !== voice.mic) {
+      peer.audioTx.sender.replaceTrack(voice.mic).catch((err) => console.warn('[cowatch] replaceTrack', err));
+    }
+  }
+
+  function onRtc (msg) {
+    let peer = peers.get(msg.from);
+    if (!peer) {
+      const m = memberById(msg.from);
+      if (!S.joined || !m || !m.joined || !window.RTCPeerConnection) return;
+      peer = makePeer(msg.from);
+    }
+    // One at a time per peer: a candidate must not overtake the description it belongs to.
+    peer.queue = peer.queue.then(() => handleRtc(peer, msg.data || {})).catch((err) => console.warn('[cowatch] rtc', err));
+  }
+  async function handleRtc (peer, data) {
+    const { pc } = peer;
+    if (pc.signalingState === 'closed') return;
+    if (data.description) {
+      const offer = data.description.type === 'offer';
+      const collision = offer && (peer.makingOffer || pc.signalingState !== 'stable');
+      peer.ignoreOffer = !peer.polite && collision;
+      if (peer.ignoreOffer) return;
+      await pc.setRemoteDescription(data.description);
+      if (offer) {
+        adoptTransceivers(peer);
+        await pc.setLocalDescription();
+        sendRtc(peer.id, { description: pc.localDescription.toJSON() });
+      }
+    } else if ('candidate' in data) {
+      try {
+        await pc.addIceCandidate(data.candidate || undefined);
+      } catch (err) {
+        if (!peer.ignoreOffer) throw err;
+      }
+    }
+  }
+
+  // ---- microphone
+  function micErrorText (err) {
+    const name = err && err.name;
+    if (name === 'NotAllowedError' || name === 'SecurityError') return t('err_mic_denied');
+    if (name === 'NotFoundError') return t('err_mic_missing');
+    if (name === 'NotReadableError' || name === 'AbortError') return t('err_mic_busy');
+    return t('err_generic', { detail: (err && err.message) || String(err) });
+  }
+  async function openMic () {
+    const base = { echoCancellation: true, noiseSuppression: true, autoGainControl: true };
+    const ask = (deviceId) => navigator.mediaDevices.getUserMedia({
+      audio: deviceId ? { ...base, deviceId: { exact: deviceId } } : base,
+    });
+    try {
+      return (await ask(prefs.micDevice)).getAudioTracks()[0];
+    } catch (err) {
+      if (!prefs.micDevice || !['OverconstrainedError', 'NotFoundError'].includes(err.name)) throw err;
+      prefs.micDevice = ''; savePrefs(); // the saved one was unplugged: take the default
+      return (await ask('')).getAudioTracks()[0];
+    }
+  }
+  function useMic (track) {
+    const old = voice.mic;
+    voice.mic = track;
+    if (old && old !== track) old.stop();
+    if (track) {
+      track.onended = () => { // unplugged
+        if (voice.mic !== track) return;
+        toast(t('mic_lost'), 'error');
+        useMic(null);
+      };
+    }
+    meterMic(track);
+    for (const peer of peers.values()) applyLocalTracks(peer);
+    send({ type: 'av', mic: !!track, cam: false });
+    renderVoice();
+    renderMembers();
+  }
+  async function setMic (on) {
+    if (voice.busy || on === !!voice.mic) return;
+    if (!on) { useMic(null); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast(t('err_mic_insecure'), 'error'); return;
+    }
+    voice.busy = true; renderVoice();
+    try {
+      useMic(await openMic());
+      if (!prefs.micHintShown) { prefs.micHintShown = true; savePrefs(); toast(t('mic_headphones'), 'info', 8000); }
+    } catch (err) {
+      toast(micErrorText(err), 'error');
+    } finally {
+      voice.busy = false; renderVoice();
+    }
+  }
+  const toggleMic = () => setMic(!voice.mic);
+  el.micBtn.addEventListener('click', toggleMic);
+
+  async function switchMicDevice () {
+    if (!voice.mic || voice.busy) return;
+    voice.busy = true;
+    try { useMic(await openMic()); } catch (err) { toast(micErrorText(err), 'error'); } finally { voice.busy = false; renderVoice(); }
+  }
+  async function renderMicDevices () {
+    let inputs = [];
+    try { inputs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput'); } catch { /* no devices API */ }
+    el.micDevice.replaceChildren();
+    const def = document.createElement('option');
+    def.value = ''; def.textContent = t('mic_default');
+    el.micDevice.appendChild(def);
+    inputs.filter((d) => d.deviceId && d.deviceId !== 'default').forEach((d, i) => {
+      const option = document.createElement('option');
+      option.value = d.deviceId; option.textContent = d.label || t('mic_n', { n: i + 1 }); // names only after permission
+      el.micDevice.appendChild(option);
+    });
+    el.micDevice.value = [...el.micDevice.options].some((o) => o.value === prefs.micDevice) ? prefs.micDevice : '';
+    el.duckCheck.checked = prefs.duck;
+  }
+  el.micMenuBtn.addEventListener('click', () => {
+    el.micMenu.hidden = !el.micMenu.hidden;
+    if (!el.micMenu.hidden) renderMicDevices();
+  });
+  el.micDevice.addEventListener('change', () => { prefs.micDevice = el.micDevice.value; savePrefs(); switchMicDevice(); });
+  el.duckCheck.addEventListener('change', () => { prefs.duck = el.duckCheck.checked; savePrefs(); });
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', () => { if (!el.micMenu.hidden) renderMicDevices(); });
+  }
+
+  function renderVoice () {
+    const on = !!voice.mic;
+    el.micBtn.classList.toggle('off', !on);
+    el.micBtn.title = t(on ? 'mic_off' : 'mic_on');
+    el.micBtn.disabled = voice.busy;
+  }
+
+  // ---- who is talking: my own level from the microphone, the others' from the incoming
+  // packets (getSynchronizationSources). Remote sound is not fed into WebAudio: Chrome plays
+  // a remote WebRTC stream into WebAudio as silence unless a media element plays it as well.
+  function meterMic (track) {
+    if (voice.source) { voice.source.disconnect(); voice.source = null; voice.analyser = null; }
+    const ctx = track && audio();
+    if (!ctx) return;
+    voice.source = ctx.createMediaStreamSource(new MediaStream([track]));
+    voice.analyser = ctx.createAnalyser();
+    voice.analyser.fftSize = 1024;
+    voice.buf = new Float32Array(voice.analyser.fftSize);
+    voice.source.connect(voice.analyser);
+  }
+  function myLevel () {
+    if (!voice.analyser) return 0;
+    voice.analyser.getFloatTimeDomainData(voice.buf);
+    let sum = 0;
+    for (const v of voice.buf) sum += v * v;
+    return Math.sqrt(sum / voice.buf.length);
+  }
+  function peerLevel (peer) {
+    const m = memberById(peer.id);
+    if (!m || !m.mic || !peer.audioTx) return 0;
+    const sources = peer.audioTx.receiver.getSynchronizationSources();
+    return sources.length ? (sources[0].audioLevel || 0) : 0;
+  }
+
+  function voiceTick () {
+    const now = performance.now();
+    const levels = new Map();
+    if (S.clientId && voice.mic) levels.set(S.clientId, myLevel());
+    for (const peer of peers.values()) levels.set(peer.id, peerLevel(peer));
+    let othersLoudAt = -Infinity;
+    for (const id of new Set([...loud.keys(), ...levels.keys()])) {
+      const level = levels.get(id) || 0;
+      const st = loud.get(id) || { since: null, last: -Infinity };
+      if (level >= SPEAK_LEVEL) {
+        st.last = now;
+        if (st.since === null) st.since = now;
+      } else if (now - st.last > QUIET_AFTER_MS) {
+        st.since = null;
+      }
+      loud.set(id, st);
+      const talking = st.since !== null && now - st.since >= SPEAK_AFTER_MS;
+      if (talking !== speaking.has(id)) {
+        if (talking) speaking.add(id); else speaking.delete(id);
+        showSpeaking(id, talking);
+      }
+      if (id !== S.clientId && st.since !== null && now - st.since >= SPEAK_AFTER_MS) othersLoudAt = Math.max(othersLoudAt, st.last);
+    }
+    // Lower the film while someone else talks: down in about 0.3 s, back up over about 1 s.
+    const target = prefs.duck && now - othersLoudAt < UNDUCK_AFTER_MS ? DUCK_TO : 1;
+    const step = target < duck ? (1 - DUCK_TO) / 3 : (1 - DUCK_TO) / 10;
+    const next = target < duck ? Math.max(target, duck - step) : Math.min(target, duck + step);
+    if (next !== duck) { duck = next; applyFilmVolume(); }
+  }
+  function showSpeaking (id, on) {
+    const ball = id === S.clientId ? mine : balls.get(id);
+    if (ball) ball.node.classList.toggle('speaking', on);
+    const chip = el.members.querySelector(`[data-id="${id}"]`);
+    if (chip) chip.classList.toggle('speaking', on);
+  }
+
+  // ---- per-person volume: click someone's name at the top
+  function applyPeerVolume (peer) {
+    const m = memberById(peer.id);
+    const vol = m && prefs.peerVolume[m.name];
+    peer.audioEl.volume = typeof vol === 'number' ? Math.min(1, Math.max(0, vol)) : 1;
+  }
+  let popFor = null;
+  el.members.addEventListener('click', (e) => {
+    const chip = e.target.closest('.member.others');
+    if (!chip) return;
+    const m = memberById(chip.dataset.id);
+    if (!m || (popFor === m.id && !el.peerPop.hidden)) { el.peerPop.hidden = true; return; }
+    popFor = m.id;
+    el.peerPopName.textContent = t('peer_volume', { name: m.name });
+    const vol = prefs.peerVolume[m.name];
+    el.peerVol.value = typeof vol === 'number' ? vol : 1;
+    const r = chip.getBoundingClientRect();
+    el.peerPop.style.top = `${r.bottom + 6}px`;
+    el.peerPop.style.left = `${Math.max(8, Math.min(window.innerWidth - 216, r.right - 200))}px`;
+    el.peerPop.hidden = false;
+  });
+  el.peerVol.addEventListener('input', () => {
+    const m = memberById(popFor);
+    if (!m) return;
+    prefs.peerVolume[m.name] = Number(el.peerVol.value); savePrefs();
+    const peer = peers.get(m.id);
+    if (peer) applyPeerVolume(peer);
   });
 
   // ---------------------------------------------------------------- subtitles
@@ -1056,7 +1401,7 @@
     // and for the poke sounds.
     video.play().then(() => { if (!roomRunning()) video.pause(); }).catch(() => {});
     audio();
-    send({ type: 'hello', name: prefs.name, color: prefs.color });
+    sendHello();
     applyI18n();
   });
 
@@ -1077,7 +1422,7 @@
   // ---------------------------------------------------------------- rendering
   function renderAll () {
     renderControls(); renderMembers(); renderMediaPanel(); renderTracks(); renderSubStyle(); renderCenter();
-    renderToolbar();
+    renderToolbar(); renderVoice();
     el.uiLang.value = prefs.uiLang;
     el.joinLang.value = prefs.uiLang;
     if (document.activeElement !== el.searchLangs) {
@@ -1094,15 +1439,28 @@
     if (!roomRunning()) el.stage.classList.remove('idle');
   }
 
+  const MIC_OFF_ICON = '<svg class="mic-off" viewBox="0 0 24 24"><path d="M19 11h-1.7c0 .7-.2 1.4-.4 2l1.2 1.3c.6-1 .9-2.1.9-3.3zm-4 .2V5a3 3 0 0 0-6 0v.2zM4.3 3 3 4.3l6 6v.7a3 3 0 0 0 3.7 2.9l1.6 1.7c-.7.3-1.5.5-2.3.5-2.8 0-5.3-2.1-5.3-5.1H5c0 3.4 2.7 6.2 6 6.7V21h2v-3.3c.9-.1 1.8-.4 2.5-.9l4.2 4.2 1.3-1.3z"/></svg>';
   function renderMembers () {
     el.members.replaceChildren();
     for (const m of S.members) {
       const chip = document.createElement('span');
+      const me = m.id === S.clientId;
       chip.className = 'member';
+      chip.dataset.id = m.id;
       if (m.color) chip.style.setProperty('--c', m.color);
-      if (m.id === S.clientId) chip.classList.add('me');
-      if (m.buffering) { chip.classList.add('buffering'); chip.title = t('buffering'); }
-      chip.textContent = m.id === S.clientId ? `${m.name} (${t('you')})` : m.name;
+      chip.classList.toggle('me', me);
+      chip.classList.toggle('others', !me && !!m.joined);
+      chip.classList.toggle('speaking', speaking.has(m.id));
+      const titles = [];
+      if (m.buffering) { chip.classList.add('buffering'); titles.push(t('buffering')); }
+      chip.textContent = me ? `${m.name} (${t('you')})` : m.name;
+      // My own state is known here at once; the server's copy comes back a moment later.
+      const micOn = me ? !!voice.mic : !!m.mic;
+      if (m.joined && !micOn) {
+        chip.insertAdjacentHTML('beforeend', MIC_OFF_ICON);
+        titles.push(t('mic_muted'));
+      }
+      chip.title = titles.join(' · ');
       el.members.appendChild(chip);
     }
   }
@@ -1269,7 +1627,17 @@
     room: S.room, media: S.media, clockOffset: S.clock.offset, rate: video.playbackRate,
     readyState: video.readyState, primary: S.primary, secondary: S.secondary,
     clientId: S.clientId, members: S.members, penMode: S.penMode, strokes: strokes.size, balls: [...balls.keys()],
+    voice: {
+      mic: !!voice.mic, duck, filmVolume: video.volume, speaking: [...speaking],
+      peers: [...peers.values()].map((p) => ({
+        id: p.id, polite: p.polite, state: p.pc.connectionState, level: peerLevel(p),
+        sending: !!(p.audioTx && p.audioTx.sender.track), transceivers: p.pc.getTransceivers().length,
+      })),
+    },
   });
+
+  // Drops the room connection, as a network hiccup would; the page reconnects by itself.
+  window.cowatchDebug.reconnect = () => { if (S.ws) S.ws.close(); };
 
   // ---------------------------------------------------------------- start
   applyI18n();
@@ -1277,5 +1645,6 @@
   pollStatus();
   setInterval(pollStatus, 3000);
   setInterval(syncTick, 250);
+  setInterval(voiceTick, 100);
   requestAnimationFrame(frame);
 })();

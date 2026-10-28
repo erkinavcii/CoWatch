@@ -54,6 +54,26 @@ def test_video(work: Path) -> Path:
     return out
 
 
+SPEECH = ("Hello, can you hear me? This scene is great. Wait, who is that man in the red coat? "
+          "I think he was in the first part too. Let us watch the next one after this.")
+
+
+def fake_voice(work: Path) -> Path:
+    """Sound for the fake microphone (Chrome loops the file). Chrome's own fake microphone only
+    beeps briefly, too short to count as talking, and a steady tone is removed by the noise
+    suppressor within half a second; synthesised speech gets through like a real voice."""
+    out = work / "voice.wav"
+    text = work / "speech.txt"
+    text.write_text(SPEECH, encoding="utf-8")
+    # The filter graph wants a relative path with forward slashes, hence the working folder.
+    subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "flite=textfile=speech.txt:voice=slt",
+         "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", out.name],
+        check=True, cwd=work,
+    )
+    return out
+
+
 def start_server(port: int, data_dir: Path) -> subprocess.Popen:
     env = dict(os.environ, DATA_DIR=str(data_dir), ACCESS_KEY=KEY, OPENSUBTITLES_API_KEY="")
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
@@ -118,16 +138,63 @@ def stage_point(page: Page, fx: float, fy: float) -> tuple[float, float]:
     return box["x"] + box["width"] * fx, box["y"] + box["height"] * fy
 
 
+def peers_connected(page: Page) -> None:
+    page.wait_for_function(
+        "(() => { const v = cowatchDebug().voice;"
+        " return v.peers.length === 1 && v.peers[0].state === 'connected' && v.peers[0].transceivers === 2; })()",
+        timeout=15000)
+
+
+def hears(page: Page) -> None:
+    """Sound is coming in from the other viewer."""
+    page.wait_for_function("cowatchDebug().voice.peers.some(p => p.level > 0.001)", timeout=15000)
+
+
+def check_voice(host: Page, guest: Page) -> None:
+    host_id = debug(host)["clientId"]
+    peers_connected(host)
+    peers_connected(guest)
+    ok("voice connection up, one sound and one video transceiver each side")
+
+    host.click("#micBtn")
+    host.wait_for_function("cowatchDebug().voice.mic")
+    guest.wait_for_function(f"cowatchDebug().members.some(m => m.id === '{host_id}' && m.mic)")
+    hears(guest)
+    ok("the host's microphone reaches the guest")
+
+    guest.wait_for_function(f"cowatchDebug().voice.speaking.includes('{host_id}')", timeout=10000)
+    guest.wait_for_function("cowatchDebug().voice.filmVolume < 0.9", timeout=5000)
+    assert guest.locator(f".member[data-id='{host_id}']").evaluate("n => n.classList.contains('speaking')")
+    ok("the guest sees the host talking and the film gets quieter")
+
+    guest.evaluate("cowatchDebug.reconnect()")
+    guest.wait_for_function(f"cowatchDebug().clientId && !cowatchDebug().members.some(m => m.id === '{debug(guest)['clientId']}')"
+                            " && cowatchDebug().members.length === 2", timeout=15000)
+    peers_connected(guest)
+    peers_connected(host)
+    hears(guest)
+    ok("after the guest's connection drops, sound comes back")
+
+    host.click("#micBtn")
+    host.wait_for_function("!cowatchDebug().voice.mic")
+    guest.wait_for_function(f"cowatchDebug().members.some(m => m.id === '{host_id}' && !m.mic)")
+    guest.wait_for_function("cowatchDebug().voice.filmVolume > 0.99", timeout=5000)
+    assert host.locator("#micBtn").evaluate("n => n.classList.contains('off')")
+    ok("microphone off: shown to the guest, the film is back to full volume")
+
+
 def run(headed: bool) -> None:
     work = Path(tempfile.mkdtemp(prefix="cowatch-e2e-"))
     video = test_video(work)
+    voice = fake_voice(work)
     port = free_port()
     base = f"http://localhost:{port}"
     server = start_server(port, work / "data")
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
-                headless=not headed, args=FAKE_MEDIA + ["--autoplay-policy=no-user-gesture-required"])
+                headless=not headed,
+                args=FAKE_MEDIA + [f"--use-file-for-fake-audio-capture={voice}", "--autoplay-policy=no-user-gesture-required"])
             host_ctx = browser.new_context(viewport={"width": 1280, "height": 800})
             guest_ctx = browser.new_context(viewport={"width": 900, "height": 700},
                                             extra_http_headers={"Tailscale-User-Login": "friend@example.com"})
@@ -200,6 +267,8 @@ def run(headed: bool) -> None:
                     ".then(s => { const n = s.getTracks().length; s.getTracks().forEach(t => t.stop()); return n; })")
                 assert tracks == 2
                 ok("fake camera and microphone available")
+
+                check_voice(host, guest)
 
                 host.click("#closeMedia")
                 print("\nall good")

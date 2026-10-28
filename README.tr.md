@@ -75,7 +75,8 @@ Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olara
 3. **Kendi altyazını seç:** yüklenen altyazılar odadaki herkesin listesine gelir ama kimin ekranında ne görüneceğini herkes kendisi seçer. "Ana altyazı" alttaki büyük beyaz satırdır. "İkinci altyazı" isteğe bağlıdır ve üstte küçük sarı satır olarak çıkar; iki dili aynı anda izlemek içindir (sen TR + EN, arkadaşın RU + EN gibi). Zaman kaydırma, yazı boyutu ve yükseklik de kişiye özel. Tercih edilen dil hatırlanır; yeni filmde o dilde altyazı varsa otomatik seçilir.
 4. **İmleç ve dürtme:** videonun üstünde herkesin imleci, adı ve rengiyle gözlü bir top olarak görünür (4 sn kıpırdamayınca kaybolur). Videoya tıklamak topun gözlerini kırptırır, bir halka yayar ve herkese kısa bir ses çalar; ses her renkte farklı perdede. Sesi sağdaki çan kapatır. Videoya tıklamak filmi durdurmaz; oynat/durdur için boşluk tuşu ya da buton.
 5. **Çizim:** sağdaki kalemle (`d`) video üstüne çiz; herkes canlı görür, çizgiler ekran boyutundan bağımsız olarak filmin aynı yerine düşer. Film oynarken çizgiler birkaç saniyede silinir, durdurulmuşken kalır. Renk düğmesi rengini değiştirir (top ve kalem aynı renk), çöp kutusu herkesin çizimini temizler.
-6. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` ses, `d` kalem, `Esc` kalemi kapat. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
+6. **Ses:** zamanın yanındaki mikrofon tuşu (`Ctrl+D`) mikrofonunu açıp kapatır; kapalı başlar, kırmızıysa kapalıdır. Ses sunucudan geçmeden doğrudan diğerlerine gider. Kapatınca mikrofon gerçekten bırakılır (sekmedeki kırmızı nokta söner), adının yanında üstü çizili mikrofon görünür. Konuşan kişi üstte ve topunda kendi renginde parlar, film sesi o sırada kısılır. Tuşun yanındaki ok mikrofonu seçtirir ve kısmayı kapatır. Üstte birinin adına tıklayıp onu ne kadar yüksek duyacağını ayarlayabilirsin. Yankı hoparlörle denenene kadar kulaklık kullan. Arkadaşların için HTTPS linki gerekir (Kurulum'a bak); tarayıcılar düz http'de mikrofonu açmıyor.
+7. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` film sesi, `d` kalem, `Ctrl+D` mikrofon, `Esc` kalemi kapat. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
 
 Arayüz Türkçe, İngilizce ve Rusça kullanılabiliyor.
 
@@ -120,6 +121,7 @@ Gereken upload ≈ dosyanın bitrate'i × 1,3. Dosyanın bitrate'ini bilmiyorsan
 |---|---|---|
 | `PORT` | 8000 | Web sunucusu portu |
 | `TAILSCALE_SERVE` | 1 | Tailscale çalışıyorsa Tailscale Serve ile HTTPS linki, 0 = düz http linkleri |
+| `ICE_SERVERS` | – | Ses için virgülle ayrılmış `stun:` adresleri; boş = sadece izleyicilerin kendi adresleri (Tailscale üzerinden) |
 | `TORRENT_UPLOAD_LIMIT` | 64 | Torrent'in upload sınırı (KB/s), 0 = sınırsız |
 | `MAX_COPY_KBPS` | 0 | Bunun üstündeki H.264 dosyalar dönüştürülür, 0 = hep orijinal |
 | `TRANSCODE_KBPS` | 5000 | Dönüştürülen akışın hedef bitrate'i |
@@ -162,7 +164,7 @@ Dosyalar: `server/` (FastAPI: oda, senkron, medya, altyazı, imleç ve çizim), 
 
 2. Altyazı otomasyonu: dil tercihli fallback zinciri, alass ile hizalama, iki aşamalı LLM çevirisi.
 3. Sadece link ile katılım (DataChannel + TURN), bitrate yetmezse otomatik dönüştürme.
-4. Kamera ve sesli sohbet.
+4. Kamera (ses eklendi).
 5. Çift taraflı torrent senkronu ve DRM'li platformlar için eklenti.
 
 ## Lisans

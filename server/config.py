@@ -65,6 +65,8 @@ class Settings:
     audio_kbps: int
     audio_filter: str
     hls_time: int
+    # voice and camera
+    ice_servers: str  # comma-separated stun:/turn: URLs, empty = direct addresses only
     # OpenSubtitles
     os_api_key: str
     os_username: str
@@ -124,6 +126,7 @@ def get_settings() -> Settings:
         audio_kbps=_int("AUDIO_KBPS", 192),
         audio_filter=_str("AUDIO_FILTER", "dynaudnorm=f=500:g=15"),
         hls_time=_int("HLS_TIME", 4),
+        ice_servers=_str("ICE_SERVERS"),
         os_api_key=_str("OPENSUBTITLES_API_KEY"),
         os_username=_str("OPENSUBTITLES_USERNAME"),
         os_password=_str("OPENSUBTITLES_PASSWORD"),

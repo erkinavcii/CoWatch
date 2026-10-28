@@ -26,6 +26,9 @@ class Client:
         self.ws = ws
         self.name = "?"
         self.color = ""
+        self.joined = False  # sent hello: pressed "Join", so it can take part in voice and camera
+        self.mic = False
+        self.cam = False
         self.last_poke = 0.0
         self.buffering_since: Optional[float] = None
         self.alive = True
@@ -163,7 +166,8 @@ class Room:
         return {
             "type": "members",
             "members": [
-                {"id": c.id, "name": c.name, "color": c.color, "buffering": c.buffering}
+                {"id": c.id, "name": c.name, "color": c.color, "buffering": c.buffering,
+                 "joined": c.joined, "mic": c.mic, "cam": c.cam}
                 for c in self.clients.values()
             ],
         }
