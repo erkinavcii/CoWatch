@@ -153,11 +153,12 @@ Co-Watch does not provide, search for or distribute any content. It is made for 
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest                      # media tests run too when ffmpeg is installed
-python -m playwright install chromium # once, for the browser test
-python tests/e2e/two_viewers.py       # two Chromium windows; --headed to watch
+python -m playwright install chromium # once, for the browser tests
+python tests/e2e/two_viewers.py       # sync, subtitles, pointers, pokes, pen; --headed to watch
+python tests/e2e/voice_camera.py      # voice and camera
 ```
 
-The browser test starts its own server, opens a film in one window as the host and joins as a friend coming through Tailscale Serve in the other, then checks sync, each viewer's own subtitles, pointers, pokes, the pen, voice and camera (with Chromium's fake camera, and synthesised speech as the microphone).
+Each browser test starts its own server and test video and opens Chromium windows. `two_viewers.py` checks sync, each viewer's own subtitles, that a pointer lands on the same spot of a letterboxed picture on another screen size, poke sounds, the pen and clearing. `voice_camera.py` joins as a friend coming through Tailscale Serve and checks voice, the camera tiles, a third viewer joining from the preview, and connections rebuilding themselves (with Chromium's fake camera, and synthesised speech as the microphone).
 
 In the browser console, `cowatchDebug()` shows the sync values (film time, expected position, drift).
 

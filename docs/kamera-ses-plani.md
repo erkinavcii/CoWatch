@@ -11,7 +11,7 @@ Kamera ve mikrofon Meet'teki gibi ayrı ayrı açılıp kapanacak; görüntü ve
 - Eşler arası bağlantının ayrıntıları yazıldı: sinyal mesajları, kimin teklif ettiği, aç/kapa'da yeniden pazarlık yapılmaması, WebSocket yeniden bağlanınca kimliğin değişmesi.
 - Konuşan tespiti, film sesini kısma ve kişi başına ses Chrome'un bilinen tuzaklarına göre yeniden tarif edildi.
 - Mevcut kısayollar ve tıklama davranışıyla çakışmalar, hata mesajları, testler ve belge güncellemeleri adımlara eklendi.
-- `tests/e2e/two_viewers.py` depoda yok, Playwright kurulu değil; tarayıcı testi 1. adımda yeniden yazılacak.
+- Playwright kurulu değil; ses ve kamera için tarayıcı testi 1. adımda yazılacak. (İlk oturumun `tests/e2e/two_viewers.py`'si GitHub'daydı ama bu bilgisayara çekilmemişti; sonradan birleştirildi.)
 
 ## Mimari
 
@@ -152,7 +152,7 @@ Dört adım var; her biri ayrı bir commit ve host bilgisayarda bir deneme. Her 
    - Tailscale kurulumu, MagicDNS ve HTTPS sertifikalarının açılması (elle, proje sahibi). İlk iş Serve üzerinden WebSocket'in geçtiğini denemek; geçmezse `tailscale cert` yoluna dönülür.
    - `run.py`: Serve'ü alt süreç olarak başlatır ve kapatır, HTTPS linkini yazar, Serve açıkken `HOST=127.0.0.1` ve http linkleri yazılmaz. `.env.example`'a `TAILSCALE_SERVE`.
    - `is_local` yukarıdaki üç koşulla; pytest: Serve başlıklarıyla gelen loopback isteği, `Host: x.ts.net` ile gelen istek ve düz `localhost` isteği.
-   - Tarayıcı testi yeniden yazılır (`tests/e2e/two_viewers.py`; ilk oturumdaki depoya girmemiş). Playwright `requirements-dev.txt`'ye; `python -m playwright install chromium`. Normal `pytest` çalıştırmasına girmez, ayrı komutla koşulur; komut `CLAUDE.md`'ye yazılır.
+   - Ses ve kamera tarayıcı testi (`tests/e2e/voice_camera.py`; senkron, altyazı, imleç ve kalem ilk oturumun `two_viewers.py`'sinde). Playwright `requirements-dev.txt`'ye; `python -m playwright install chromium`. Normal `pytest` çalıştırmasına girmez, ayrı komutla koşulur; komut `CLAUDE.md`'ye yazılır.
    - Ölçüt: arkadaş HTTPS linkiyle girer, oda ve film eskisi gibi çalışır, yerel dosya alanı ona görünmez, düz http linki açılmaz.
 2. **Ses:**
    - Sunucu: `rtc` iletimi, `av` mesajı, `members`'ta `mic` ve `cam`. pytest: mesaj sadece hedefe gider, `from` sunucu tarafından yazılır, odada olmayan hedef ve büyük mesaj düşer, sıra korunur.

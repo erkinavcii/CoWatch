@@ -153,11 +153,12 @@ Co-Watch içerik sağlamaz, aramaz ve dağıtmaz. Kendi dosyaların ya da izleme
 ```bash
 pip install -r requirements-dev.txt
 python -m pytest                      # ffmpeg kuruluysa medya testleri de çalışır
-python -m playwright install chromium # bir kere, tarayıcı testi için
-python tests/e2e/two_viewers.py       # iki Chromium penceresi; izlemek için --headed
+python -m playwright install chromium # bir kere, tarayıcı testleri için
+python tests/e2e/two_viewers.py       # senkron, altyazı, imleç, dürtme, kalem; izlemek için --headed
+python tests/e2e/voice_camera.py      # ses ve kamera
 ```
 
-Tarayıcı testi kendi sunucusunu başlatır, bir pencerede host olarak film açar, diğerinde Tailscale Serve'den gelen bir arkadaş olarak katılır; senkronu, herkesin kendi altyazısını, imleçleri, dürtmeyi, kalemi, sesi ve kamerayı dener (Chromium'un sahte kamerası, mikrofon yerine sentezlenmiş konuşma).
+Her tarayıcı testi kendi sunucusunu ve test videosunu başlatıp Chromium pencereleri açar. `two_viewers.py` senkronu, herkesin kendi altyazısını, imlecin bantlı videoda başka ekran boyutunda da aynı noktaya düştüğünü, dürtme sesini, kalemi ve temizlemeyi dener. `voice_camera.py` Tailscale Serve'den gelen bir arkadaş olarak katılır; sesi, kamera kutularını, önizlemeden katılan üçüncü bir izleyiciyi ve bağlantıların kendiliğinden yeniden kurulmasını dener (Chromium'un sahte kamerası, mikrofon yerine sentezlenmiş konuşma).
 
 Tarayıcı konsolunda `cowatchDebug()` senkron değerlerini gösterir (film zamanı, beklenen konum, fark).
 
