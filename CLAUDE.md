@@ -2,6 +2,8 @@
 
 Bu dosya, Claude Code oturumlarının projeyi hızla tanıması için. Uygulamanın ne olduğu ve nasıl kurulduğu README'de ([EN](README.md) · [TR](README.tr.md)); burada geliştirirken gereken kurallar, bilinen tuzaklar ve sıradaki iş var.
 
+Klasörde `_handoff/` varsa (git'e girmez) `_handoff/HANDOFF.md`'yi de oku: önceki oturumun özeti, kararların gerekçeleri ve bu bilgisayara özel notlar.
+
 ## Kurallar
 
 - **Commit kimliği:** author ve committer `erkinavcii <56629073+erkinavcii@users.noreply.github.com>`. Commit mesajına `Co-Authored-By`, Claude imzası ya da oturum linki ekleme. Mesajlar Türkçe ve önceki commit'lerin üslubunda: kısa bir başlık, gerekirse madde madde ayrıntı.
@@ -23,6 +25,18 @@ cd torrent-helper; npm.cmd install; cd ..
 - Test videosu komutu ve iki pencereli deneme adımları README'nin "Hızlı deneme" bölümünde.
 - Çalışan sunucu kodu hafızada tutar: Python tarafında değişiklik varsa `run.py` yeniden başlatılır.
 
+## Tarayıcı testi
+
+Arayüz ya da senkron değiştiyse iki pencereli testi de koştur. Yaklaşık bir dakika sürer; kendi sunucusunu ve test videosunu açar, iki Chromium penceresinde senkronu, kişiye özel altyazıyı, imleci, dürtme sesini ve kalemi dener:
+
+```powershell
+.\.venv\Scripts\python -m pip install playwright       # bir kez
+.\.venv\Scripts\python -m playwright install chromium  # bir kez
+.\.venv\Scripts\python tests\e2e\two_viewers.py        # --headed ile pencereleri izle
+```
+
+Kamera ve ses testlerinde Chromium'un sahte cihazları kullanılabilir: `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream`.
+
 ## Kod haritası
 
 | Yer | Ne yapar |
@@ -35,7 +49,7 @@ cd torrent-helper; npm.cmd install; cd ..
 | `server/oshash.py`, `server/torrent_client.py` | OpenSubtitles hash'i; Node torrent yardımcısıyla konuşma |
 | `torrent-helper/index.mjs` | webtorrent: magnet linkinden HTTP Range akışı |
 | `web/app.js` | İstemci: senkron, altyazı çizimi, imleç topları, kalem |
-| `tests/` | pytest testleri |
+| `tests/` | pytest testleri; `tests/e2e/` tarayıcı testi (pytest toplamaz) |
 
 ## Bilinen tuzaklar
 
