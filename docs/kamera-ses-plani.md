@@ -156,6 +156,7 @@ Dört adım var; her biri ayrı bir commit ve host bilgisayarda bir deneme. Her 
    - `is_local` yukarıdaki üç koşulla; pytest: Serve başlıklarıyla gelen loopback isteği, `Host: x.ts.net` ile gelen istek ve düz `localhost` isteği.
    - Ses ve kamera tarayıcı testi (`tests/e2e/voice_camera.py`; senkron, altyazı, imleç ve kalem ilk oturumun `two_viewers.py`'sinde). Playwright `requirements-dev.txt`'ye; `python -m playwright install chromium`. Normal `pytest` çalıştırmasına girmez, ayrı komutla koşulur; komut `CLAUDE.md`'ye yazılır.
    - Ölçüt: arkadaş HTTPS linkiyle girer, oda ve film eskisi gibi çalışır, yerel dosya alanı ona görünmez, düz http linki açılmaz.
+   - Durum (28 Ekim): `*.ts.net` HTTPS linkiyle (Funnel açıkken) sayfa güvenli sayılıyor, WebSocket Tailscale'in vekilinden geçiyor, misafir host sayılmıyor ve yerel dosya alanını görmüyor, mikrofon açılıyor; link internetten de erişiliyor. Riskler tablosundaki "Serve WebSocket'i taşımaz" gerçekleşmedi.
 2. **Ses:**
    - Sunucu: `rtc` iletimi, `av` mesajı, `members`'ta `mic` ve `cam`. pytest: mesaj sadece hedefe gider, `from` sunucu tarafından yazılır, odada olmayan hedef ve büyük mesaj düşer, sıra korunur.
    - İstemci: mikrofon tuşu, eş bağlantıları, konuşan göstergesi, film sesini kısma, kişi başına ses.

@@ -79,14 +79,16 @@ Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her
 - Faz 1 Windows'ta denendi: yerel dosya, iki pencerede senkron, kişiye özel altyazı (TR + EN).
 - İmleç topu, dürtme sesi ve çizim eklendi; iki tarayıcı penceresiyle denendi.
 - Henüz denenmedi: Windows'ta torrent (README'deki Sintel magnet'i) ve Tailscale üzerinden arkadaşla izleme. Tailscale bu bilgisayarda kurulu ve açık (MagicDNS, HTTPS sertifikası hazır); `run.py` onu PATH'te yoksa `C:\Program Files\Tailscale`'de de arar.
-- Funnel seçeneği (`TAILSCALE_FUNNEL=1`) eklendi, denenmedi: film Funnel'ın açıklanmamış bant sınırına sığıyor mu, ses ve kamera STUN ile kuruluyor mu.
+- Funnel (`TAILSCALE_FUNNEL=1`) bu bilgisayarda açık (tailnet'te Funnel izni verildi; ilk seferde onay linki çıkıyor ve onaydan sonra `run.py`'yi yeniden başlatmak gerekebiliyor). `https://….ts.net` linki internetten erişiliyor (anahtarsız 401). Linkle açılan sayfa güvenli sayılıyor, WebSocket Tailscale'in HTTPS vekilinden geçiyor, misafir host sayılmıyor, mikrofon açılıyor (Playwright ile, 28 Ekim). Denenmedi: film Funnel'ın açıklanmamış bant sınırına sığıyor mu, ses ve kamera STUN ile dışarıdaki bir cihazla kuruluyor mu.
+- Bilgisayar yeniden başlayınca Tailscale tepsi uygulaması açılmazsa servis "starting" durumunda kalıyor ve `run.py` HTTPS linki veremiyor; `tailscale-ipn.exe`'yi açmak yetiyor.
+- Masaüstü uygulamasının yerleşik tarayıcısı bu sitenin betiklerini engelliyor (`ERR_BLOCKED_BY_CLIENT`); denemeler Playwright'la ya da gerçek bir tarayıcıyla yapılmalı.
 - Kamera-ses 1. adımının kodu bitti: `is_local`, `run.py`'de Tailscale Serve, ses ve kamera tarayıcı testi (Playwright kuruldu, iki test de geçiyor). Tailscale olmadan eski http davranışı denendi. Serve'ün kendisi (WebSocket'in geçmesi dahil) Tailscale kurulunca denenecek.
 
 ## Sıradaki iş: kamera ve ses
 
 Plan: [docs/kamera-ses-plani.md](docs/kamera-ses-plani.md). Plandaki beş karar proje sahibinde; cevap gelmediyse önerilen varsayılanlarla ilerle.
 
-- 1. adımda kalan: Tailscale'i kurup Serve üzerinden oda ve WebSocket'i denemek (elle).
+- 1. adım tamam: HTTPS linkinde oda ve WebSocket çalışıyor (Funnel üzerinden denendi; Serve aynı vekili kullanıyor).
 - 2. adım (ses) kodlandı; tarayıcı testinde sahte mikrofonla bağlantı, konuşan göstergesi, film sesini kısma ve yeniden bağlanma geçiyor. Kalan elle deneme: hoparlörle yankı (Chrome ve Edge) ve iki ayrı bilgisayar.
 - 3. adım (kamera) kodlandı; tarayıcı testinde iki yönlü görüntü, bant sınırı, tam ekran, kutuya tıklama ve `Ctrl+E` geçiyor. Kalan elle deneme: gerçek kamerayla ışığın sönmesi, telefon.
 - 4. adım (cila) kodlandı: girişte önizleme, kutuları sürükleme ve küçültme, kendiliğinden onarım. Tarayıcı testi üçüncü bir izleyiciyle 3 kişilik bağlantıyı da deniyor. Kişi başına %100 üstü ses yapılmadı (yankı denemesinden sonra gerekirse).
