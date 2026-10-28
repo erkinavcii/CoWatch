@@ -58,9 +58,10 @@ def tailscale_dns_name(exe: str) -> str | None:
 
 
 def start_serve(cfg) -> tuple[subprocess.Popen, str] | None:
-    """HTTPS for friends through Tailscale Serve: browsers open the camera and microphone only
-    on secure pages. It runs in the foreground and stops with us; `--bg` would keep forwarding
-    to a closed port after we exit, even across reboots."""
+    """HTTPS for friends through Tailscale: browsers open the camera and microphone only on
+    secure pages. Serve opens the link to the tailnet; Funnel (TAILSCALE_FUNNEL=1) to the whole
+    internet, so a friend needs only a browser. Either runs in the foreground and stops with
+    us; `--bg` would keep forwarding to a closed port after we exit, even across reboots."""
     exe = tailscale_exe()
     if not exe:
         return None
@@ -68,13 +69,14 @@ def start_serve(cfg) -> tuple[subprocess.Popen, str] | None:
     if not name:
         print("! Tailscale çalışmıyor ya da oturum açılmamış: HTTPS linki yok.")
         return None
-    # Shares this console: if HTTPS is not enabled on the tailnet yet, it prints the consent link here.
-    proc = subprocess.Popen([exe, "serve", f"http://127.0.0.1:{cfg.port}"])
+    mode = "funnel" if cfg.tailscale_funnel else "serve"
+    # Shares this console: if HTTPS or Funnel is not enabled on the tailnet yet, it prints the consent link here.
+    proc = subprocess.Popen([exe, mode, f"http://127.0.0.1:{cfg.port}"])
     try:
         proc.wait(timeout=2)
     except subprocess.TimeoutExpired:
         return proc, name
-    print("! 'tailscale serve' başlatılamadı (mesajı yukarıda): HTTPS linki yok.")
+    print(f"! 'tailscale {mode}' başlatılamadı (mesajı yukarıda): HTTPS linki yok.")
     return None
 
 
@@ -125,15 +127,20 @@ def main() -> None:
         sys.exit(1)
 
     helper = start_helper(cfg)
-    serve = start_serve(cfg) if cfg.tailscale_serve else None
+    serve = start_serve(cfg) if cfg.tailscale_serve or cfg.tailscale_funnel else None
     # Behind Serve, friends must come through HTTPS: a plain http link would work for the film
     # but never for their camera and microphone.
     host = cfg.host or ("127.0.0.1" if serve else "0.0.0.0")
     key = cfg.access_key
     print("\nCo-Watch hazır.")
     print(f"  Bu bilgisayardan:  http://localhost:{cfg.port}/?k={key}")
-    if serve:
+    if serve and cfg.tailscale_funnel:
         print(f"  Arkadaşlar için:   https://{serve[1]}/?k={key}   <- arkadaşına bunu gönder")
+        print("  (Funnel: link internete açık, arkadaşın Tailscale kurmadan girer. Odayı sadece linkteki")
+        print("   anahtar korur; linki yalnızca izleyeceğin kişilere gönder.)")
+    elif serve:
+        print(f"  Arkadaşlar için:   https://{serve[1]}/?k={key}   <- arkadaşına bunu gönder")
+        print("  (Serve: arkadaşının cihazında Tailscale olmalı. Kurmadan girsin istersen .env'de TAILSCALE_FUNNEL=1.)")
     elif host not in ("127.0.0.1", "localhost", "::1"):
         ts = tailscale_ip()
         if ts:

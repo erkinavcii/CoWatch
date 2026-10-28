@@ -7,7 +7,7 @@ Klasörde `_handoff/` varsa (git'e girmez) `_handoff/HANDOFF.md`'yi de oku: önc
 ## Kurallar
 
 - **Commit kimliği:** author ve committer `erkinavcii <56629073+erkinavcii@users.noreply.github.com>`. Commit mesajına `Co-Authored-By`, Claude imzası ya da oturum linki ekleme. Mesajlar Türkçe ve önceki commit'lerin üslubunda: kısa bir başlık, gerekirse madde madde ayrıntı.
-- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 42 test; ffmpeg kuruluysa medya testleri de çalışır). Arayüzü ya da WebSocket mesajlarını değiştiren her adımdan sonra tarayıcı testleri de (aşağıda).
+- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 45 test; ffmpeg kuruluysa medya testleri de çalışır). Arayüzü ya da WebSocket mesajlarını değiştiren her adımdan sonra tarayıcı testleri de (aşağıda).
 - **İki README birlikte güncellenir:** `README.md` (İngilizce) ve `README.tr.md` (Türkçe) aynı içeriği taşır.
 - **Arayüz metinleri üç dilde:** `web/i18n.js` içindeki `tr`, `en` ve `ru` anahtarları birebir aynı olmalı.
 - `data/`, `.venv/`, `node_modules/` ve `samples/*.mkv` git'e girmez (`.gitignore`).
@@ -64,7 +64,7 @@ Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her
 - **İmleç ve çizim konumları** pencereye değil, video görüntüsüne göre orandır (0–1); `object-fit: contain`'in bıraktığı bantlar hesaba katılır.
 - **İmleç ve çizim mesajları** sunucuda arka planda iletilir (`Controller._relay`); yavaş bir izleyici oynat/durdur komutlarını bekletmesin diye.
 - **Yerel dosya açma** sadece host'a açık (`is_local`): loopback adresi, `Host` başlığı yerel bir ad ve vekil başlığı (`Tailscale-User-Login`, `X-Forwarded-For`, `Forwarded`) yok. Tailscale Serve istekleri de `127.0.0.1`'den getirdiği için tek başına adres yetmez. `voice_camera.py` misafiri bu başlıkla taklit eder.
-- **Tailscale Serve** `run.py`'nin alt süreci olarak ön planda çalışır; `--bg` kullanma (yeniden başlatmalardan sonra da açık kalır). Serve açıkken `HOST` boşsa `127.0.0.1` olur, düz http linkleri yazılmaz.
+- **Tailscale Serve** `run.py`'nin alt süreci olarak ön planda çalışır; `--bg` kullanma (yeniden başlatmalardan sonra da açık kalır). Serve açıkken `HOST` boşsa `127.0.0.1` olur, düz http linkleri yazılmaz. `TAILSCALE_FUNNEL=1` aynı şeyi `tailscale funnel` ile yapar: link internete açık, arkadaş Tailscale kurmaz. Funnel istekleri de `127.0.0.1`'den ve `*.ts.net` `Host`'uyla gelir, kimlik başlığı yoktur; `is_local`'ı `Host` kontrolü korur. Funnel'da `ICE_SERVERS` boşsa Cloudflare STUN'u kullanılır (`config.FUNNEL_STUN`), çünkü misafirin Tailscale adresi yok.
 - **Statik dosyalar** `no-cache` ile sunulur; tarayıcı her açılışta yeni sürümü sorar.
 - **Eş bağlantıları:** kimliği küçük olan taraf teklif eder ve iki transceiver'ı (ses, görüntü) o ekler; diğeri teklifteki transceiver'ları `sendrecv` yapar. İki taraf da eklerse dört olur. Mikrofon ve kamera aç/kapa sadece `replaceTrack`; yeniden pazarlık yok. Gönderici sınırları (`SENDER_LIMITS`: kamera 500 kbps, 24 kare) bağlantı kurulunca `setParameters` ile verilir; öncesinde `encodings` boş.
 - **Kamera kutuları** (`#camsBox`) `#stage` içindeki iki `.side` sütunundan birinde: sağdakinde çizim araç çubuğunun üstünde ya da altında, soldakinde tek başına (`placeCams`, `prefs.camCorner`). Tam ekranda bu yüzden kalırlar. Biri kamerasını açınca görünürler (kapalı olanlar renkli topla). `isUi` kutuları da sayar: tıklamak dürtme değil, ses seviyesi; 6 px'ten fazla kayan basış sürüklemedir.
@@ -78,7 +78,8 @@ Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her
 
 - Faz 1 Windows'ta denendi: yerel dosya, iki pencerede senkron, kişiye özel altyazı (TR + EN).
 - İmleç topu, dürtme sesi ve çizim eklendi; iki tarayıcı penceresiyle denendi.
-- Henüz denenmedi: Windows'ta torrent (README'deki Sintel magnet'i) ve Tailscale üzerinden arkadaşla izleme. Tailscale bu bilgisayarda kurulu değil.
+- Henüz denenmedi: Windows'ta torrent (README'deki Sintel magnet'i) ve Tailscale üzerinden arkadaşla izleme. Tailscale bu bilgisayarda kurulu ve açık (MagicDNS, HTTPS sertifikası hazır); `run.py` onu PATH'te yoksa `C:\Program Files\Tailscale`'de de arar.
+- Funnel seçeneği (`TAILSCALE_FUNNEL=1`) eklendi, denenmedi: film Funnel'ın açıklanmamış bant sınırına sığıyor mu, ses ve kamera STUN ile kuruluyor mu.
 - Kamera-ses 1. adımının kodu bitti: `is_local`, `run.py`'de Tailscale Serve, ses ve kamera tarayıcı testi (Playwright kuruldu, iki test de geçiyor). Tailscale olmadan eski http davranışı denendi. Serve'ün kendisi (WebSocket'in geçmesi dahil) Tailscale kurulunca denenecek.
 
 ## Sıradaki iş: kamera ve ses

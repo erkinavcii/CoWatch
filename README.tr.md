@@ -68,6 +68,8 @@ Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olara
 
 **Arkadaşın için:** Tailscale'i kursun, sen de onu Tailscale yönetim panelinden tailnet'ine davet et (ücretsiz kişisel plan 6 kullanıcıya kadar). Sadece bu bilgisayarı paylaşmak film için yeter, ama o zaman iki arkadaş kamera ve ses için birbirine ulaşamaz. Sonra linki açıp adını yazsın ve "Katıl"a bassın.
 
+**Arkadaşın Tailscale kurmadan (Funnel):** `.env`'de `TAILSCALE_FUNNEL=1` verirsen `run.py` bunun yerine `tailscale funnel`'ı başlatır: aynı `https://….ts.net` linki, ama bütün internete açık; arkadaşına sadece tarayıcı yeter. İlk seferde `tailscale funnel` bu bilgisayar için Funnel'a izin verme linkini yazar. Odayı o zaman sadece linkteki anahtar korur; linki yalnızca birlikte izleyeceğin kişilere gönder. Ses ve kamera ev modemlerini Cloudflare'in ücretsiz STUN sunucusuyla aşar; bazı ağlarda (sıkı şirket ya da mobil ağlar) yine de bağlanamayabilir. Film Tailscale'in aktarıcı sunucularından geçer, bunların Tailscale'in açıklamadığı bir bant sınırı var: güvenmeden önce bir filmi baştan sona dene.
+
 ## Kullanım
 
 1. **Film aç:** kendi dosyan için "Bu bilgisayardaki dosya yolu"na tam yolu yaz (bu alan güvenlik için sadece host bilgisayarda görünür). Torrent için magnet linkini yapıştırıp "Torrent ekle"ye bas; torrent'te birden fazla video varsa listeden seç.
@@ -124,7 +126,8 @@ Gereken upload ≈ dosyanın bitrate'i × 1,3. Dosyanın bitrate'ini bilmiyorsan
 |---|---|---|
 | `PORT` | 8000 | Web sunucusu portu |
 | `TAILSCALE_SERVE` | 1 | Tailscale çalışıyorsa Tailscale Serve ile HTTPS linki, 0 = düz http linkleri |
-| `ICE_SERVERS` | – | Ses için virgülle ayrılmış `stun:` adresleri; boş = sadece izleyicilerin kendi adresleri (Tailscale üzerinden) |
+| `TAILSCALE_FUNNEL` | 0 | 1 = HTTPS linki Tailscale Funnel ile, internete açık: arkadaşların Tailscale kurmaz |
+| `ICE_SERVERS` | – | Ses ve kamera için virgülle ayrılmış `stun:` adresleri; boş = sadece izleyicilerin kendi adresleri (Tailscale üzerinden), Funnel'da Cloudflare'in STUN'u |
 | `TORRENT_UPLOAD_LIMIT` | 64 | Torrent'in upload sınırı (KB/s), 0 = sınırsız |
 | `MAX_COPY_KBPS` | 0 | Bunun üstündeki H.264 dosyalar dönüştürülür, 0 = hep orijinal |
 | `TRANSCODE_KBPS` | 5000 | Dönüştürülen akışın hedef bitrate'i |

@@ -68,6 +68,8 @@ The key in the link is the room's password; the browser stores it as a cookie on
 
 **For your friend:** they install Tailscale and you invite them to your tailnet from the Tailscale admin console (the free personal plan allows 6 users). Sharing only this computer is enough for the film, but then two friends cannot reach each other for camera and voice. Then they open the link, type their name and press "Join".
 
+**Without Tailscale for your friend (Funnel):** with `TAILSCALE_FUNNEL=1` in `.env`, `run.py` starts `tailscale funnel` instead: the same `https://….ts.net` link, but open to the whole internet, so your friend needs only a browser. The first time, `tailscale funnel` prints a link to allow Funnel for this computer. The key in the link is then the room's only lock, so send it only to the people you watch with. Voice and camera then find their way through home routers with Cloudflare's free STUN server; on some networks (strict company or mobile networks) they may still not connect. The film goes through Tailscale's relay servers, which have a bandwidth limit Tailscale does not publish: try a whole film before relying on it.
+
 ## Usage
 
 1. **Open a film:** for your own file, type its full path into "File path on this computer" (for security, this field only appears on the host computer). For a torrent, paste the magnet link and press "Add torrent"; if it holds several videos, pick one from the list.
@@ -124,7 +126,8 @@ Multiply by two for two viewers. With a slow upload, set `MAX_COPY_KBPS` in `.en
 |---|---|---|
 | `PORT` | 8000 | Web server port |
 | `TAILSCALE_SERVE` | 1 | HTTPS link through Tailscale Serve when Tailscale is running, 0 = plain http links |
-| `ICE_SERVERS` | – | Comma-separated `stun:` addresses for voice; empty = only the viewers' own addresses (through Tailscale) |
+| `TAILSCALE_FUNNEL` | 0 | 1 = the HTTPS link through Tailscale Funnel, open to the internet: friends need no Tailscale |
+| `ICE_SERVERS` | – | Comma-separated `stun:` addresses for voice and camera; empty = only the viewers' own addresses (through Tailscale), or Cloudflare's STUN with Funnel |
 | `TORRENT_UPLOAD_LIMIT` | 64 | Torrent upload limit (KB/s), 0 = unlimited |
 | `MAX_COPY_KBPS` | 0 | H.264 files above this are converted, 0 = always original |
 | `TRANSCODE_KBPS` | 5000 | Target bitrate of a converted stream |

@@ -50,6 +50,8 @@ Arkadaşların kamerası ve mikrofonu ancak uygulama HTTPS'e geçince açılabil
 
 Host yine `http://localhost:8000` linkini kullanır. `/api/media/close` ve torrent ekleme bugün olduğu gibi herkese açık kalır; sadece yerel dosya açma host'a özel.
 
+**Arkadaş Tailscale kurmadan: Funnel (28 Ekim'de eklendi).** `.env`'de `TAILSCALE_FUNNEL=1` ile `run.py` `serve` yerine `tailscale funnel` başlatır: aynı `*.ts.net` HTTPS linki bütün internete açılır, arkadaşa tarayıcı yeter ([Funnel](https://tailscale.com/kb/1223/funnel)). Bedeli: odayı sadece linkteki anahtar korur; film Tailscale'in aktarıcı sunucularından geçer ve onların rakamı açıklanmamış bir bant sınırı var; misafirin Tailscale adresi olmadığı için ses ve kamera Cloudflare'in ücretsiz STUN sunucusuyla (`stun.cloudflare.com:3478`) modemleri aşar, bazı ağlarda TURN olmadan kurulamaz. Funnel istekleri de `127.0.0.1`'den gelir ama `Host`'ları `*.ts.net`, bu yüzden yerel dosya yetkisi kapalı kalır. ngrok'un ücretsiz planı (ayda 1 GB) film için yetmediği, Cloudflare Tunnel'ın koşulları da video akışını kısıtladığı için elendi. Funnel'da film takılırsa kalıcı yol Faz 3: film parçaları da eşler arası (DataChannel), gerekirse TURN.
+
 Alternatif: sertifikayı `tailscale cert` ile dosya olarak alıp Uvicorn'a vermek. İstemci adresleri olduğu gibi kalır ama sertifika 90 günde bir elle yenilenir. Serve'ün WebSocket'i taşıyıp taşımadığı belgelerde yazmıyor; Serve bir Go ters vekili olduğu için büyük olasılıkla taşıyor, 1. adımın ilk işi bunu denemek.
 
 ## Arkadaşlar tailnet'e nasıl katılır

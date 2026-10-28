@@ -48,6 +48,7 @@ class Settings:
     host: str  # empty = decided by run.py: 127.0.0.1 behind Tailscale Serve, else 0.0.0.0
     port: int
     tailscale_serve: bool
+    tailscale_funnel: bool  # the HTTPS link open to the whole internet, not only the tailnet
     data_dir: Path
     web_dir: Path
     access_key: str
@@ -66,7 +67,7 @@ class Settings:
     audio_filter: str
     hls_time: int
     # voice and camera
-    ice_servers: str  # comma-separated stun:/turn: URLs, empty = direct addresses only
+    ice_servers: str  # comma-separated stun:/turn: URLs, empty = direct addresses only (FUNNEL_STUN with Funnel)
     # OpenSubtitles
     os_api_key: str
     os_username: str
@@ -102,15 +103,23 @@ def _persistent_key(data_dir: Path) -> str:
     return key
 
 
+# Friends coming over Funnel are not in the tailnet, so voice and camera cannot use the Tailscale
+# addresses; a STUN server tells each browser its public address to get through home routers.
+# Cloudflare's is free, with no limit, and sees only addresses, never the sound or picture.
+FUNNEL_STUN = "stun:stun.cloudflare.com:3478"
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     load_dotenv(ROOT / ".env")
     data_dir = Path(_str("DATA_DIR") or ROOT / "data").expanduser().resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
+    funnel = _int("TAILSCALE_FUNNEL", 0) != 0
     return Settings(
         host=_str("HOST"),
         port=_int("PORT", 8000),
         tailscale_serve=_int("TAILSCALE_SERVE", 1) != 0,
+        tailscale_funnel=funnel,
         data_dir=data_dir,
         web_dir=ROOT / "web",
         access_key=_str("ACCESS_KEY") or _persistent_key(data_dir),
@@ -126,7 +135,7 @@ def get_settings() -> Settings:
         audio_kbps=_int("AUDIO_KBPS", 192),
         audio_filter=_str("AUDIO_FILTER", "dynaudnorm=f=500:g=15"),
         hls_time=_int("HLS_TIME", 4),
-        ice_servers=_str("ICE_SERVERS"),
+        ice_servers=_str("ICE_SERVERS") or (FUNNEL_STUN if funnel else ""),
         os_api_key=_str("OPENSUBTITLES_API_KEY"),
         os_username=_str("OPENSUBTITLES_USERNAME"),
         os_password=_str("OPENSUBTITLES_PASSWORD"),
