@@ -5,7 +5,7 @@ Bu dosya, Claude Code oturumlarının projeyi hızla tanıması için. Uygulaman
 ## Kurallar
 
 - **Commit kimliği:** author ve committer `erkinavcii <56629073+erkinavcii@users.noreply.github.com>`. Commit mesajına `Co-Authored-By`, Claude imzası ya da oturum linki ekleme. Mesajlar Türkçe ve önceki commit'lerin üslubunda: kısa bir başlık, gerekirse madde madde ayrıntı.
-- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 36 test; ffmpeg kuruluysa medya testleri de çalışır).
+- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 39 test; ffmpeg kuruluysa medya testleri de çalışır). Arayüzü ya da WebSocket mesajlarını değiştiren her adımdan sonra tarayıcı testi de: `.\.venv\Scripts\python tests\e2e\two_viewers.py` (izlemek için `--headed`; yaklaşık 1 dakika).
 - **İki README birlikte güncellenir:** `README.md` (İngilizce) ve `README.tr.md` (Türkçe) aynı içeriği taşır.
 - **Arayüz metinleri üç dilde:** `web/i18n.js` içindeki `tr`, `en` ve `ru` anahtarları birebir aynı olmalı.
 - `data/`, `.venv/`, `node_modules/` ve `samples/*.mkv` git'e girmez (`.gitignore`).
@@ -14,7 +14,8 @@ Bu dosya, Claude Code oturumlarının projeyi hızla tanıması için. Uygulaman
 
 ```powershell
 py -m venv .venv
-.\.venv\Scripts\python -m pip install -r requirements.txt pytest
+.\.venv\Scripts\python -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python -m playwright install chromium
 cd torrent-helper; npm.cmd install; cd ..
 .\.venv\Scripts\python run.py
 ```
@@ -35,7 +36,9 @@ cd torrent-helper; npm.cmd install; cd ..
 | `server/oshash.py`, `server/torrent_client.py` | OpenSubtitles hash'i; Node torrent yardımcısıyla konuşma |
 | `torrent-helper/index.mjs` | webtorrent: magnet linkinden HTTP Range akışı |
 | `web/app.js` | İstemci: senkron, altyazı çizimi, imleç topları, kalem |
+| `run.py` | Başlatıcı: torrent yardımcısı, Tailscale Serve (HTTPS linki), Uvicorn |
 | `tests/` | pytest testleri |
+| `tests/e2e/two_viewers.py` | İki Chromium penceresiyle uçtan uca test (Playwright, sahte kamera ve mikrofon); pytest'e girmez |
 
 ## Bilinen tuzaklar
 
@@ -43,7 +46,8 @@ cd torrent-helper; npm.cmd install; cd ..
 - **Film zamanı** = `video.currentTime + streamStart`. ffmpeg `-copyts` ile çalışır; akış yeniden başlatılınca ilk parçanın zamanı ölçülür.
 - **İmleç ve çizim konumları** pencereye değil, video görüntüsüne göre orandır (0–1); `object-fit: contain`'in bıraktığı bantlar hesaba katılır.
 - **İmleç ve çizim mesajları** sunucuda arka planda iletilir (`Controller._relay`); yavaş bir izleyici oynat/durdur komutlarını bekletmesin diye.
-- **Yerel dosya açma** sadece loopback'ten gelen isteklere açık (`is_local`). Tailscale Serve istekleri de `127.0.0.1`'den getirdiği için bu kontrol `Host` başlığına ve `Tailscale-User-Login` / `X-Forwarded-For` başlıklarına da bakmalı (kamera-ses planı, 1. adım).
+- **Yerel dosya açma** sadece host'a açık (`is_local`): loopback adresi, `Host` başlığı yerel bir ad ve vekil başlığı (`Tailscale-User-Login`, `X-Forwarded-For`, `Forwarded`) yok. Tailscale Serve istekleri de `127.0.0.1`'den getirdiği için tek başına adres yetmez. Tarayıcı testi misafiri bu başlıkla taklit eder.
+- **Tailscale Serve** `run.py`'nin alt süreci olarak ön planda çalışır; `--bg` kullanma (yeniden başlatmalardan sonra da açık kalır). Serve açıkken `HOST` boşsa `127.0.0.1` olur, düz http linkleri yazılmaz.
 - **Statik dosyalar** `no-cache` ile sunulur; tarayıcı her açılışta yeni sürümü sorar.
 
 ## Durum (28 Ekim 2026)
@@ -51,8 +55,8 @@ cd torrent-helper; npm.cmd install; cd ..
 - Faz 1 Windows'ta denendi: yerel dosya, iki pencerede senkron, kişiye özel altyazı (TR + EN).
 - İmleç topu, dürtme sesi ve çizim eklendi; iki tarayıcı penceresiyle denendi.
 - Henüz denenmedi: Windows'ta torrent (README'deki Sintel magnet'i) ve Tailscale üzerinden arkadaşla izleme. Tailscale bu bilgisayarda kurulu değil.
-- Tarayıcı testi (`tests/e2e/two_viewers.py`) ilk oturumda yazıldı ama depoya girmedi; Playwright da kurulu değil. Kamera-ses planının 1. adımında yeniden yazılacak.
+- Kamera-ses 1. adımının kodu bitti: `is_local`, `run.py`'de Tailscale Serve, tarayıcı testi (Playwright kuruldu, test geçiyor). Tailscale olmadan eski http davranışı denendi. Serve'ün kendisi (WebSocket'in geçmesi dahil) Tailscale kurulunca denenecek.
 
 ## Sıradaki iş: kamera ve ses
 
-Plan: [docs/kamera-ses-plani.md](docs/kamera-ses-plani.md). Plandaki beş karar proje sahibinde; cevap gelmediyse önerilen varsayılanlarla ilerle. İlk adım HTTPS (Tailscale Serve), host kontrolünün düzeltilmesi ve tarayıcı testi.
+Plan: [docs/kamera-ses-plani.md](docs/kamera-ses-plani.md). Plandaki beş karar proje sahibinde; cevap gelmediyse önerilen varsayılanlarla ilerle. 1. adımda kalan: Tailscale'i kurup Serve üzerinden oda ve WebSocket'i denemek (elle). Sonra 2. adım: ses.

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
@@ -31,6 +32,50 @@ def tailscale_ip() -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return out.splitlines()[0] if out else None
+
+
+def tailscale_dns_name(exe: str) -> str | None:
+    """This computer's name in the tailnet (pc.tail1234.ts.net), if Tailscale is up."""
+    try:
+        out = subprocess.run([exe, "status", "--json"], capture_output=True, text=True,
+                             encoding="utf-8", timeout=10).stdout
+        data = json.loads(out)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if data.get("BackendState") != "Running":
+        return None
+    return ((data.get("Self") or {}).get("DNSName") or "").rstrip(".") or None
+
+
+def start_serve(cfg) -> tuple[subprocess.Popen, str] | None:
+    """HTTPS for friends through Tailscale Serve: browsers open the camera and microphone only
+    on secure pages. It runs in the foreground and stops with us; `--bg` would keep forwarding
+    to a closed port after we exit, even across reboots."""
+    exe = find_tool("tailscale")
+    if not exe:
+        return None
+    name = tailscale_dns_name(exe)
+    if not name:
+        print("! Tailscale çalışmıyor ya da oturum açılmamış: HTTPS linki yok.")
+        return None
+    # Shares this console: if HTTPS is not enabled on the tailnet yet, it prints the consent link here.
+    proc = subprocess.Popen([exe, "serve", f"http://127.0.0.1:{cfg.port}"])
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        return proc, name
+    print("! 'tailscale serve' başlatılamadı (mesajı yukarıda): HTTPS linki yok.")
+    return None
+
+
+def stop(proc: subprocess.Popen | None) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
 
 
 def lan_ip() -> str | None:
@@ -70,31 +115,35 @@ def main() -> None:
         sys.exit(1)
 
     helper = start_helper(cfg)
+    serve = start_serve(cfg) if cfg.tailscale_serve else None
+    # Behind Serve, friends must come through HTTPS: a plain http link would work for the film
+    # but never for their camera and microphone.
+    host = cfg.host or ("127.0.0.1" if serve else "0.0.0.0")
     key = cfg.access_key
     print("\nCo-Watch hazır.")
     print(f"  Bu bilgisayardan:  http://localhost:{cfg.port}/?k={key}")
-    ts = tailscale_ip()
-    if ts:
-        print(f"  Tailscale linki:   http://{ts}:{cfg.port}/?k={key}   <- arkadaşına bunu gönder")
-    else:
-        print("  Tailscale IP'si bulunamadı; 'tailscale ip -4' ile öğrenip linkte localhost yerine yaz.")
-    lan = lan_ip()
-    if lan:
-        print(f"  Aynı ev ağı:       http://{lan}:{cfg.port}/?k={key}")
+    if serve:
+        print(f"  Arkadaşlar için:   https://{serve[1]}/?k={key}   <- arkadaşına bunu gönder")
+    elif host not in ("127.0.0.1", "localhost", "::1"):
+        ts = tailscale_ip()
+        if ts:
+            print(f"  Tailscale linki:   http://{ts}:{cfg.port}/?k={key}   <- arkadaşına bunu gönder")
+        else:
+            print("  Tailscale IP'si bulunamadı; 'tailscale ip -4' ile öğrenip linkte localhost yerine yaz.")
+        lan = lan_ip()
+        if lan:
+            print(f"  Aynı ev ağı:       http://{lan}:{cfg.port}/?k={key}")
+        print("  (http linklerinde arkadaşın kamerası ve mikrofonu açılmaz; bunun için Tailscale Serve gerekir.)")
     print()
 
     import uvicorn
 
     try:
-        uvicorn.run("server.main:app", host=cfg.host, port=cfg.port, log_level="info",
+        uvicorn.run("server.main:app", host=host, port=cfg.port, log_level="info",
                     ws_ping_interval=20, ws_ping_timeout=20)
     finally:
-        if helper is not None and helper.poll() is None:
-            helper.terminate()
-            try:
-                helper.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                helper.kill()
+        stop(serve[0] if serve else None)
+        stop(helper)
 
 
 if __name__ == "__main__":

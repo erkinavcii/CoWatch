@@ -44,6 +44,24 @@ def test_guest_cannot_open_local_files_and_needs_media_for_subtitles():
         assert resp.status_code == 400
 
 
+def test_host_is_only_the_localhost_link_on_this_computer():
+    local = dict(cookies={"cw_key": KEY}, client=("127.0.0.1", 50000))
+    with TestClient(app, base_url="http://localhost:8000", **local) as client:
+        assert client.get("/api/status").json()["isHost"] is True
+    with TestClient(app, base_url="http://[::1]:8000", cookies={"cw_key": KEY}, client=("::1", 50000)) as client:
+        assert client.get("/api/status").json()["isHost"] is True
+    # Tailscale Serve: same loopback address, but the tailnet name and its own headers.
+    with TestClient(app, base_url="http://pc.tail1234.ts.net", **local) as client:
+        assert client.get("/api/status").json()["isHost"] is False
+    with TestClient(app, base_url="http://localhost:8000", **local) as client:
+        for header in ({"Tailscale-User-Login": "friend@example.com"}, {"X-Forwarded-For": "100.64.0.7"},
+                       {"Forwarded": "for=100.64.0.7"}):
+            assert client.get("/api/status", headers=header).json()["isHost"] is False
+        resp = client.post("/api/media/open", json={"path": "/etc/passwd"},
+                           headers={"Tailscale-User-Login": "friend@example.com"})
+        assert resp.status_code == 403
+
+
 def test_websocket_welcome_ping_and_members():
     with TestClient(app, cookies={"cw_key": KEY}) as client:
         with client.websocket_connect("/ws") as ws:

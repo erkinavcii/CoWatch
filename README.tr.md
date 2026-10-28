@@ -59,14 +59,14 @@ Python paketleri proje içindeki `.venv` klasörüne kurulur. `npm` yerine `npm.
 
 ```
 Bu bilgisayardan:  http://localhost:8000/?k=ANAHTAR
-Tailscale linki:   http://100.x.y.z:8000/?k=ANAHTAR   <- arkadaşına bunu gönder
+Arkadaşlar için:   https://pc.tail1234.ts.net/?k=ANAHTAR   <- arkadaşına bunu gönder
 ```
 
 Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olarak kaydedilir. Anahtar `data/access_key.txt` içinde durur; silersen yeni anahtar üretilir ve eski linkler çalışmaz.
 
-Windows ilk çalıştırmada güvenlik duvarı izni sorar; Python'a izin ver. Arkadaşın Tailscale linkiyle bağlanamıyorsa izni "Ortak ağlar" için de ver: Tailscale bağlantısı Windows'ta ortak ağ olarak görünebiliyor.
+**Tailscale Serve ile HTTPS:** Tailscale çalışıyorsa `run.py` `tailscale serve`'ü başlatır ve arkadaşlarına `https://….ts.net` linki verir; tarayıcılar kamerayı ve mikrofonu sadece güvenli sayfalarda açıyor. Bir kereliğine [Tailscale yönetim panelinde](https://login.tailscale.com/admin/dns) MagicDNS ve HTTPS Certificates'ı aç (eksik bir şey varsa `tailscale serve` açma linkini kendisi yazar). Bilgisayarın adı herkese açık sertifika kayıtlarına düşer; adda kişisel bilgi varsa önce değiştir. Serve, `run.py` ile birlikte kapanır. Sunucu bu durumda sadece bu bilgisayarı dinler, eski `http://100.x.y.z:8000` linki artık çalışmaz. `.env`'de `TAILSCALE_SERVE=0` verirsen ya da Tailscale yoksa eskisi gibi düz http linkleri gelir (Windows da Python için güvenlik duvarı izni sorar).
 
-**Arkadaşın için:** Tailscale'i kursun, sen de bu bilgisayarı Tailscale yönetim panelinden onunla paylaş (ya da onu tailnet'ine davet et). Sonra linki açıp adını yazsın ve "Katıl"a bassın.
+**Arkadaşın için:** Tailscale'i kursun, sen de onu Tailscale yönetim panelinden tailnet'ine davet et (ücretsiz kişisel plan 6 kullanıcıya kadar). Sadece bu bilgisayarı paylaşmak film için yeter, ama o zaman iki arkadaş kamera ve ses için birbirine ulaşamaz. Sonra linki açıp adını yazsın ve "Katıl"a bassın.
 
 ## Kullanım
 
@@ -119,6 +119,7 @@ Gereken upload ≈ dosyanın bitrate'i × 1,3. Dosyanın bitrate'ini bilmiyorsan
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
 | `PORT` | 8000 | Web sunucusu portu |
+| `TAILSCALE_SERVE` | 1 | Tailscale çalışıyorsa Tailscale Serve ile HTTPS linki, 0 = düz http linkleri |
 | `TORRENT_UPLOAD_LIMIT` | 64 | Torrent'in upload sınırı (KB/s), 0 = sınırsız |
 | `MAX_COPY_KBPS` | 0 | Bunun üstündeki H.264 dosyalar dönüştürülür, 0 = hep orijinal |
 | `TRANSCODE_KBPS` | 5000 | Dönüştürülen akışın hedef bitrate'i |
@@ -145,9 +146,13 @@ Co-Watch içerik sağlamaz, aramaz ve dağıtmaz. Kendi dosyaların ya da izleme
 ## Geliştirme
 
 ```bash
-pip install pytest
-python -m pytest            # ffmpeg kuruluysa medya testleri de çalışır
+pip install -r requirements-dev.txt
+python -m pytest                      # ffmpeg kuruluysa medya testleri de çalışır
+python -m playwright install chromium # bir kere, tarayıcı testi için
+python tests/e2e/two_viewers.py       # iki Chromium penceresi; izlemek için --headed
 ```
+
+Tarayıcı testi kendi sunucusunu başlatır, bir pencerede host olarak film açar, diğerinde Tailscale Serve'den gelen bir arkadaş olarak katılır; senkronu, herkesin kendi altyazısını, imleçleri, dürtmeyi ve kalemi dener.
 
 Tarayıcı konsolunda `cowatchDebug()` senkron değerlerini gösterir (film zamanı, beklenen konum, fark).
 

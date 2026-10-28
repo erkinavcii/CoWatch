@@ -49,6 +49,9 @@ log = logging.getLogger("cowatch")
 COOKIE = "cw_key"
 LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-z]{2,4})?$")
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
+# Set by a reverse proxy in front of us. Tailscale Serve adds Tailscale-User-Login (and drops
+# forged copies) and X-Forwarded-For; any of them means the request came from someone else.
+PROXY_HEADERS = ("tailscale-user-login", "x-forwarded-for", "forwarded")
 
 cfg = get_settings()
 
@@ -448,8 +451,23 @@ def authorized(conn) -> bool:
     return _key_ok(conn.cookies.get(COOKIE)) or _key_ok(conn.query_params.get("k"))
 
 
+def host_name(value: str) -> str:
+    """The name part of a Host header: "localhost:8000" -> "localhost", "[::1]:8000" -> "::1"."""
+    value = value.strip().lower()
+    if value.startswith("["):
+        return value[1:].split("]", 1)[0]
+    return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
+
+
 def is_local(request: Request) -> bool:
-    return bool(request.client) and request.client.host in LOCAL_HOSTS
+    """The host at this computer, opening the localhost link. Tailscale Serve also connects
+    from 127.0.0.1, so the address alone is not enough: the Host header must be a local name
+    and no proxy header may be present."""
+    if not request.client or request.client.host not in LOCAL_HOSTS:
+        return False
+    if host_name(request.headers.get("host", "")) not in LOCAL_HOSTS:
+        return False
+    return not any(name in request.headers for name in PROXY_HEADERS)
 
 
 def _setup_logging() -> None:

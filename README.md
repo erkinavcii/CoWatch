@@ -58,15 +58,15 @@ Python packages go into the project's `.venv` folder. `npm.cmd` instead of `npm`
 `run.py` prints two links (its console messages are in Turkish):
 
 ```
-Bu bilgisayardan:  http://localhost:8000/?k=KEY     <- this computer
-Tailscale linki:   http://100.x.y.z:8000/?k=KEY     <- send this one to your friend
+Bu bilgisayardan:  http://localhost:8000/?k=KEY                  <- this computer
+Arkadaşlar için:   https://pc.tail1234.ts.net/?k=KEY              <- send this one to your friend
 ```
 
 The key in the link is the room's password; the browser stores it as a cookie on first visit. It lives in `data/access_key.txt`; delete that file to generate a new key, and old links stop working.
 
-On first run, Windows asks for firewall permission; allow Python. If your friend cannot connect through the Tailscale link, allow it on public networks too: Windows can list the Tailscale connection as a public network.
+**HTTPS with Tailscale Serve:** when Tailscale is running, `run.py` starts `tailscale serve` and gives your friends an `https://….ts.net` link; browsers open the camera and microphone only on secure pages. Once, in the [Tailscale admin console](https://login.tailscale.com/admin/dns), turn on MagicDNS and HTTPS Certificates (if something is missing, `tailscale serve` prints a link to enable it). The computer's name ends up in public certificate logs, so rename it first if it contains personal details. Serve stops together with `run.py`. The server then listens only on this computer, so the old `http://100.x.y.z:8000` link no longer works. With `TAILSCALE_SERVE=0` in `.env`, or without Tailscale, you get plain http links as before (and Windows asks for firewall permission for Python).
 
-**For your friend:** they install Tailscale, and you share this computer with them from the Tailscale admin console (or invite them to your tailnet). Then they open the link, type their name and press "Join".
+**For your friend:** they install Tailscale and you invite them to your tailnet from the Tailscale admin console (the free personal plan allows 6 users). Sharing only this computer is enough for the film, but then two friends cannot reach each other for camera and voice. Then they open the link, type their name and press "Join".
 
 ## Usage
 
@@ -119,6 +119,7 @@ Multiply by two for two viewers. With a slow upload, set `MAX_COPY_KBPS` in `.en
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | 8000 | Web server port |
+| `TAILSCALE_SERVE` | 1 | HTTPS link through Tailscale Serve when Tailscale is running, 0 = plain http links |
 | `TORRENT_UPLOAD_LIMIT` | 64 | Torrent upload limit (KB/s), 0 = unlimited |
 | `MAX_COPY_KBPS` | 0 | H.264 files above this are converted, 0 = always original |
 | `TRANSCODE_KBPS` | 5000 | Target bitrate of a converted stream |
@@ -145,9 +146,13 @@ Co-Watch does not provide, search for or distribute any content. It is made for 
 ## Development
 
 ```bash
-pip install pytest
-python -m pytest            # media tests run too when ffmpeg is installed
+pip install -r requirements-dev.txt
+python -m pytest                      # media tests run too when ffmpeg is installed
+python -m playwright install chromium # once, for the browser test
+python tests/e2e/two_viewers.py       # two Chromium windows; --headed to watch
 ```
+
+The browser test starts its own server, opens a film in one window as the host and joins as a friend coming through Tailscale Serve in the other, then checks sync, each viewer's own subtitles, pointers, pokes and the pen.
 
 In the browser console, `cowatchDebug()` shows the sync values (film time, expected position, drift).
 

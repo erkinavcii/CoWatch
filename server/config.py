@@ -45,8 +45,9 @@ def _str(name: str, default: str = "") -> str:
 
 @dataclass(frozen=True)
 class Settings:
-    host: str
+    host: str  # empty = decided by run.py: 127.0.0.1 behind Tailscale Serve, else 0.0.0.0
     port: int
+    tailscale_serve: bool
     data_dir: Path
     web_dir: Path
     access_key: str
@@ -105,8 +106,9 @@ def get_settings() -> Settings:
     data_dir = Path(_str("DATA_DIR") or ROOT / "data").expanduser().resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     return Settings(
-        host=_str("HOST", "0.0.0.0"),
+        host=_str("HOST"),
         port=_int("PORT", 8000),
+        tailscale_serve=_int("TAILSCALE_SERVE", 1) != 0,
         data_dir=data_dir,
         web_dir=ROOT / "web",
         access_key=_str("ACCESS_KEY") or _persistent_key(data_dir),
