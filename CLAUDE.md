@@ -93,3 +93,5 @@ Plan: [docs/kamera-ses-plani.md](docs/kamera-ses-plani.md). Plandaki beş karar 
 - 3. adım (kamera) kodlandı; tarayıcı testinde iki yönlü görüntü, bant sınırı, tam ekran, kutuya tıklama ve `Ctrl+E` geçiyor. Kalan elle deneme: gerçek kamerayla ışığın sönmesi, telefon.
 - 4. adım (cila) kodlandı: girişte önizleme, kutuları sürükleme ve küçültme, kendiliğinden onarım. Tarayıcı testi üçüncü bir izleyiciyle 3 kişilik bağlantıyı da deniyor. Kişi başına %100 üstü ses yapılmadı (yankı denemesinden sonra gerekirse).
 - Kalan: plandaki ölçüt, Tailscale üzerinden arkadaşlarla gerçek cihazlarda başından sonuna bir film (elle).
+
+Sonraki işler (önce genel program tamamlanacak): [docs/future-plans.md](docs/future-plans.md). Dağıtım ve paketleme (kurulum dosyası, tepsi başlatıcısı, ayarlar sayfası; ilk açılışta Funnel, daha yüksek kalite için Serve), Faz 2 ve 3.
