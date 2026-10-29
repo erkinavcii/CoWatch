@@ -108,6 +108,38 @@ Amaç: film ve dizileri afişli bir katalogdan seçip açmak; altyazıları da f
 - **Eklentilerin güvenilirliği:** Üçüncü taraf eklentiler kapanabilir, yavaşlayabilir; sorgular zaman aşımıyla yapılır, biri cevap vermezse diğerleri gösterilir.
 - **Kimin ne açabileceği:** Bugün torrent eklemek herkese açık. Eklentiden film açmak da öyle kalabilir; eklenti listesini değiştirmek sadece host'a.
 
+## Kendi kopyandan izle (seçmeli)
+
+Bugün filmi sadece host'un bilgisayarı okur ya da indirir; ffmpeg HLS parçalarına böler ve her izleyici parçaları host'tan çeker (Funnel'da ≈ 7–8 Mbps, host'un upload'u izleyici sayısıyla bölünür). Fikir: filmin aynısı kimde varsa, o izleyici kendi kopyasını oynatsın; host'tan parça çekmesin. Senkron aynı kalır, çünkü sunucu zaten "filmin şu saniyesi" der; izleyicinin filmi nereden oynattığı fark etmez. "Biri takılırsa herkes bekler" kuralı da olduğu gibi çalışır.
+
+### Kararlar (29 Ekim 2026)
+
+| Konu | Karar |
+| --- | --- |
+| Zorunlu mu | Hayır, izleyici başına seçmeli. Kopyası olmayan linkle gelir ve bugünkü gibi host'tan izler; ikisi aynı odada aynı kuralla senkron kalır. |
+| İlk adım | "Aynı dosya bende de var": izleyici kendi bilgisayarındaki dosyayı seçer, OpenSubtitles hash'i ve boyutu host'un dosyasıyla aynıysa kendi kopyasını oynatır. Torrent yok, hukuki risk değişmez. |
+| Torrent | Sonra ve isteğe bağlı: izleyicinin bilgisayarında torrent yardımcısı ve ffmpeg (CoWatch'ın misafir kipi), aynı infohash ve dosya. |
+
+### Artıları
+
+- Funnel'ın bant sınırı ve host'un upload'u o izleyici için önemsizleşir; kalite kaynağın kendisi, dönüştürme gerekmez (4K dahil).
+- İzleyici sayısı arttıkça host'a yük binmez; sunucudan sadece küçük mesajlar geçer (oynat/durdur, imleç, çizim, onaylar). Ses, kamera ve ekran zaten doğrudan.
+- İndirilmiş kısımda ileri sarma anında; ffmpeg'in yeniden başlaması yok.
+
+### Eksileri ve riskler
+
+- **Sadece link biter:** Tarayıcı normal torrent ağına bağlanamaz (tarayıcıdaki WebTorrent sadece WebRTC eşleriyle konuşur, film torrent'lerinde bunlar neredeyse yok) ve MKV, HEVC, AC3, DTS'nin çoğunu oynatamaz. Torrent ve çoğu dosya için izleyicinin de bir uygulama kurması gerekir. Tarayıcının oynatabildiği dosyalar (H.264 + AAC MP4) "aynı dosya bende de var"da kurulumsuz çalışabilir.
+- **Hukuki risk herkese yayılır:** Torrent indiren herkes aynı anda yükleme yapar ve IP adresi torrent ağında görünür. Bugün bu sadece host. Bu yüzden torrent kipi kişisel kullanımla sınırlı kalır; ilk adım torrent'e dokunmaz.
+- **Hızlar farklı:** Herkesin torrent hızı farklı; en yavaş olan herkesi bekletir, ilk açılışta da bekleme olur.
+- **Disk:** Her cihazda filmin tamamına yer gerekir; telefonlarda pek olmaz.
+
+### Adımlar
+
+1. **Sunucu:** açık filmin hash'ini ve boyutunu odaya bildir (`media` mesajında zaten `mediaKey` var; yerel dosya ve hash'i bulunan torrent için bu OpenSubtitles hash'i, yanına boyut eklenir). İzleyicinin "bende de var" bildirimini ve hash eşleşmesini kabul et.
+2. **İstemci:** "Aynı dosya bende de var" düğmesi; tarayıcının dosya seçicisiyle seçilen dosyanın hash'i tarayıcıda hesaplanır (ilk ve son 64 KB, `server/oshash.py`'nin aynısı). Eşleşirse `video.src` yerel dosyaya (`URL.createObjectURL`) bağlanır; film zamanı `video.currentTime` olur (`streamStart` 0). Tarayıcı oynatamazsa uyarı verip host'tan izlemeye döner.
+3. **Senkron:** iki kaynak türüyle aynı oda; tarayıcı testinde biri host'tan, biri yerel kopyadan izleyen iki pencere.
+4. **Sonra, isteğe bağlı:** misafir kipinde torrent yardımcısı ve yerel ffmpeg; dağıtım planındaki kurulum dosyasıyla birlikte.
+
 ## Diğer gelecek işler
 
 - **Faz 2, altyazı otomasyonu:** dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi (README'deki "Sonraki fazlar").
