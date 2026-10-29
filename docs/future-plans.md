@@ -60,6 +60,52 @@ Amaç: teknik bilgisi olmayan biri `run.py`, `.env` ve Tailscale komutlarıyla u
 - **Tailscale bağımlılığı:** Host yine Tailscale kurmak zorunda. Bundan tamamen kurtulmak aşağıdaki "sadece link" işinin konusu.
 - **macOS ve Linux:** Bu planın dışında. Aynı yapı (tepsi ve ayarlar sayfası) oralara da taşınabilir; paketleme ayrı iş.
 
+## Eklentiler (Stremio protokolü)
+
+Amaç: film ve dizileri afişli bir katalogdan seçip açmak; altyazıları da film kimliği ve dosya hash'iyle kendiliğinden bulmak. Stremio'nun eklenti protokolü açık ve basit (HTTP üzerinden JSON), bu yüzden Stremio eklentileri olduğu gibi kullanılabilir.
+
+### Kararlar (29 Ekim 2026)
+
+| Konu | Karar |
+| --- | --- |
+| Destek biçimi | **Genel eklenti desteği:** bir eklenti `manifest.json` adresiyle eklenir; kod hiçbir eklentiye özel değil |
+| Depoda hazır gelenler | Sadece yasal ve içerik barındırmayanlar: **Cinemeta** (katalog, afiş, sezon ve bölüm bilgisi), **Public Domain Movies** (telifsiz filmler) |
+| Diğer eklentiler (torrent katalogları vb.) | **Kişisel kalır, depoya girmez.** Kullanıcı adresini kendi ayarlarına ekler; liste git'e girmeyen bir dosyada durur (`data/addons.json` ya da `.env`). Depoda, README'de ve testlerde bu tür eklentilerin adı ya da adresi geçmez. README'deki "Co-Watch içerik sağlamaz, aramaz ve dağıtmaz" ilkesi böylece korunur. |
+| OpenSubtitles | Stremio'nun OpenSubtitles eklentisi **kullanılmaz** (ilk tasarımdaki karar: kota başka servislerin sunucuları üzerinden aşılmaz). Bugünkü doğrudan OpenSubtitles bağlantısı kalır; ayarlar sayfası kullanıcıya **kendi API anahtarını ve hesabını** nasıl alacağını adım adım gösterir. İsteğe bağlı: anahtar yoksa altyazı elle yüklenir. |
+| YouTube | Sonraya: oynatmak için yt-dlp gerekir ve YouTube'un kullanım koşullarına takılır |
+| DRM'li platformlar (WatchHub gibi) | Sadece "şurada izlenebilir" linki gösterilir; bu filmler oynatılamaz (DRM) |
+
+### OpenSubtitles anahtarı: ayarlar sayfasında gösterilecek yol
+
+1. [opensubtitles.com](https://www.opensubtitles.com)'da ücretsiz hesap aç.
+2. [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) sayfasında bir "API consumer" oluştur; verilen **API anahtarını** kopyala.
+3. Ayarlar sayfasına API anahtarını, kullanıcı adını ve şifreyi gir (bugün `.env`'deki `OPENSUBTITLES_API_KEY`, `OPENSUBTITLES_USERNAME`, `OPENSUBTITLES_PASSWORD`).
+4. Kota: girişsiz IP başına günde yaklaşık 5 indirme; hesapla daha fazla; VIP üyelikte günde 1000. Ücretsiz hesabın sınırı kaynaklarda farklı geçiyor (20 ve 200), bu yüzden sayfada sabit bir sayı yazılmaz. OpenSubtitles her indirmede kalan hakkı döndürüyor (bugün de saklanıyor, `remaining`); ayarlar sayfası bunu gösterir.
+5. Altyazılar dosya hash'iyle önbelleğe alındığı için aynı film için ikinci kez hak harcanmaz.
+
+### Protokol ve bizdeki karşılığı
+
+| Kaynak | İstek | Döner | Bizde |
+| --- | --- | --- | --- |
+| Katalog | `/catalog/{tür}/{id}.json`, arama için `/catalog/{tür}/{id}/search={metin}.json` | Afişli liste | Yeni "Göz at" paneli |
+| Bilgi | `/meta/{tür}/{id}.json` | Özet, sezonlar, bölümler | Bölüm seçimi |
+| Akış | `/stream/{tür}/{id}.json` | `infoHash` + `fileIdx` (torrent), `url` (HTTP), `ytId`, `externalUrl` | `infoHash` + `fileIdx` bugünkü torrent yardımcısıyla açılır (magnet `infoHash` ve `sources`'taki tracker'lardan kurulur); `url`'yi ffmpeg doğrudan okur; `ytId` ve `externalUrl` oynatılmaz |
+| Altyazı | `/subtitles/{tür}/{id}/videoHash={hash}&videoSize={boyut}.json` | Dil ve dosya adresi listesi | Bugünkü altyazı deposu ve kodlama düzeltmesi |
+
+### Adımlar
+
+1. **Sunucu, `server/addons.py`:** manifest okuma ve doğrulama, katalog, bilgi, akış ve altyazı sorguları, kısa süreli önbellek, zaman aşımı. Akışlar mevcut `/api/media/open`'a bağlanır. pytest'te sahte bir eklenti sunucusuyla.
+2. **Ayarlar:** eklenti listesi (ekle, kaldır, sırala). Hazır gelenler depodan; kullanıcının ekledikleri git'e girmeyen dosyada. Dağıtım planındaki ayarlar sayfasıyla birleşir; o sayfa yoksa önce basit bir liste.
+3. **Arayüz:** afişli göz atma ve arama, dizide sezon ve bölüm seçimi, akış listesi (kalite, boyut, kaynak). Seçilen akış herkes için açılır. Arayüz metinleri üç dilde.
+4. **Altyazı:** film açılınca altyazı veren eklentilere ve OpenSubtitles'a film kimliği ve dosya hash'iyle sorulur, bulunanlar listeye düşer. Faz 2'deki otomatik altyazının ilk adımı.
+
+### Bilinenler ve riskler
+
+- **Hukuki duruş:** Depodaki kod ve hazır eklentiler yasal içerikle sınırlı; kişisel eklentilerin sorumluluğu ekleyende. README'deki yasal not buna göre güncellenir: "Co-Watch eklenti protokolünü destekler; hangi eklentiyi eklediğin senin sorumluluğun."
+- **Torrent akışlarında bant:** Eklentiden gelen torrent de bugünkü torrent ile aynı yoldan geçer; Funnel'da 5,5 Mbps üstü dosyalar dönüştürülür (bkz. `.env` notları ve README).
+- **Eklentilerin güvenilirliği:** Üçüncü taraf eklentiler kapanabilir, yavaşlayabilir; sorgular zaman aşımıyla yapılır, biri cevap vermezse diğerleri gösterilir.
+- **Kimin ne açabileceği:** Bugün torrent eklemek herkese açık. Eklentiden film açmak da öyle kalabilir; eklenti listesini değiştirmek sadece host'a.
+
 ## Diğer gelecek işler
 
 - **Faz 2, altyazı otomasyonu:** dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi (README'deki "Sonraki fazlar").
