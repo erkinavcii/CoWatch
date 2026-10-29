@@ -342,7 +342,7 @@ class HlsStream:
 
 @dataclass
 class MediaSource:
-    kind: str  # "torrent" | "file"
+    kind: str  # "torrent" | "file" | "url" (a stream address from an add-on)
     url: str  # what ffmpeg reads
     title: str
     size: int
@@ -350,6 +350,10 @@ class MediaSource:
     moviehash: Optional[str] = None
     info_hash: Optional[str] = None
     file_index: Optional[int] = None
+    # Opened from an add-on: which film or episode it is (Stremio type and id, e.g.
+    # "series", "tt0903747:1:2"), for finding its subtitles by id.
+    content_type: Optional[str] = None
+    content_id: Optional[str] = None
 
 
 class MediaSession:
@@ -427,6 +431,8 @@ class MediaSession:
             "title": self.source.title,
             "source": self.source.kind,
             "mediaKey": self.source.media_key,
+            "content": {"type": self.source.content_type, "id": self.source.content_id}
+            if self.source.content_id else None,
             "mode": self.mode,
             "modeReason": self.mode_reason,
             "videoCodec": self.info.video_codec,

@@ -140,6 +140,20 @@ def test_opensubtitles_search_and_download():
     assert client.base == "https://vip-api.opensubtitles.com/api/v1"
 
 
+def test_opensubtitles_search_by_imdb_id_for_films_and_episodes():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url.query, "ascii"))
+        return httpx.Response(200, json={"data": []})
+
+    client = OpenSubtitlesClient("key", "CoWatch test", transport=httpx.MockTransport(handler))
+    asyncio.run(client.search(["tr"], imdb_id="tt0012349"))
+    asyncio.run(client.search(["tr"], imdb_id="tt0903747:1:2"))
+    assert seen == ["imdb_id=12349&languages=tr",
+                    "episode_number=2&languages=tr&parent_imdb_id=903747&season_number=1"]
+
+
 def test_opensubtitles_quota_error():
     transport = httpx.MockTransport(lambda request: httpx.Response(406, json={"message": "quota"}))
     client = OpenSubtitlesClient("key", "CoWatch test", transport=transport)

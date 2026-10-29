@@ -289,6 +289,59 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .track-list .badge { font-size: 11px; color: var(--ok); white-space: nowrap; }
 .track-list button { padding: 3px 8px; font-size: 12px; }
 
+/* ---- browse: add-on catalogs, a title's episodes and sources ---- */
+.card.wide { grid-column: 1 / -1; }
+.browse-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+.browse-head h2 { margin: 0 4px 0 0; }
+.browse-head select { max-width: 280px; }
+.browse-search { margin: 0; flex: 1; min-width: 220px; }
+.poster-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); }
+.poster {
+  display: grid; gap: 4px; padding: 0; text-align: left; background: transparent; border: 0; cursor: pointer; white-space: normal;
+}
+.poster .img {
+  aspect-ratio: 2 / 3; border-radius: 8px; overflow: hidden; background: var(--panel-2) center / cover no-repeat;
+  border: 1px solid var(--line); display: grid; place-items: center; color: var(--muted); font-size: 12px; padding: 6px; text-align: center;
+}
+.poster .img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.poster .img:has(img) { padding: 0; }
+.poster:hover .img { border-color: var(--accent); }
+.stream-list li.msg { background: transparent; border: 0; padding: 2px 0; color: var(--muted); }
+.poster .name { font-size: 13px; line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.poster .sub { font-size: 12px; color: var(--muted); }
+#browseMore { margin-top: 10px; }
+.title-view { display: grid; gap: 10px; }
+.title-view #titleBack { justify-self: start; }
+.title-info { display: grid; grid-template-columns: 110px 1fr; gap: 14px; align-items: start; }
+.title-info img { width: 110px; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 8px; background: var(--panel-2); }
+.title-info img:not([src]), .title-info img[src=""] { visibility: hidden; }
+.title-info h3 { margin: 0 0 2px; font-size: 18px; color: var(--text); }
+.title-desc { margin: 6px 0 0; font-size: 13.5px; color: #c9cdd5; max-width: 70ch; }
+#episodes { display: grid; gap: 8px; }
+#seasonSel { justify-self: start; }
+.episode-list, .stream-list, .addon-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.episode-list { max-height: 260px; overflow: auto; }
+.episode-list button, .stream-list li {
+  width: 100%; display: flex; align-items: center; gap: 10px; text-align: left; white-space: normal;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; font-size: 13px;
+}
+.episode-list button.sel { border-color: var(--accent); }
+.episode-list .num { font-weight: 700; color: var(--accent); min-width: 34px; font-variant-numeric: tabular-nums; }
+.stream-list .what { flex: 1; min-width: 0; }
+.stream-list .what b { display: block; font-size: 13px; }
+.stream-list .what span { display: block; color: var(--muted); font-size: 12px; white-space: pre-line; overflow-wrap: anywhere; }
+.stream-list .kind { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.addons-panel { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; background: #13151a; }
+.addon-list li { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.addon-list .name { font-weight: 600; }
+.addon-list .what { color: var(--muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.addon-list .badge { font-size: 11px; color: var(--ok); }
+.addon-list .bad { font-size: 11px; color: var(--danger); }
+.addon-list button { padding: 3px 8px; font-size: 12px; }
+.addon-subs { display: grid; gap: 6px; margin: 8px 0; }
+.addon-subs > button { justify-self: start; }
+#osOff a { color: var(--accent); }
+
 /* ---- join overlay ---- */
 .overlay { position: fixed; inset: 0; z-index: 50; background: rgba(5, 6, 8, .86); display: grid; place-items: center; padding: 16px; }
 .join-card { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
@@ -334,6 +387,9 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
   .film-title { display: none; }
   .bar .volume { display: none; }
   .grid2 { grid-template-columns: 1fr; }
+  .poster-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+  .title-info { grid-template-columns: 80px 1fr; }
+  .title-info img { width: 80px; }
   /* A phone's picture is short: tiles go in a row along the top, the toolbar beside them. */
   .side { right: 6px; top: 6px; bottom: 70px; gap: 6px; --cam-w: 84px; flex-direction: row; align-items: flex-start; justify-content: flex-end; }
   .side.left { left: 6px; justify-content: flex-start; }

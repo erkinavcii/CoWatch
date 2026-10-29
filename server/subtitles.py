@@ -230,7 +230,9 @@ class OpenSubtitlesClient:
             self.base = f"https://{data['base_url']}/api/v1"
 
     async def search(self, languages: list[str], moviehash: Optional[str] = None,
-                     query: Optional[str] = None) -> list[dict]:
+                     query: Optional[str] = None, imdb_id: Optional[str] = None) -> list[dict]:
+        """`imdb_id`: a film ("tt0012349") or an episode in Stremio's form ("tt0903747:1:2"),
+        known when the film was opened from an add-on; finds subtitles better than the title."""
         if not self.enabled:
             raise OpenSubtitlesError("OpenSubtitles API key missing", "os_not_configured")
         # The API wants lower-case values and alphabetically sorted parameters.
@@ -239,6 +241,11 @@ class OpenSubtitlesClient:
             params["moviehash"] = moviehash
         if query:
             params["query"] = query.lower()
+        m = re.fullmatch(r"tt(\d+)(?::(\d+):(\d+))?", imdb_id or "")
+        if m and m.group(2):
+            params.update(parent_imdb_id=str(int(m.group(1))), season_number=m.group(2), episode_number=m.group(3))
+        elif m:
+            params["imdb_id"] = str(int(m.group(1)))
         params = dict(sorted(params.items()))
         async with httpx.AsyncClient(timeout=30, follow_redirects=True, transport=self.transport) as http:
             resp = await http.get(f"{self.base}/subtitles", headers=self._headers(), params=params)

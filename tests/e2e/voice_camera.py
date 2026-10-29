@@ -78,7 +78,7 @@ def fake_voice(work: Path) -> Path:
 
 
 def start_server(port: int, data_dir: Path) -> subprocess.Popen:
-    env = dict(os.environ, DATA_DIR=str(data_dir), ACCESS_KEY=KEY, OPENSUBTITLES_API_KEY="")
+    env = dict(os.environ, DATA_DIR=str(data_dir), ACCESS_KEY=KEY, OPENSUBTITLES_API_KEY="", COWATCH_DOTENV="", ADDONS_BUILTIN="0")
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server.main:app", "--host", "127.0.0.1", "--port", str(port),

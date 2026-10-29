@@ -104,6 +104,50 @@
     </div>
 
     <div class="cards">
+      <section class="card wide" id="browseCard">
+        <div class="browse-head">
+          <h2 data-i18n="panel_browse"></h2>
+          <select id="catalogSel" aria-label="catalog"></select>
+          <form id="browseSearch" class="inline-form browse-search">
+            <input id="browseQuery" type="search" data-i18n-placeholder="browse_search" autocomplete="off">
+            <button type="submit" data-i18n="browse_search_button"></button>
+          </form>
+          <button type="button" id="addonsBtn" class="ghost" data-i18n="addons_manage"></button>
+        </div>
+        <div class="addons-panel" id="addonsPanel" hidden>
+          <ul id="addonList" class="addon-list"></ul>
+          <form id="addonForm" class="inline-form">
+            <input id="addonUrl" data-i18n-placeholder="addons_add_placeholder" autocomplete="off" spellcheck="false">
+            <button type="submit" data-i18n="addons_add"></button>
+          </form>
+          <p class="hint" id="addonsNote" data-i18n="addons_note"></p>
+          <p class="hint" id="addonsHostOnly" data-i18n="addons_host_only" hidden></p>
+        </div>
+        <div id="browseList">
+          <div id="browseGrid" class="poster-grid"></div>
+          <p class="hint" id="browseStatus"></p>
+          <button type="button" id="browseMore" class="ghost" data-i18n="browse_more" hidden></button>
+        </div>
+        <div id="titleView" class="title-view" hidden>
+          <button type="button" id="titleBack" class="ghost" data-i18n="browse_back"></button>
+          <div class="title-info">
+            <img id="titlePoster" alt="" referrerpolicy="no-referrer">
+            <div>
+              <h3 id="titleName"></h3>
+              <p class="hint" id="titleMeta"></p>
+              <p id="titleDesc" class="title-desc"></p>
+            </div>
+          </div>
+          <div id="episodes" hidden>
+            <select id="seasonSel" aria-label="season"></select>
+            <ul id="episodeList" class="episode-list"></ul>
+          </div>
+          <h3 id="streamsHead" data-i18n="streams"></h3>
+          <p class="hint" data-i18n="streams_hint"></p>
+          <ul id="streamList" class="stream-list"></ul>
+        </div>
+      </section>
+
       <section class="card" id="mediaCard">
         <h2 data-i18n="panel_media"></h2>
         <form id="magnetForm" class="inline-form">
@@ -149,7 +193,12 @@
             <input id="searchLangs" data-i18n-placeholder="subs_search_langs" autocomplete="off">
             <button type="submit" data-i18n="subs_search"></button>
           </form>
-          <p class="hint" id="osOff" data-i18n="subs_search_off" hidden></p>
+          <p class="hint" id="osOff" hidden><span data-i18n="subs_search_off"></span>
+            <a href="https://www.opensubtitles.com/consumers" target="_blank" rel="noopener" data-i18n="os_help"></a></p>
+          <div id="addonSubs" class="addon-subs" hidden>
+            <button type="button" id="addonSubsBtn" data-i18n="subs_addons"></button>
+            <ul id="addonSubsList" class="track-list"></ul>
+          </div>
           <form id="uploadForm" class="inline-form">
             <input type="file" id="subFile" accept=".srt,.ass,.ssa,.vtt,.sub,.txt">
             <input id="subLang" class="short" list="langList" data-i18n-placeholder="subs_upload_lang" autocomplete="off">

@@ -28,6 +28,14 @@
     preview: $('#preview'), previewVideo: $('#previewVideo'), previewMeter: $('#previewMeter'),
     preMicBtn: $('#preMicBtn'), preCamBtn: $('#preCamBtn'),
     camsBox: $('#camsBox'), camsSizeBtn: $('#camsSizeBtn'), sideLeft: $('#sideLeft'), sideRight: $('#sideRight'),
+    catalogSel: $('#catalogSel'), browseSearch: $('#browseSearch'), browseQuery: $('#browseQuery'),
+    addonsBtn: $('#addonsBtn'), addonsPanel: $('#addonsPanel'), addonList: $('#addonList'), addonForm: $('#addonForm'),
+    addonUrl: $('#addonUrl'), addonsNote: $('#addonsNote'), addonsHostOnly: $('#addonsHostOnly'),
+    browseList: $('#browseList'), browseGrid: $('#browseGrid'), browseStatus: $('#browseStatus'), browseMore: $('#browseMore'),
+    titleView: $('#titleView'), titleBack: $('#titleBack'), titlePoster: $('#titlePoster'), titleName: $('#titleName'),
+    titleMeta: $('#titleMeta'), titleDesc: $('#titleDesc'), episodes: $('#episodes'), seasonSel: $('#seasonSel'),
+    episodeList: $('#episodeList'), streamList: $('#streamList'),
+    addonSubs: $('#addonSubs'), addonSubsBtn: $('#addonSubsBtn'), addonSubsList: $('#addonSubsList'),
   };
   const video = el.video;
 
@@ -37,7 +45,7 @@
     name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '', offsetMs: 0,
     fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false, color: '', sfx: true,
     micDevice: '', duck: true, peerVolume: {}, micHintShown: false, camDevice: '', showSelf: true, showCams: true,
-    camCorner: 'tr', camsSmall: false,
+    camCorner: 'tr', camsSmall: false, browseCatalog: '',
   };
   const prefs = (() => {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULT_PREFS }; }
@@ -247,7 +255,7 @@
   function applyMedia (media) {
     const changedFilm = (S.media && S.media.mediaKey) !== (media && media.mediaKey);
     S.media = media;
-    if (changedFilm) { S.cues.clear(); }
+    if (changedFilm) { S.cues.clear(); el.addonSubsList.replaceChildren(); }
     if (!media) {
       destroyPlayer();
     } else if (media.streamId !== S.streamId) {
@@ -1524,6 +1532,8 @@
       const result = await api('/api/subtitles/search', { json: { languages } });
       toast(t('search_result', { added: result.added.length }));
       if (result.notFound && result.notFound.length) toast(t('search_missing', { langs: result.notFound.join(', ') }), 'error');
+      const left = result.added.map((tr) => tr.remaining).filter(Number.isFinite);
+      if (left.length) toast(t('search_remaining', { n: Math.min(...left) }));
       if (!S.primary && result.added.length) selectTrack('primary', result.added[0].id);
     } catch (err) {
       toast(errorText(err), 'error');
@@ -1631,6 +1641,333 @@
     } catch { /* offline: the websocket indicator already shows it */ }
   }
 
+  // ---------------------------------------------------------------- browse: add-on catalogs
+  // Catalogs, details and sources come from Stremio add-ons, through the server. A source is
+  // opened by the `ref` the server gave it, for everyone in the room, like a torrent.
+  const B = {
+    addons: [], canEdit: false, catalogs: [], key: '', query: '', skip: 0, items: [], seq: 0, streamSeq: 0,
+    started: false, title: null, videos: [], season: null, episode: null,
+  };
+  const typeName = (type) => t(type === 'series' ? 'type_series' : 'type_movie');
+  const catKey = (c) => `${c.addon}|${c.type}|${c.id}`;
+  const query = (params) => new URLSearchParams(params).toString();
+  const metaLine = (m) => [m.year, typeName(m.type), m.rating ? `★ ${m.rating}` : '', m.runtime]
+    .filter(Boolean).join(' · ');
+
+  async function loadAddons () {
+    try {
+      const data = await api('/api/addons');
+      B.addons = data.addons || [];
+      B.canEdit = !!data.canEdit;
+      B.catalogs = B.addons.flatMap((a) => (a.catalogs || []).map((c) => ({ ...c, addonName: a.name })));
+    } catch (err) {
+      toast(errorText(err), 'error');
+      return;
+    }
+    renderCatalogs();
+    renderAddons();
+    if (!B.started) { B.started = true; loadCatalog(true); }
+  }
+
+  function renderCatalogs () {
+    const wanted = B.key || prefs.browseCatalog;
+    el.catalogSel.replaceChildren();
+    for (const c of B.catalogs.filter((x) => !x.searchOnly)) {
+      const option = document.createElement('option');
+      option.value = catKey(c);
+      option.textContent = `${c.addonName} · ${c.name} (${typeName(c.type)})`;
+      el.catalogSel.appendChild(option);
+    }
+    if ([...el.catalogSel.options].some((o) => o.value === wanted)) el.catalogSel.value = wanted;
+    B.key = el.catalogSel.value;
+  }
+
+  function showList () { el.titleView.hidden = true; el.browseList.hidden = false; B.title = null; }
+
+  async function loadCatalog (reset) {
+    if (reset) { B.skip = 0; B.items = []; el.browseGrid.replaceChildren(); }
+    showList();
+    const seq = ++B.seq;
+    el.browseStatus.textContent = t('browse_loading');
+    el.browseMore.hidden = true;
+    const metas = [];
+    try {
+      if (B.query) { // every catalog that can search, films and series together
+        const results = await Promise.allSettled(B.catalogs.filter((c) => c.search).map((c) =>
+          api(`/api/addons/catalog?${query({ addon: c.addon, type: c.type, id: c.id, search: B.query })}`)));
+        for (const r of results) if (r.status === 'fulfilled') metas.push(...r.value.metas);
+      } else {
+        const c = B.catalogs.find((x) => catKey(x) === B.key);
+        if (c) metas.push(...(await api(`/api/addons/catalog?${query({ addon: c.addon, type: c.type, id: c.id, skip: B.skip })}`)).metas);
+      }
+    } catch (err) {
+      if (seq === B.seq) { el.browseStatus.textContent = ''; toast(errorText(err), 'error'); }
+      return;
+    }
+    if (seq !== B.seq) return; // a newer search or catalog took over
+    const seen = new Set(B.items.map((m) => m.id));
+    const fresh = metas.filter((m) => !seen.has(m.id) && seen.add(m.id));
+    if (B.query) { // films and series come from separate catalogs: the closest names first
+      const q = B.query.toLowerCase();
+      const rank = (m) => { const n = (m.name || '').toLowerCase(); return n === q ? 0 : n.startsWith(q) ? 1 : 2; };
+      fresh.sort((a, b) => rank(a) - rank(b));
+    }
+    B.items.push(...fresh);
+    B.skip += metas.length;
+    for (const m of fresh) el.browseGrid.appendChild(posterCard(m));
+    el.browseStatus.textContent = !B.items.length ? t('browse_empty') : (B.query ? t('browse_results', { q: B.query }) : '');
+    el.browseMore.hidden = !!B.query || !metas.length;
+  }
+
+  function posterCard (m) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'poster';
+    const box = document.createElement('span');
+    box.className = 'img';
+    if (m.poster) {
+      const img = document.createElement('img');
+      img.loading = 'lazy'; img.alt = ''; img.referrerPolicy = 'no-referrer'; img.src = m.poster;
+      box.appendChild(img);
+    } else {
+      box.textContent = m.name;
+    }
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = m.name;
+    const sub = document.createElement('span'); sub.className = 'sub'; sub.textContent = metaLine(m);
+    card.append(box, name, sub);
+    card.addEventListener('click', () => openTitle(m));
+    return card;
+  }
+
+  async function openTitle (m) {
+    B.title = { ...m }; B.videos = []; B.season = null; B.episode = null;
+    el.browseList.hidden = true;
+    el.titleView.hidden = false;
+    el.titlePoster.src = m.poster || '';
+    el.titleName.textContent = m.name;
+    el.titleMeta.textContent = metaLine(m);
+    el.titleDesc.textContent = '';
+    el.episodes.hidden = true;
+    streamMessage(t('browse_loading'));
+    el.browseList.parentNode.scrollIntoView({ block: 'nearest' });
+    let meta = null;
+    try {
+      meta = (await api(`/api/addons/meta?${query({ type: m.type, id: m.id })}`)).meta;
+    } catch { /* details are a nicety: sources still work */ }
+    if (!B.title || B.title.id !== m.id) return;
+    if (meta) {
+      Object.assign(B.title, meta, { name: meta.name || m.name, poster: meta.poster || m.poster });
+      el.titlePoster.src = B.title.poster || '';
+      el.titleMeta.textContent = [metaLine(B.title), (meta.genres || []).join(', ')].filter(Boolean).join(' · ');
+      el.titleDesc.textContent = meta.description || '';
+    }
+    if (m.type === 'series' && meta && meta.videos && meta.videos.length) {
+      B.videos = meta.videos;
+      renderSeasons();
+      streamMessage(t('streams_pick_episode'));
+    } else {
+      loadStreams(m.type, m.id, B.title.name);
+    }
+  }
+
+  function renderSeasons () {
+    const seasons = [...new Set(B.videos.map((v) => v.season ?? 0))].sort((a, b) => (a || 9999) - (b || 9999));
+    el.seasonSel.replaceChildren();
+    for (const s of seasons) {
+      const option = document.createElement('option');
+      option.value = String(s);
+      option.textContent = s ? t('season_n', { n: s }) : t('season_specials');
+      el.seasonSel.appendChild(option);
+    }
+    if (B.season === null) B.season = seasons[0];
+    el.seasonSel.value = String(B.season);
+    el.episodes.hidden = false;
+    renderEpisodes();
+  }
+  el.seasonSel.addEventListener('change', () => { B.season = Number(el.seasonSel.value); renderEpisodes(); });
+
+  function renderEpisodes () {
+    el.episodeList.replaceChildren();
+    const list = B.videos.filter((v) => (v.season ?? 0) === B.season).sort((a, b) => (a.episode ?? 0) - (b.episode ?? 0));
+    for (const v of list) {
+      const li = document.createElement('li');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.classList.toggle('sel', v.id === B.episode);
+      const num = document.createElement('span'); num.className = 'num'; num.textContent = v.episode ?? '';
+      const name = document.createElement('span'); name.textContent = v.name || '';
+      btn.append(num, name);
+      btn.addEventListener('click', () => {
+        B.episode = v.id;
+        renderEpisodes();
+        loadStreams('series', v.id, B.title.name);
+      });
+      li.appendChild(btn);
+      el.episodeList.appendChild(li);
+    }
+  }
+
+  function streamMessage (text) {
+    const li = document.createElement('li');
+    li.className = 'msg';
+    li.textContent = text;
+    el.streamList.replaceChildren(li);
+  }
+
+  async function loadStreams (type, id, name) {
+    const seq = ++B.streamSeq;
+    streamMessage(t('browse_loading'));
+    let streams;
+    try {
+      streams = (await api(`/api/addons/streams?${query({ type, id, name })}`)).streams;
+    } catch (err) {
+      if (seq === B.streamSeq) streamMessage(errorText(err));
+      return;
+    }
+    if (seq !== B.streamSeq) return;
+    if (!streams.length) { streamMessage(t('streams_none')); return; }
+    el.streamList.replaceChildren();
+    for (const s of streams) {
+      const li = document.createElement('li');
+      const what = document.createElement('span'); what.className = 'what';
+      const head = document.createElement('b'); head.textContent = [s.addon, s.name].filter(Boolean).join(' · ');
+      const detail = document.createElement('span'); detail.textContent = s.detail;
+      what.append(head, detail);
+      const kind = document.createElement('span'); kind.className = 'kind';
+      kind.textContent = t(s.kind === 'torrent' ? 'stream_torrent' : 'stream_url');
+      const open = document.createElement('button'); open.type = 'button'; open.className = 'primary';
+      open.textContent = t('stream_open');
+      open.addEventListener('click', async () => {
+        open.disabled = true;
+        try {
+          await api('/api/media/open', { json: { stream: s.ref } });
+          toast(t('stream_opening', { name }));
+          el.stage.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } catch (err) {
+          toast(errorText(err), 'error');
+        } finally {
+          open.disabled = false;
+        }
+      });
+      li.append(what, kind, open);
+      el.streamList.appendChild(li);
+    }
+  }
+
+  el.titleBack.addEventListener('click', () => { showList(); B.streamSeq++; });
+  el.catalogSel.addEventListener('change', () => {
+    B.key = el.catalogSel.value;
+    prefs.browseCatalog = B.key; savePrefs();
+    B.query = ''; el.browseQuery.value = '';
+    loadCatalog(true);
+  });
+  el.browseSearch.addEventListener('submit', (e) => {
+    e.preventDefault();
+    B.query = el.browseQuery.value.trim().slice(0, 100);
+    loadCatalog(true);
+  });
+  el.browseMore.addEventListener('click', () => loadCatalog(false));
+
+  // ---- the add-on list: everyone sees it, only the host changes it
+  function renderAddons () {
+    el.addonList.replaceChildren();
+    for (const a of B.addons) {
+      const li = document.createElement('li');
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = a.name;
+      const what = document.createElement('span'); what.className = 'what';
+      what.textContent = a.description || (a.resources || []).join(', ');
+      what.title = a.url;
+      li.append(name, what);
+      if (a.builtin) {
+        const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = t('addons_builtin');
+        li.appendChild(badge);
+      }
+      if (a.error) {
+        const bad = document.createElement('span'); bad.className = 'bad'; bad.textContent = t('addons_unreachable');
+        bad.title = a.error;
+        li.appendChild(bad);
+      }
+      if (B.canEdit && !a.builtin) {
+        const del = document.createElement('button'); del.type = 'button'; del.className = 'ghost';
+        del.textContent = t('addons_remove');
+        del.addEventListener('click', async () => {
+          if (!confirm(t('addons_confirm_remove', { name: a.name }))) return;
+          try { await api(`/api/addons?${query({ url: a.url })}`, { method: 'DELETE' }); } catch (err) { toast(errorText(err), 'error'); }
+          await loadAddons();
+          loadCatalog(true);
+        });
+        li.appendChild(del);
+      }
+      el.addonList.appendChild(li);
+    }
+    el.addonForm.hidden = !B.canEdit;
+    el.addonsNote.hidden = !B.canEdit;
+    el.addonsHostOnly.hidden = B.canEdit;
+  }
+  el.addonsBtn.addEventListener('click', () => {
+    el.addonsPanel.hidden = !el.addonsPanel.hidden;
+    if (!el.addonsPanel.hidden) loadAddons();
+  });
+  el.addonForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const url = el.addonUrl.value.trim();
+    if (!url) return;
+    const btn = el.addonForm.querySelector('button');
+    btn.disabled = true;
+    try {
+      const added = await api('/api/addons', { json: { url } });
+      toast(t('addons_added', { name: added.name }));
+      el.addonUrl.value = '';
+      await loadAddons();
+    } catch (err) {
+      toast(errorText(err), 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ---- subtitles the add-ons offer for the open film (found by its id and file hash)
+  el.addonSubsBtn.addEventListener('click', async () => {
+    el.addonSubsBtn.disabled = true;
+    el.addonSubsList.replaceChildren();
+    try {
+      const { subtitles } = await api('/api/addons/subtitles');
+      if (!subtitles.length) {
+        const li = document.createElement('li'); li.textContent = t('subs_addons_none');
+        el.addonSubsList.appendChild(li);
+      }
+      for (const sub of subtitles) el.addonSubsList.appendChild(addonSubItem(sub));
+    } catch (err) {
+      toast(errorText(err), 'error');
+    } finally {
+      el.addonSubsBtn.disabled = false;
+    }
+  });
+  function addonSubItem (sub) {
+    const li = document.createElement('li');
+    const lang = document.createElement('span'); lang.className = 'lang'; lang.textContent = sub.lang.toUpperCase();
+    const label = document.createElement('span'); label.className = 'label';
+    label.textContent = `${langName(sub.lang)} · ${sub.addon}`;
+    li.append(lang, label);
+    const add = document.createElement('button'); add.type = 'button'; add.className = 'ghost';
+    add.textContent = sub.added ? t('subs_addons_added') : t('addons_add');
+    add.disabled = !!sub.added;
+    add.addEventListener('click', async () => {
+      add.disabled = true;
+      try {
+        const track = await api('/api/addons/subtitles', { json: { ref: sub.ref } });
+        toast(t('uploaded', { label: track.label }));
+        add.textContent = t('subs_addons_added');
+        if (!S.primary) selectTrack('primary', track.id);
+      } catch (err) {
+        add.disabled = false;
+        toast(errorText(err), 'error');
+      }
+    });
+    li.appendChild(add);
+    return li;
+  }
+
   // ---------------------------------------------------------------- join
   el.nameInput.value = prefs.name;
   el.joinForm.addEventListener('submit', (e) => {
@@ -1665,7 +2002,7 @@
   // ---------------------------------------------------------------- rendering
   function renderAll () {
     renderControls(); renderMembers(); renderMediaPanel(); renderTracks(); renderSubStyle(); renderCenter();
-    renderToolbar(); renderVoice(); renderCams();
+    renderToolbar(); renderVoice(); renderCams(); renderCatalogs(); renderAddons();
     el.uiLang.value = prefs.uiLang;
     el.joinLang.value = prefs.uiLang;
     if (document.activeElement !== el.searchLangs) {
@@ -1732,6 +2069,7 @@
     el.hostHint.hidden = S.isHost;
     el.closeMedia.hidden = !S.media;
     el.osOff.hidden = S.osEnabled;
+    el.addonSubs.hidden = !(S.media && S.media.content);
     el.filmTitle.textContent = S.media ? S.media.title : '';
     renderMediaInfo();
     renderTorrentInfo();
@@ -1893,6 +2231,7 @@
   applyI18n();
   connect();
   pollStatus();
+  loadAddons();
   setInterval(pollStatus, 3000);
   setInterval(syncTick, 250);
   setInterval(voiceTick, 100);

@@ -66,6 +66,8 @@ class Settings:
     audio_kbps: int
     audio_filter: str
     hls_time: int
+    # add-ons
+    addons_builtin: bool  # Cinemeta and Public Domain Movies; 0 = only the ones added by hand
     # voice and camera
     ice_servers: str  # comma-separated stun:/turn: URLs, empty = direct addresses only (FUNNEL_STUN with Funnel)
     # OpenSubtitles
@@ -111,7 +113,11 @@ FUNNEL_STUN = "stun:stun.cloudflare.com:3478"
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    load_dotenv(ROOT / ".env")
+    # COWATCH_DOTENV: another settings file, or empty for none (the tests use that, so this
+    # computer's own .env does not change what they see).
+    dotenv = os.environ.get("COWATCH_DOTENV", str(ROOT / ".env"))
+    if dotenv:
+        load_dotenv(Path(dotenv))
     data_dir = Path(_str("DATA_DIR") or ROOT / "data").expanduser().resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     funnel = _int("TAILSCALE_FUNNEL", 0) != 0
@@ -135,6 +141,7 @@ def get_settings() -> Settings:
         audio_kbps=_int("AUDIO_KBPS", 192),
         audio_filter=_str("AUDIO_FILTER", "dynaudnorm=f=500:g=15"),
         hls_time=_int("HLS_TIME", 4),
+        addons_builtin=_int("ADDONS_BUILTIN", 1) != 0,
         ice_servers=_str("ICE_SERVERS") or (FUNNEL_STUN if funnel else ""),
         os_api_key=_str("OPENSUBTITLES_API_KEY"),
         os_username=_str("OPENSUBTITLES_USERNAME"),

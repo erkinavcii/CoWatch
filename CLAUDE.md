@@ -7,7 +7,7 @@ Klasörde `_handoff/` varsa (git'e girmez) `_handoff/HANDOFF.md`'yi de oku: önc
 ## Kurallar
 
 - **Commit kimliği:** author ve committer `erkinavcii <56629073+erkinavcii@users.noreply.github.com>`. Commit mesajına `Co-Authored-By`, Claude imzası ya da oturum linki ekleme. Mesajlar Türkçe ve önceki commit'lerin üslubunda: kısa bir başlık, gerekirse madde madde ayrıntı.
-- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 45 test; ffmpeg kuruluysa medya testleri de çalışır). Arayüzü ya da WebSocket mesajlarını değiştiren her adımdan sonra tarayıcı testleri de (aşağıda).
+- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 52 test; ffmpeg kuruluysa medya testleri de çalışır). Arayüzü ya da WebSocket mesajlarını değiştiren her adımdan sonra tarayıcı testleri de (aşağıda).
 - **İki README birlikte güncellenir:** `README.md` (İngilizce) ve `README.tr.md` (Türkçe) aynı içeriği taşır.
 - **Arayüz metinleri üç dilde:** `web/i18n.js` içindeki `tr`, `en` ve `ru` anahtarları birebir aynı olmalı.
 - `data/`, `.venv/`, `node_modules/` ve `samples/*.mkv` git'e girmez (`.gitignore`).
@@ -50,6 +50,7 @@ Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her
 | `server/media.py` | ffprobe, kopya ya da dönüştürme kararı, ffmpeg ile HLS (fMP4) üretimi |
 | `server/presence.py` | İmleç, dürtme ve çizim mesajlarının doğrulanması, renk paleti |
 | `server/signaling.py` | Ses ve kamera için WebRTC sinyal mesajlarının (`rtc`) doğrulanması, `ICE_SERVERS` |
+| `server/addons.py` | Stremio eklentileri: manifest, katalog, bilgi, akış, altyazı; hazır eklentiler (`DEFAULT_ADDONS`), host'un ekledikleri `data/addons.json`'da |
 | `server/subtitles.py` | Altyazı çözme (cp1254, cp1251 gibi eski kodlamalar), OpenSubtitles, saklama |
 | `server/oshash.py`, `server/torrent_client.py` | OpenSubtitles hash'i; Node torrent yardımcısıyla konuşma |
 | `torrent-helper/index.mjs` | webtorrent: magnet linkinden HTTP Range akışı |
@@ -72,6 +73,8 @@ Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her
 - **WebSocket yeniden bağlanınca** sunucu yeni `clientId` verir; istemci `welcome`'da bütün eş bağlantılarını kapatır, `members` gelince yeniden kurar. Aynı eşe giden `rtc` mesajları sunucuda sırayla iletilir (`Controller._relay_to`), istemcide de eş başına sırayla işlenir (`peer.queue`).
 - **Konuşan tespiti:** karşı tarafın seviyesi `getSynchronizationSources()`'tan okunur, uzak ses WebAudio'ya bağlanmaz (Chrome'da sessizlik verir). Film sesini kısma kaydırıcıyı oynatmaz: `video.volume = prefs.volume × duck`.
 - **Kısayollar:** değiştirici tuşlu basışlar (`Ctrl`, `Cmd`, `Alt`) tek harfli kısayolları tetiklemez; `Ctrl+D` mikrofon, `Ctrl+E` kamera, `d` kalem.
+- **Eklenti akışları ve altyazıları referansla açılır:** sunucu eklentiden gelen her akışı ve altyazıyı hafızada tutar, istemciye sadece kısa bir `ref` verir (`AddonStore.refs`). Tarayıcı sunucuya hiçbir zaman çekilecek bir adres göndermez; böylece misafir sunucuyu rastgele adreslere istek attırmak için kullanamaz. Eklenti eklemek ve kaldırmak sadece `is_local`.
+- **Testler bu bilgisayarın ayarlarını görmez:** pytest ve tarayıcı testleri `COWATCH_DOTENV=""` (`.env` okunmaz) ve `ADDONS_BUILTIN=0` (Stremio'nun eklentilerine istek gitmez) ile çalışır. Yeni bir ayar ekleyince testlerin ona `.env`'den bağımlı olmadığına bak.
 - **Tarayıcı testindeki sahte mikrofon** ffmpeg'in `flite` filtresiyle sentezlenmiş konuşma çalar. Chrome'un kendi sahte mikrofonu kısa bipler çıkarıyor, düz bir tonu da gürültü bastırma yarım saniyede siliyor; ikisiyle de konuşan göstergesi güvenilir denenemiyor.
 
 ## Durum (28 Ekim 2026)
@@ -94,6 +97,8 @@ Plan: [docs/kamera-ses-plani.md](docs/kamera-ses-plani.md). Plandaki beş karar 
 - 4. adım (cila) kodlandı: girişte önizleme, kutuları sürükleme ve küçültme, kendiliğinden onarım. Tarayıcı testi üçüncü bir izleyiciyle 3 kişilik bağlantıyı da deniyor. Kişi başına %100 üstü ses yapılmadı (yankı denemesinden sonra gerekirse).
 - Kalan: plandaki ölçüt, Tailscale üzerinden arkadaşlarla gerçek cihazlarda başından sonuna bir film (elle).
 
-Sonraki işler (önce genel program tamamlanacak): [docs/future-plans.md](docs/future-plans.md). Dağıtım ve paketleme (kurulum dosyası, tepsi başlatıcısı, ayarlar sayfası; ilk açılışta Funnel, daha yüksek kalite için Serve), Stremio protokolüyle eklentiler, Faz 2 ve 3.
+Sonraki işler (önce genel program tamamlanacak): [docs/future-plans.md](docs/future-plans.md). Dağıtım ve paketleme (kurulum dosyası, tepsi başlatıcısı, ayarlar sayfası; ilk açılışta Funnel, daha yüksek kalite için Serve), Faz 2 ve 3.
+
+- Eklentiler (29 Ekim) kodlandı: "Göz at" kartı (katalog, arama, sezon ve bölüm, kaynaklar), eklenti listesi, eklentilerden altyazı, film kimliğiyle OpenSubtitles araması. Gerçek Cinemeta ve Public Domain Movies ile denendi: arama, Breaking Bad'in sezonları, "The Kid" torrent'i açılıp oynadı. Kalan: ayarlar sayfası (dağıtım planıyla birlikte).
 
 - **Eklentilerde kural:** depoya sadece yasal ve içerik barındırmayan eklentiler girer (Cinemeta, Public Domain Movies). Kullanıcının kişisel eklentileri git'e girmeyen dosyada durur; depoda, README'de ve testlerde adları ya da adresleri geçmez.

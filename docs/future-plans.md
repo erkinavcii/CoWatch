@@ -62,6 +62,8 @@ Amaç: teknik bilgisi olmayan biri `run.py`, `.env` ve Tailscale komutlarıyla u
 
 ## Eklentiler (Stremio protokolü)
 
+> **Durum (29 Ekim 2026):** 1, 3 ve 4. adımlar kodlandı (`server/addons.py`, "Göz at" kartı, eklentilerden altyazı, film kimliğiyle OpenSubtitles araması). 2. adımdan şimdilik "Göz at" içindeki basit eklenti listesi var (ekle, kaldır); ayarlar sayfası dağıtım planıyla gelecek. OpenSubtitles anahtarının nasıl alınacağı şimdilik altyazı kartındaki ipucunda ve linkte.
+
 Amaç: film ve dizileri afişli bir katalogdan seçip açmak; altyazıları da film kimliği ve dosya hash'iyle kendiliğinden bulmak. Stremio'nun eklenti protokolü açık ve basit (HTTP üzerinden JSON), bu yüzden Stremio eklentileri olduğu gibi kullanılabilir.
 
 ### Kararlar (29 Ekim 2026)

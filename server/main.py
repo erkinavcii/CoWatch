@@ -24,9 +24,11 @@ from typing import Optional
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
+import httpx
 from pydantic import BaseModel
 from starlette.websockets import WebSocketState
 
+from .addons import AddonError, AddonStore, episode_label, magnet
 from .config import get_settings
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
@@ -63,6 +65,25 @@ def clean_name(value) -> str:
     return text[:24] or "?"
 
 
+async def url_hash(url: str) -> tuple[int, Optional[str]]:
+    """Size and OpenSubtitles hash of a file behind an HTTP address, read with two range
+    requests (first and last 64 KB). (0, None) if the server does not say its size or
+    does not serve ranges; the film still plays, subtitles are then found by id or name."""
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as http:
+            head = await http.head(url)
+            size = int(head.headers.get("content-length") or 0)
+            if size < CHUNK or head.headers.get("accept-ranges", "").lower() != "bytes":
+                return size, None
+            first = await http.get(url, headers={"Range": f"bytes=0-{CHUNK - 1}"})
+            last = await http.get(url, headers={"Range": f"bytes={size - CHUNK}-{size - 1}"})
+    except (httpx.HTTPError, ValueError):
+        return 0, None
+    if first.status_code != 206 or last.status_code != 206:
+        return size, None
+    return size, hash_from_chunks(size, first.content[:CHUNK], last.content[:CHUNK])
+
+
 def local_path(text: Optional[str]) -> Path:
     """A file path typed or pasted by the host. Windows Explorer's "Copy as path" wraps it
     in double quotes; PowerShell users tend to paste single quotes."""
@@ -75,6 +96,7 @@ class Controller:
         self.helper = TorrentHelper(cfg.helper_url)
         self.store = SubtitleStore(cfg.subs_dir)
         self.os = OpenSubtitlesClient(cfg.os_api_key, cfg.os_user_agent, cfg.os_username, cfg.os_password)
+        self.addons = AddonStore(cfg.data_dir / "addons.json", builtin=cfg.addons_builtin)
         self.session: Optional[MediaSession] = None
         self.opening = False
         self.open_lock = asyncio.Lock()
@@ -262,7 +284,38 @@ class Controller:
                 await self.broadcast_state()
 
     # ---- opening media ------------------------------------------------------------
-    async def _resolve_source(self, torrent: Optional[dict], path: Optional[str]) -> MediaSource:
+    async def _addon_torrent(self, stream: dict) -> dict:
+        """Add an add-on's torrent to the helper and pick the file: the one the add-on named,
+        else the largest video."""
+        await self.status("torrent_adding")
+        info = await self.helper.add(magnet(stream["infoHash"], stream.get("filename") or stream.get("title"),
+                                            stream.get("trackers") or []))
+        files = info.get("files", [])
+        index = stream.get("fileIndex")
+        if index is None or not any(f["index"] == index for f in files):
+            videos = [f for f in files if f.get("isVideo")] or files
+            if not videos:
+                raise ValueError("no files in torrent")
+            index = max(videos, key=lambda f: f["length"])["index"]
+        return {"infoHash": info.get("infoHash", stream["infoHash"]), "fileIndex": index}
+
+    async def _resolve_source(self, torrent: Optional[dict], path: Optional[str],
+                              stream: Optional[dict] = None) -> MediaSource:
+        if stream and stream["kind"] == "torrent":
+            source = await self._resolve_source(await self._addon_torrent(stream), None)
+        elif stream:
+            await self.status("reading_hash")
+            size, moviehash = await url_hash(stream["url"])
+            key = moviehash or hashlib.sha1(stream["url"].encode()).hexdigest()[:16]
+            source = MediaSource(kind="url", url=stream["url"], title=stream.get("filename") or "", size=size,
+                                 media_key=key, moviehash=moviehash)
+        if stream:
+            source.content_type, source.content_id = stream["type"], stream["id"]
+            name = stream.get("title") or ""
+            if name:
+                episode = episode_label(stream["id"])
+                source.title = f"{name} {episode}".strip() if episode and episode not in name else name
+            return source
         if torrent:
             info_hash = str(torrent.get("infoHash", "")).lower()
             index = int(torrent.get("fileIndex", -1))
@@ -294,12 +347,12 @@ class Controller:
         )
 
     async def open_media(self, torrent: Optional[dict] = None, path: Optional[str] = None,
-                         audio: Optional[int] = None) -> None:
+                         audio: Optional[int] = None, stream: Optional[dict] = None) -> None:
         async with self.open_lock:
             self.opening = True
             try:
                 await self.status("opening")
-                source = await self._resolve_source(torrent, path)
+                source = await self._resolve_source(torrent, path, stream)
                 await self.status("probing")
                 info = await probe(cfg, source.url, timeout=240)
                 session = MediaSession(cfg, source, info, audio)
@@ -363,6 +416,10 @@ class Controller:
         if session.source.moviehash:
             results += await self.os.search(langs, moviehash=session.source.moviehash)
         missing = [lang for lang in langs if pick_best(results, lang) is None]
+        content_id = session.source.content_id or ""
+        if missing and content_id.startswith("tt"):  # opened from an add-on: the film's id beats its title
+            results += await self.os.search(missing, imdb_id=content_id)
+            missing = [lang for lang in missing if pick_best(results, lang) is None]
         if missing:
             results += await self.os.search(missing, query=clean_title(session.source.title))
 
@@ -389,6 +446,34 @@ class Controller:
             added.append(track)
         await self.broadcast_tracks()
         return {"added": added, "notFound": not_found}
+
+    async def addon_subtitles(self) -> list[dict]:
+        """Subtitles the add-ons offer for the open film, found by its id and file hash."""
+        session = self._require_session()
+        src = session.source
+        if not src.content_id:
+            return []
+        found = await self.addons.subtitles(src.content_type, src.content_id, src.moviehash, src.size, src.title)
+        added = {t.get("url") for t in self.tracks()}
+        for sub in found:
+            item = self.addons.lookup(sub["ref"])
+            sub["added"] = bool(item and item["url"] in added)
+        return found
+
+    async def add_addon_subtitle(self, ref: str) -> dict:
+        session = self._require_session()
+        item = self.addons.lookup(ref)
+        if not item or item.get("kind") != "subtitle":
+            raise HTTPException(404, detail="unknown_subtitle")
+        existing = self.store.find(session.source.media_key, url=item["url"])
+        if existing:
+            return existing
+        data = await self.addons.download(item["url"], MAX_SUBTITLE_BYTES)
+        cues = parse_cues(decode_bytes(data, item["lang"]))
+        track = self.store.add(session.source.media_key, item["lang"], item["addon"], "addon", cues,
+                               extra={"url": item["url"]})
+        await self.broadcast_tracks()
+        return track
 
     # ---- background loops ---------------------------------------------------------------
     async def progress_loop(self) -> None:
@@ -611,6 +696,15 @@ class OpenBody(BaseModel):
     torrent: Optional[TorrentRef] = None
     path: Optional[str] = None
     audio: Optional[int] = None
+    stream: Optional[str] = None  # a `ref` from /api/addons/streams
+
+
+class AddonBody(BaseModel):
+    url: str
+
+
+class RefBody(BaseModel):
+    ref: str
 
 
 class SearchBody(BaseModel):
@@ -651,13 +745,90 @@ async def api_torrent_add(body: MagnetBody):
 async def api_media_open(body: OpenBody, request: Request):
     if body.path and not is_local(request):
         raise HTTPException(403, detail="local_files_host_only")
-    if not body.path and body.torrent is None:
+    stream = None
+    if body.stream:
+        stream = ctl.addons.lookup(body.stream)
+        if not stream or stream.get("kind") not in ("torrent", "url"):
+            raise HTTPException(404, detail="unknown_stream")
+    if not body.path and body.torrent is None and stream is None:
         raise HTTPException(400, detail="nothing_to_open")
     if ctl.opening:
         raise HTTPException(409, detail="already_opening")
     torrent = body.torrent.model_dump() if body.torrent else None
-    asyncio.create_task(ctl.open_media(torrent=torrent, path=body.path, audio=body.audio))
+    asyncio.create_task(ctl.open_media(torrent=torrent, path=body.path, audio=body.audio, stream=stream))
     return {"ok": True}
+
+
+# ---- add-ons: everyone can browse and open; only the host changes the list ----------------------
+def _addon_error(exc: AddonError) -> HTTPException:
+    status = 400 if exc.code in ("addon_bad_url", "addon_bad_request", "addon_exists") else 502
+    return HTTPException(status, detail=exc.code)
+
+
+@app.get("/api/addons")
+async def api_addons(request: Request):
+    return {"addons": await ctl.addons.listing(), "canEdit": is_local(request)}
+
+
+@app.post("/api/addons")
+async def api_addon_add(body: AddonBody, request: Request):
+    if not is_local(request):
+        raise HTTPException(403, detail="addons_host_only")
+    try:
+        return await ctl.addons.add(body.url)
+    except AddonError as exc:
+        raise _addon_error(exc) from None
+
+
+@app.delete("/api/addons")
+async def api_addon_remove(url: str, request: Request):
+    if not is_local(request):
+        raise HTTPException(403, detail="addons_host_only")
+    if not ctl.addons.remove(url):
+        raise HTTPException(404, detail="unknown_addon")
+    return {"ok": True}
+
+
+@app.get("/api/addons/catalog")
+async def api_addon_catalog(addon: str, type: str, id: str, search: str = "", genre: str = "", skip: int = 0):
+    try:
+        return {"metas": await ctl.addons.catalog(addon, type, id, search, genre, skip)}
+    except AddonError as exc:
+        raise _addon_error(exc) from None
+
+
+@app.get("/api/addons/meta")
+async def api_addon_meta(type: str, id: str):
+    try:
+        return {"meta": await ctl.addons.meta(type, id)}  # null: no add-on has details for it
+    except AddonError as exc:
+        raise _addon_error(exc) from None
+
+
+@app.get("/api/addons/streams")
+async def api_addon_streams(type: str, id: str, name: str = ""):
+    try:
+        return {"streams": await ctl.addons.streams(type, id, name)}
+    except AddonError as exc:
+        raise _addon_error(exc) from None
+
+
+@app.get("/api/addons/subtitles")
+async def api_addon_subtitles():
+    try:
+        return {"subtitles": await ctl.addon_subtitles()}
+    except AddonError as exc:
+        raise _addon_error(exc) from None
+
+
+@app.post("/api/addons/subtitles")
+async def api_addon_subtitle_add(body: RefBody):
+    try:
+        return await ctl.add_addon_subtitle(body.ref)
+    except AddonError as exc:
+        raise _addon_error(exc) from None
+    except SubtitleError as exc:
+        raise HTTPException(400, detail=f"bad_subtitle: {exc}") from None
 
 
 @app.post("/api/media/close")
