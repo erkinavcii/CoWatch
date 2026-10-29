@@ -168,3 +168,73 @@ def test_host_can_trust_a_friend_with_the_film_folders(tmp_path, monkeypatch):
             hws.send_json({"type": "grant", "to": friend, "value": False})
             members_until(gws, lambda ms: not any(m["cohost"] for m in ms))
             assert guest("GET", "/api/library").status_code == 403
+
+
+def next_of(ws, kind, check=lambda msg: True):
+    while True:
+        msg = ws.receive_json()
+        if msg["type"] == kind and check(msg):
+            return msg
+
+
+def test_screen_share_waits_for_the_host():
+    host_headers = {"cookie": f"cw_key={KEY}; cw_viewer=screen-host", "host": "localhost:8000"}
+    friend_headers = {"cookie": f"cw_key={KEY}; cw_viewer=screen-friend", "x-forwarded-for": "100.64.0.8"}
+    with TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 5)) as client:
+        with client.websocket_connect("/ws", headers=host_headers) as hws, \
+                client.websocket_connect("/ws", headers=friend_headers) as gws:
+            host = hws.receive_json()["clientId"]
+            welcome = gws.receive_json()
+            friend = welcome["clientId"]
+            assert welcome["screen"] == {"type": "screen", "owner": None, "pending": []}
+
+            gws.send_json({"type": "share_request"})
+            msg = next_of(hws, "screen")
+            assert msg["owner"] is None and msg["pending"] == [friend]
+            gws.send_json({"type": "share_answer", "to": friend, "allow": True})  # not theirs to answer
+            hws.send_json({"type": "share_answer", "to": friend, "allow": False})
+            assert next_of(gws, "screen", lambda m: not m["pending"])["owner"] is None
+
+            gws.send_json({"type": "share_request"})
+            next_of(hws, "screen", lambda m: m["pending"])
+            hws.send_json({"type": "share_answer", "to": friend, "allow": True})
+            assert next_of(gws, "screen", lambda m: m["owner"])["owner"] == friend
+
+            hws.send_json({"type": "share_request"})  # the host takes the screen without asking
+            next_of(gws, "screen", lambda m: m["owner"] == host)
+            gws.send_json({"type": "share_stop", "to": host})  # only the host and co-hosts stop others
+            hws.send_json({"type": "share_stop"})
+            assert next_of(gws, "screen") == {"type": "screen", "owner": None, "pending": []}
+
+            gws.send_json({"type": "share_request"})
+            next_of(hws, "screen", lambda m: m["pending"])
+            gws.send_json({"type": "share_stop"})  # changed their mind before the answer
+            assert next_of(hws, "screen")["pending"] == []
+
+
+def test_screen_share_without_anyone_to_ask():
+    friend_headers = {"cookie": f"cw_key={KEY}; cw_viewer=lonely-friend", "x-forwarded-for": "100.64.0.9"}
+    with TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 5)) as client:
+        with client.websocket_connect("/ws", headers=friend_headers) as ws:
+            friend = ws.receive_json()["clientId"]
+            ws.send_json({"type": "share_request"})
+            assert next_of(ws, "screen")["owner"] == friend
+        with client.websocket_connect("/ws", headers=friend_headers) as ws:
+            assert ws.receive_json()["screen"]["owner"] is None  # leaving ended the share
+
+
+def test_media_control_trusted_keeps_the_film_to_the_host(monkeypatch):
+    import dataclasses
+    import server.main as main
+    guest = {"cookie": f"cw_key={KEY}; cw_viewer=guest-browser", "x-forwarded-for": "100.64.0.7"}
+    me = {"cookie": f"cw_key={KEY}; cw_viewer=host-browser"}
+    with TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 5)) as client:
+        assert client.get("/api/status", headers=guest).json()["canChangeMedia"] is True
+        assert client.post("/api/media/close", headers=guest).status_code == 200  # everyone, by default
+        monkeypatch.setattr(main, "cfg", dataclasses.replace(main.cfg, media_control="trusted"))
+        assert client.get("/api/status", headers=guest).json()["canChangeMedia"] is False
+        for path, body in (("/api/media/close", None), ("/api/torrent/add", {"magnet": "magnet:?xt=x"}),
+                           ("/api/media/open", {"stream": "nope"})):
+            resp = client.post(path, json=body, headers=guest)
+            assert resp.status_code == 403 and resp.json()["detail"] == "media_trusted_only", path
+        assert client.post("/api/media/close", headers=me).status_code == 200

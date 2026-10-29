@@ -65,3 +65,12 @@ def test_seek_and_loading(clock):
     clock(1)
     assert room.current_position() == pytest.approx(101)
     assert room.seq > 0
+
+
+def test_screen_share_requests_run_out():
+    import time
+    from server.room import SHARE_ASK_TIMEOUT_S
+    room = Room()
+    room.share_asks = {"old": time.monotonic() - SHARE_ASK_TIMEOUT_S - 1, "new": time.monotonic()}
+    assert room.expired_share_asks() == ["old"]
+    assert room.screen_msg() == {"type": "screen", "owner": None, "pending": ["old", "new"]}

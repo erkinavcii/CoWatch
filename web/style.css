@@ -133,6 +133,23 @@ button, input, select { font: inherit; color: inherit; }
 }
 .peer-pop input { accent-color: var(--accent); width: 100%; }
 .peer-pop .hint { margin: 0; }
+
+/* ---- screen sharing: the shared screen covers the film; requests wait for the host ---- */
+.stage.sharing .subs { display: none; }
+.screen-tag {
+  position: absolute; z-index: 5; top: 10px; left: 50%; transform: translateX(-50%); padding: 3px 12px;
+  border-radius: 999px; background: rgba(0, 0, 0, .6); font-size: 12.5px; white-space: nowrap; pointer-events: none;
+}
+.share-asks { position: absolute; z-index: 8; top: 42px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; width: min(340px, calc(100% - 24px)); }
+.share-ask {
+  display: grid; gap: 8px; padding: 10px 12px; font-size: 13px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
+}
+.share-ask video { width: 100%; max-height: 120px; object-fit: contain; background: #000; border-radius: 6px; }
+.share-ask .row { display: flex; gap: 8px; justify-content: flex-end; }
+.icon.av.screen.on { background: var(--accent); }
+.icon.av.screen.pending { animation: waiting 1.2s ease-in-out infinite; }
+@keyframes waiting { 50% { background: rgba(255, 255, 255, .28); } }
 .member .role { margin-left: 5px; font-size: 11px; color: var(--muted); }
 .library-list { max-height: 260px; overflow-y: auto; }
 .library-list button small { color: var(--muted); }

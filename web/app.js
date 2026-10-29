@@ -15,6 +15,8 @@
     pathForm: $('#pathForm'), pathInput: $('#pathInput'), hostHint: $('#hostHint'),
     libraryBox: $('#libraryBox'), libraryHint: $('#libraryHint'), libraryFilter: $('#libraryFilter'),
     libraryList: $('#libraryList'), peerGrant: $('#peerGrant'), peerGrantHint: $('#peerGrantHint'),
+    screenVideo: $('#screenVideo'), screenTag: $('#screenTag'), shareAsks: $('#shareAsks'), screenBtn: $('#screenBtn'),
+    peerStopShare: $('#peerStopShare'), mediaLockHint: $('#mediaLockHint'),
     mediaInfo: $('#mediaInfo'), torrentInfo: $('#torrentInfo'), closeMedia: $('#closeMedia'),
     primarySel: $('#primarySel'), secondarySel: $('#secondarySel'), offsetOut: $('#offsetOut'),
     sizeRange: $('#sizeRange'), bottomRange: $('#bottomRange'), searchForm: $('#searchForm'),
@@ -40,6 +42,9 @@
     addonSubs: $('#addonSubs'), addonSubsBtn: $('#addonSubsBtn'), addonSubsList: $('#addonSubsList'),
   };
   const video = el.video;
+  // Screen sharing (see "screen sharing" below): who shares, who waits for an answer, and my
+  // own capture, opened on the click and sent only once the screen is mine.
+  const screen = { owner: null, pending: [], stream: null, asking: false };
 
   // ---------------------------------------------------------------- preferences
   const PREFS_KEY = 'cowatch.prefs.v1';
@@ -80,7 +85,7 @@
     room: { playing: false, position: 0, updatedAt: 0, rate: 1, loading: false, waiting: [], seq: 0 },
     media: null, progress: null, members: [], tracks: [], cues: new Map(), osEnabled: false, opening: false,
     joined: false, hls: null, streamId: null, primary: '', secondary: '',
-    bufferingSent: false, waitTimer: null, dragging: false, isHost: false, canLibrary: false, libraryConfigured: false, cohost: null, autoplayBlocked: false,
+    bufferingSent: false, waitTimer: null, dragging: false, isHost: false, canLibrary: false, libraryConfigured: false, canChangeMedia: true, cohost: null, autoplayBlocked: false,
     torrent: null, downloadThrottled: false,
     palette: ['#ff6b6b', '#4dabf7', '#51cf66', '#fcc419', '#cc5de8', '#ff922b', '#22b8cf', '#f06595'],
     penMode: false, iceServers: [],
@@ -218,6 +223,8 @@
         if (Array.isArray(msg.palette) && msg.palette.length) S.palette = msg.palette;
         S.progress = msg.progress;
         onMembers();
+        if (screen.stream) stopMyScreen(false); // a new connection is a new id: the screen was let go
+        onScreen(msg.screen || {});
         applyMedia(msg.media);
         applyTracks(msg.tracks || []);
         renderAll();
@@ -230,7 +237,8 @@
         renderControls(); renderCenter();
         break;
       }
-      case 'members': S.members = msg.members || []; onMembers(); renderMembers(); renderCenter(); break;
+      case 'members': S.members = msg.members || []; onMembers(); renderMembers(); renderCenter(); renderScreen(); break;
+      case 'screen': onScreen(msg); break;
       case 'media': applyMedia(msg.media); break;
       case 'progress': S.progress = msg; renderMediaInfo(); break;
       case 'subtitles': applyTracks(msg.tracks || []); break;
@@ -395,6 +403,8 @@
   let duck = 1;
   function applyFilmVolume () {
     video.volume = Math.min(1, Math.max(0, prefs.volume * duck));
+    el.screenVideo.volume = video.volume;
+    el.screenVideo.muted = video.muted || screen.owner === S.clientId; // my own screen: no echo of my sound
   }
   applyFilmVolume();
   video.muted = prefs.muted;
@@ -406,7 +416,7 @@
   });
   el.muteBtn.addEventListener('click', () => {
     video.muted = !video.muted;
-    prefs.muted = video.muted; savePrefs(); renderControls();
+    prefs.muted = video.muted; savePrefs(); applyFilmVolume(); renderControls();
   });
 
   function toggleFullscreen () {
@@ -471,7 +481,7 @@
   const MAX_STROKES = 300;
   const MAX_STROKE_POINTS = 4000;
 
-  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable'));
+  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable, .share-asks'));
   const hovers = (e) => e.pointerType === 'mouse' || e.pointerType === 'pen';
   const memberById = (id) => S.members.find((m) => m.id === id);
   const colorOf = (id) => { const m = memberById(id); return (m && m.color) || '#ffffff'; };
@@ -483,8 +493,9 @@
   function geom () {
     const r = el.stage.getBoundingClientRect();
     let w = r.width; let h = r.height;
-    const vw = video.videoWidth; const vh = video.videoHeight;
-    if (S.media && vw && vh && w && h) {
+    const pic = screen.owner ? el.screenVideo : video; // a shared screen covers the film
+    const vw = pic.videoWidth; const vh = pic.videoHeight;
+    if ((S.media || screen.owner) && vw && vh && w && h) {
       const scale = Math.min(w / vw, h / vh);
       w = vw * scale; h = vh * scale;
     }
@@ -926,7 +937,13 @@
   const SENDER_LIMITS = {
     audio: { priority: 'high', networkPriority: 'high' },
     video: { maxBitrate: 500000, maxFramerate: 24, priority: 'low', networkPriority: 'low' },
+    // A shared screen is often a video: enough for 720p-1080p motion, sent to each viewer.
+    screen: { maxBitrate: 4000000, maxFramerate: 30 },
+    screenAudio: { maxBitrate: 128000 },
   };
+  // The transceivers of a connection, in the order the offer adds them: my sound and camera,
+  // then a shared screen's picture and sound. Both sides find them by this order.
+  const SLOTS = ['audioTx', 'videoTx', 'screenTx', 'screenAudioTx'];
   const peers = new Map(); // member id -> peer
   const voice = {
     mic: null, cam: null, camStream: null, busy: { mic: false, cam: false }, analyser: null, source: null, buf: null,
@@ -955,7 +972,8 @@
     el.voices.appendChild(audioEl);
     const peer = {
       id, pc, audioEl, polite: S.clientId > id, makingOffer: false, ignoreOffer: false,
-      audioTx: null, videoTx: null, videoStream: null, queue: Promise.resolve(),
+      audioTx: null, videoTx: null, videoStream: null, screenTx: null, screenAudioTx: null, screenStream: null,
+      queue: Promise.resolve(),
       badSince: performance.now(), restarted: false, // see peerWatch
     };
     peers.set(id, peer);
@@ -971,7 +989,13 @@
         peer.makingOffer = false;
       }
     };
-    pc.ontrack = ({ track }) => {
+    pc.ontrack = ({ track, transceiver }) => {
+      if (pc.getTransceivers().indexOf(transceiver) >= 2) { // a shared screen's picture or sound
+        if (!peer.screenStream) peer.screenStream = new MediaStream();
+        peer.screenStream.addTrack(track);
+        renderScreen();
+        return;
+      }
       if (track.kind === 'video') {
         peer.videoStream = new MediaStream([track]); // shown in their tile while their camera is on
         renderCams();
@@ -986,8 +1010,7 @@
     };
     applyPeerVolume(peer);
     if (!peer.polite) {
-      peer.audioTx = pc.addTransceiver('audio', { direction: 'sendrecv' });
-      peer.videoTx = pc.addTransceiver('video', { direction: 'sendrecv' });
+      SLOTS.forEach((slot, i) => { peer[slot] = pc.addTransceiver(i % 3 ? 'video' : 'audio', { direction: 'sendrecv' }); });
       applyLocalTracks(peer);
     }
     return peer;
@@ -1038,17 +1061,20 @@
 
   // The polite side takes over the transceivers the offer created and sends on them too.
   function adoptTransceivers (peer) {
-    for (const tx of peer.pc.getTransceivers()) {
-      const kind = tx.receiver.track.kind;
-      if (kind === 'audio' && !peer.audioTx) peer.audioTx = tx;
-      else if (kind === 'video' && !peer.videoTx) peer.videoTx = tx;
-      else continue;
+    peer.pc.getTransceivers().forEach((tx, i) => {
+      const slot = SLOTS[i];
+      if (!slot || peer[slot]) return;
+      peer[slot] = tx;
       if (tx.direction !== 'sendrecv') tx.direction = 'sendrecv';
-    }
+    });
     applyLocalTracks(peer);
   }
   function applyLocalTracks (peer) {
-    for (const [tx, track] of [[peer.audioTx, voice.mic], [peer.videoTx, voice.cam]]) {
+    const share = screen.owner === S.clientId ? screen.stream : null; // nothing goes out before it is mine
+    const shareVideo = share ? share.getVideoTracks()[0] || null : null;
+    const shareAudio = share ? share.getAudioTracks()[0] || null : null;
+    for (const [tx, track] of [[peer.audioTx, voice.mic], [peer.videoTx, voice.cam],
+      [peer.screenTx, shareVideo], [peer.screenAudioTx, shareAudio]]) {
       if (tx && tx.sender.track !== track) {
         tx.sender.replaceTrack(track).catch((err) => console.warn('[cowatch] replaceTrack', err));
       }
@@ -1058,7 +1084,8 @@
   // Encodings exist only once the connection is negotiated; until then this does nothing and
   // runs again when the connection comes up.
   async function limitSenders (peer) {
-    for (const [tx, limits] of [[peer.audioTx, SENDER_LIMITS.audio], [peer.videoTx, SENDER_LIMITS.video]]) {
+    for (const [tx, limits] of [[peer.audioTx, SENDER_LIMITS.audio], [peer.videoTx, SENDER_LIMITS.video],
+      [peer.screenTx, SENDER_LIMITS.screen], [peer.screenAudioTx, SENDER_LIMITS.screenAudio]]) {
       if (!tx || peer.pc.signalingState === 'closed') continue;
       const params = tx.sender.getParameters();
       const enc = params.encodings && params.encodings[0];
@@ -1439,6 +1466,7 @@
     el.peerGrant.hidden = !grantable;
     el.peerGrant.textContent = t(m.cohost ? 'grant_revoke' : 'grant_give');
     el.peerGrantHint.hidden = !grantable || !!m.cohost;
+    el.peerStopShare.hidden = !(amTrusted() && screen.owner === m.id);
     const r = anchor.getBoundingClientRect();
     const beside = anchor.classList.contains('cam'); // a tile: to its left; a name: below it
     el.peerPop.style.top = `${beside ? r.top : r.bottom + 6}px`;
@@ -1448,6 +1476,10 @@
   el.members.addEventListener('click', (e) => {
     const chip = e.target.closest('.member.others');
     if (chip) openPeerPop(chip.dataset.id, chip);
+  });
+  el.peerStopShare.addEventListener('click', () => {
+    if (popFor) send({ type: 'share_stop', to: popFor });
+    el.peerPop.hidden = true;
   });
   el.peerGrant.addEventListener('click', () => {
     const m = memberById(popFor);
@@ -1461,6 +1493,133 @@
     const peer = peers.get(m.id);
     if (peer) applyPeerVolume(peer);
   });
+
+  // ---------------------------------------------------------------- screen sharing
+  // One screen at a time covers the film for everyone, and the film pauses meanwhile (the
+  // server does that). The host and co-hosts share at once; anyone else asks them first. The
+  // capture opens on the click (browsers allow it only then) but goes out only once the server
+  // says the screen is mine; the picture and sound go on the connections' third and fourth
+  // transceivers, so sharing never needs a new offer.
+  const amTrusted = () => S.isHost || !!(memberById(S.clientId) || {}).cohost;
+  async function toggleScreen () {
+    if (screen.stream) { stopMyScreen(true); return; }
+    if (!S.joined) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      toast(t('err_screen_unsupported'), 'error'); return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 30, max: 30 } }, audio: true });
+    } catch (err) {
+      if (err && err.name !== 'NotAllowedError' && err.name !== 'AbortError') toast(deviceErrorText('screen', err), 'error');
+      return; // cancelled in the browser's picker
+    }
+    const [track] = stream.getVideoTracks();
+    if (track && 'contentHint' in track) track.contentHint = 'motion'; // keep the frame rate for videos
+    if (track) track.onended = () => { if (screen.stream === stream) stopMyScreen(true); }; // the browser's own "Stop sharing"
+    screen.stream = stream;
+    screen.asking = true; // until the server's answer: owner, or waiting in the list
+    send({ type: 'share_request' });
+    renderScreen();
+  }
+  function stopMyScreen (tell) {
+    const stream = screen.stream;
+    screen.stream = null;
+    screen.asking = false;
+    if (stream) stream.getTracks().forEach((tr) => tr.stop());
+    if (tell) send({ type: 'share_stop' });
+    for (const peer of peers.values()) applyLocalTracks(peer);
+    renderScreen();
+  }
+  function onScreen (msg) {
+    const wasMine = screen.owner === S.clientId;
+    const wasWaiting = screen.pending.includes(S.clientId);
+    screen.owner = msg.owner || null;
+    screen.pending = Array.isArray(msg.pending) ? msg.pending : [];
+    const mine = screen.owner === S.clientId;
+    const waiting = screen.pending.includes(S.clientId);
+    if (mine || waiting) screen.asking = false;
+    if (screen.stream && !mine && !waiting && !screen.asking) {
+      toast(t(wasMine ? 'screen_taken' : wasWaiting ? 'screen_denied' : 'screen_ended'), wasMine ? 'info' : 'error');
+      stopMyScreen(false);
+      return;
+    }
+    for (const peer of peers.values()) applyLocalTracks(peer);
+    applyFilmVolume();
+    renderScreen();
+  }
+  function renderScreen () {
+    const owner = screen.owner;
+    const mine = owner === S.clientId;
+    const peer = owner && !mine ? peers.get(owner) : null;
+    const stream = (mine ? screen.stream : peer && peer.screenStream) || null;
+    if (el.screenVideo.srcObject !== stream) {
+      el.screenVideo.srcObject = stream;
+      if (stream) el.screenVideo.play().catch(() => {});
+    }
+    el.screenVideo.hidden = !owner;
+    el.stage.classList.toggle('sharing', !!owner);
+    const who = owner && memberById(owner);
+    el.screenTag.hidden = !owner;
+    el.screenTag.textContent = mine ? t('screen_mine') : t('screen_by', { name: who ? who.name : '…' });
+    el.screenBtn.classList.toggle('on', !!screen.stream && mine);
+    el.screenBtn.classList.toggle('pending', !!screen.stream && !mine);
+    el.screenBtn.title = t(screen.stream ? (mine ? 'screen_stop' : 'screen_cancel') : 'screen_share');
+    renderShareAsks();
+    renderCenter();
+  }
+  // Cards over the picture: mine while I wait for an answer; for the host and co-hosts, one
+  // per request, with the answer buttons.
+  function shareCard (text) {
+    const card = document.createElement('div');
+    card.className = 'share-ask';
+    const p = document.createElement('span');
+    p.textContent = text;
+    card.appendChild(p);
+    el.shareAsks.appendChild(card);
+    return card;
+  }
+  function cardButtons (card, buttons) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    for (const [label, cls, onClick] of buttons) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = cls; b.textContent = label;
+      b.addEventListener('click', onClick);
+      row.appendChild(b);
+    }
+    card.appendChild(row);
+  }
+  function renderShareAsks () {
+    el.shareAsks.replaceChildren();
+    if (screen.stream && screen.owner !== S.clientId) {
+      const card = shareCard(t('screen_waiting'));
+      card.dataset.mine = '1';
+      const preview = document.createElement('video');
+      preview.muted = true; preview.autoplay = true; preview.playsInline = true;
+      preview.srcObject = screen.stream;
+      card.appendChild(preview);
+      cardButtons(card, [[t('screen_cancel'), 'ghost', () => stopMyScreen(true)]]);
+    }
+    if (amTrusted()) {
+      const owner = screen.owner && memberById(screen.owner);
+      for (const id of screen.pending) {
+        const m = memberById(id);
+        if (!m || id === S.clientId) continue;
+        const card = shareCard(t('screen_ask', { name: m.name }));
+        card.dataset.from = id;
+        if (owner && owner.id !== id) {
+          const note = document.createElement('small');
+          note.textContent = t('screen_ask_replaces', { name: owner.id === S.clientId ? t('you') : owner.name });
+          card.appendChild(note);
+        }
+        const answer = (allow) => () => send({ type: 'share_answer', to: id, allow });
+        cardButtons(card, [[t('screen_deny'), 'ghost', answer(false)], [t('screen_allow'), 'primary', answer(true)]]);
+      }
+    }
+    el.shareAsks.hidden = !el.shareAsks.children.length;
+  }
+  el.screenBtn.addEventListener('click', toggleScreen);
 
   // ---------------------------------------------------------------- subtitles
   function activeText (trackId, time) {
@@ -1732,6 +1891,7 @@
       const could = S.canLibrary;
       S.canLibrary = !!status.canLibrary;
       S.libraryConfigured = !!status.libraryConfigured;
+      S.canChangeMedia = status.canChangeMedia !== false;
       if (S.canLibrary && !could && S.libraryConfigured) loadLibrary();
       S.osEnabled = !!status.osEnabled;
       S.torrent = status.torrent;
@@ -1937,6 +2097,7 @@
       kind.textContent = t(s.kind === 'torrent' ? 'stream_torrent' : 'stream_url');
       const open = document.createElement('button'); open.type = 'button'; open.className = 'primary';
       open.textContent = t('stream_open');
+      if (!S.canChangeMedia) { open.disabled = true; open.title = t('media_trusted_only'); }
       open.addEventListener('click', async () => {
         open.disabled = true;
         try {
@@ -2154,7 +2315,7 @@
   function renderCenter () {
     let text = '';
     let clickable = false;
-    if (S.media) {
+    if (S.media && !screen.owner) {
       if (S.room.loading) {
         text = t('loading_stream');
       } else if (S.room.waiting && S.room.waiting.length) {
@@ -2167,14 +2328,16 @@
     el.centerMsg.textContent = text;
     el.centerMsg.hidden = !text;
     el.centerMsg.classList.toggle('clickable', clickable);
-    el.empty.hidden = !!S.media;
+    el.empty.hidden = !!S.media || !!screen.owner;
   }
 
   function renderMediaPanel () {
     el.pathForm.hidden = !S.isHost;
     el.hostHint.hidden = S.isHost;
     renderLibraryBox();
-    el.closeMedia.hidden = !S.media;
+    el.magnetForm.hidden = !S.canChangeMedia;
+    el.mediaLockHint.hidden = S.canChangeMedia;
+    el.closeMedia.hidden = !S.media || !S.canChangeMedia;
     el.osOff.hidden = S.osEnabled;
     el.addonSubs.hidden = !(S.media && S.media.content);
     el.filmTitle.textContent = S.media ? S.media.title : '';
@@ -2314,6 +2477,11 @@
     filmTime: filmTime(), expected: expectedPosition(), drift: filmTime() - expectedPosition(),
     room: S.room, media: S.media, clockOffset: S.clock.offset, rate: video.playbackRate,
     readyState: video.readyState, primary: S.primary, secondary: S.secondary,
+    screen: {
+      owner: screen.owner, pending: screen.pending, mine: !!screen.stream,
+      showing: !el.screenVideo.hidden && el.screenVideo.videoWidth > 0 && !el.screenVideo.paused,
+      asks: [...el.shareAsks.querySelectorAll('[data-from]')].map((n) => n.dataset.from),
+    },
     clientId: S.clientId, members: S.members, penMode: S.penMode, strokes: strokes.size, balls: [...balls.keys()],
     voice: {
       mic: !!voice.mic, cam: !!voice.cam, camLive: !!(voice.cam && voice.cam.readyState === 'live'),
@@ -2324,6 +2492,7 @@
           id: p.id, polite: p.polite, state: p.pc.connectionState, level: peerLevel(p),
           sending: !!(p.audioTx && p.audioTx.sender.track), sendingVideo: !!(p.videoTx && p.videoTx.sender.track),
           videoMaxBitrate: enc ? enc.maxBitrate : null, transceivers: p.pc.getTransceivers().length,
+          sendingScreen: !!(p.screenTx && p.screenTx.sender.track),
         };
       }),
     },

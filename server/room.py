@@ -14,6 +14,7 @@ from starlette.websockets import WebSocket
 log = logging.getLogger("cowatch.room")
 
 BUFFER_TIMEOUT_S = 20.0
+SHARE_ASK_TIMEOUT_S = 30.0  # a screen share request nobody answers counts as declined
 
 
 def now_ms() -> float:
@@ -60,6 +61,8 @@ class Room:
     def __init__(self) -> None:
         self.clients: dict[str, Client] = {}
         self.cohosts: set[str] = set()  # viewer cookies the host trusted with the film folders
+        self.screen: Optional[str] = None  # client id of the one sharing their screen, one at a time
+        self.share_asks: dict[str, float] = {}  # client id -> when they asked to share (monotonic)
         self.playing = False
         self.position = 0.0  # film seconds at `updated_at`
         self.updated_at = now_ms()
@@ -150,6 +153,20 @@ class Room:
             self._freeze()
         del self.clients[client_id]
         return self._changed() if was_buffering else False
+
+    def is_trusted(self, client: Client) -> bool:
+        return client.host or self.is_cohost(client.viewer)
+
+    def approvers(self, exclude: Optional[Client] = None) -> list[Client]:
+        """Who answers screen share requests: the host and co-hosts in the room."""
+        return [c for c in self.clients.values() if c is not exclude and self.is_trusted(c)]
+
+    def expired_share_asks(self) -> list[str]:
+        limit = time.monotonic() - SHARE_ASK_TIMEOUT_S
+        return [cid for cid, since in self.share_asks.items() if since < limit]
+
+    def screen_msg(self) -> dict:
+        return {"type": "screen", "owner": self.screen, "pending": list(self.share_asks)}
 
     def expired_buffering(self) -> list[Client]:
         limit = time.monotonic() - BUFFER_TIMEOUT_S

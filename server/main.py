@@ -109,6 +109,7 @@ class Controller:
         self.download_throttled = False
         self.tasks: list[asyncio.Task] = []
         self._relays: set[asyncio.Task] = set()
+        self.screen_paused = False  # the film was paused for a screen share: it goes on afterwards
 
     # ---- messages -------------------------------------------------------------
     @property
@@ -150,6 +151,7 @@ class Controller:
             "opening": self.opening,
             "palette": list(PALETTE),
             "iceServers": ice_servers(cfg.ice_servers),
+            "screen": self.room.screen_msg(),
         }
 
     def _relay(self, sender: Client, msg: dict, lossy: bool = False) -> None:
@@ -210,6 +212,32 @@ class Controller:
         elif kind == "av":
             if self._set_av(client, msg):
                 await self.room.broadcast(self.room.members_msg())
+        elif kind == "share_request":
+            # Screen sharing. The host and co-hosts take the screen at once; anyone else asks
+            # them first, unless none of them is in the room. The browser has already opened the
+            # capture (it needs the click) but sends no picture until it owns the screen.
+            if client.id == self.room.screen:
+                return
+            if self.room.is_trusted(client) or not self.room.approvers(exclude=client):
+                await self.set_screen(client.id)
+            else:
+                self.room.share_asks[client.id] = time.monotonic()
+                await self.room.broadcast(self.room.screen_msg())
+        elif kind == "share_answer" and self.room.is_trusted(client):
+            asker = str(msg.get("to", ""))
+            if self.room.share_asks.pop(asker, None) is None:
+                return  # answered by someone else already, or expired
+            if msg.get("allow") and asker in self.room.clients:
+                await self.set_screen(asker)
+            else:
+                await self.room.broadcast(self.room.screen_msg())
+        elif kind == "share_stop":
+            # The one sharing stops (or takes back their request); the host and co-hosts can stop anyone.
+            if self.room.share_asks.pop(client.id, None) is not None and client.id != self.room.screen:
+                await self.room.broadcast(self.room.screen_msg())
+            elif self.room.screen is not None and (client.id == self.room.screen or (
+                    self.room.is_trusted(client) and msg.get("to") == self.room.screen)):
+                await self.set_screen(None)
         elif kind == "grant" and client.host:
             # The host trusts a friend with the film folders, or takes it back. Bound to the
             # friend's browser, not to the connection, so a reconnect keeps it.
@@ -256,6 +284,22 @@ class Controller:
                     return
                 if math.isfinite(target):
                     await self.seek(target)
+
+    async def set_screen(self, owner: Optional[str]) -> None:
+        """Who shares their screen (None: nobody). The film pauses for everyone while a screen
+        is shared and goes on afterwards if it was playing."""
+        if owner is not None:
+            self.room.share_asks.pop(owner, None)
+        started = owner is not None and self.room.screen is None
+        self.room.screen = owner
+        if started and self.ready and self.room.pause():
+            self.screen_paused = True
+            await self.broadcast_state()
+        await self.room.broadcast(self.room.screen_msg())
+        if owner is None and self.screen_paused:
+            self.screen_paused = False
+            if self.ready and self.room.play():
+                await self.broadcast_state()
 
     async def seek(self, target: float) -> None:
         session = self.session
@@ -530,9 +574,15 @@ class Controller:
             await self.status("stream_error", "error", detail=stream.log_tail(4))
 
     async def watchdog_loop(self) -> None:
-        """A client stuck buffering for too long no longer holds the room."""
+        """A client stuck buffering for too long no longer holds the room; a screen share
+        request nobody answers runs out."""
         while True:
             await asyncio.sleep(1)
+            expired = self.room.expired_share_asks()
+            if expired:
+                for client_id in expired:
+                    self.room.share_asks.pop(client_id, None)
+                await self.room.broadcast(self.room.screen_msg())
             for client in self.room.expired_buffering():
                 log.info("ignoring buffering client %s", client.name)
                 if self.room.set_buffering(client, False):
@@ -595,9 +645,19 @@ def is_local(request: HTTPConnection) -> bool:
     return not any(name in request.headers for name in PROXY_HEADERS)
 
 
-def can_use_library(request: HTTPConnection) -> bool:
-    """The host, or a friend the host trusted with the film folders."""
+def is_trusted(request: HTTPConnection) -> bool:
+    """The host, or a friend the host trusted (co-host): film folders, screen sharing without asking."""
     return is_local(request) or ctl.room.is_cohost(request.cookies.get(VIEWER_COOKIE, ""))
+
+
+def can_change_media(request: HTTPConnection) -> bool:
+    """Opening and closing films: everyone by default, MEDIA_CONTROL=trusted keeps it to the trusted."""
+    return cfg.media_control != "trusted" or is_trusted(request)
+
+
+def require_media_control(request: HTTPConnection) -> None:
+    if not can_change_media(request):
+        raise HTTPException(403, detail="media_trusted_only")
 
 
 def with_viewer(request: Request, response: Response) -> Response:
@@ -764,14 +824,16 @@ async def api_status(request: Request):
         "helper": await ctl.helper.healthy(),
         "osEnabled": ctl.os.enabled,
         "isHost": is_local(request),
-        "canLibrary": can_use_library(request),
+        "canLibrary": is_trusted(request),
+        "canChangeMedia": can_change_media(request),
         "libraryConfigured": bool(cfg.library_dirs),
         "downloadThrottled": ctl.download_throttled,
     }
 
 
 @app.post("/api/torrent/add")
-async def api_torrent_add(body: MagnetBody):
+async def api_torrent_add(body: MagnetBody, request: Request):
+    require_media_control(request)
     try:
         return await ctl.helper.add(body.magnet.strip(), body.peers)
     except HelperError as exc:
@@ -782,9 +844,10 @@ async def api_torrent_add(body: MagnetBody):
 async def api_media_open(body: OpenBody, request: Request):
     if body.path and not is_local(request):
         raise HTTPException(403, detail="local_files_host_only")
+    require_media_control(request)
     path = body.path
     if body.library is not None:
-        if not can_use_library(request):
+        if not is_trusted(request):
             raise HTTPException(403, detail="library_not_allowed")
         try:
             path = str(library.resolve(cfg.library_dirs, body.library.dir, body.library.path))
@@ -820,7 +883,7 @@ async def api_media_pick(body: PickBody, request: Request):
 async def api_library(request: Request):
     """The videos in the film folders, for the host and co-hosts. Paths are relative to their
     folder; the folders themselves are shown by name only."""
-    if not can_use_library(request):
+    if not is_trusted(request):
         raise HTTPException(403, detail="library_not_allowed")
     files = await asyncio.to_thread(library.scan, cfg.library_dirs)
     return {"dirs": [d.name or str(d) for d in cfg.library_dirs], "files": files}
@@ -899,7 +962,8 @@ async def api_addon_subtitle_add(body: RefBody):
 
 
 @app.post("/api/media/close")
-async def api_media_close():
+async def api_media_close(request: Request):
+    require_media_control(request)
     await ctl.close_media()
     return {"ok": True}
 
@@ -993,3 +1057,7 @@ async def ws_endpoint(ws: WebSocket):
         await ctl.room.broadcast(ctl.room.members_msg())
         if changed:
             await ctl.broadcast_state()
+        if ctl.room.screen == client.id:
+            await ctl.set_screen(None)
+        elif ctl.room.share_asks.pop(client.id, None) is not None:
+            await ctl.room.broadcast(ctl.room.screen_msg())

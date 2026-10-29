@@ -131,7 +131,7 @@ def in_sync(host: Page, guest: Page, label: str) -> None:
 def peers_connected(page: Page, count: int = 1) -> None:
     page.wait_for_function(
         f"(() => {{ const v = cowatchDebug().voice; return v.peers.length === {count}"
-        " && v.peers.every(p => p.state === 'connected' && p.transceivers === 2); })()",
+        " && v.peers.every(p => p.state === 'connected' && p.transceivers === 4); })()",
         timeout=20000)
 
 
@@ -177,7 +177,7 @@ def check_voice(host: Page, guest: Page) -> None:
     host_id = debug(host)["clientId"]
     peers_connected(host)
     peers_connected(guest)
-    ok("voice connection up, one sound and one video transceiver each side")
+    ok("voice connection up, four transceivers each side (sound, camera, screen picture and sound)")
 
     host.click("#micBtn")
     host.wait_for_function("cowatchDebug().voice.mic")
@@ -219,7 +219,7 @@ def check_camera(host: Page, guest: Page) -> None:
 
     peer = debug(guest)["voice"]["peers"][0]
     assert peer["sendingVideo"] and peer["videoMaxBitrate"] == 500000, peer
-    assert peer["transceivers"] == 2 and debug(host)["voice"]["peers"][0]["transceivers"] == 2
+    assert peer["transceivers"] == 4 and debug(host)["voice"]["peers"][0]["transceivers"] == 4
     ok("camera capped at 500 kbps, no new transceivers")
 
     tile = host.locator(f".cam.others[data-id='{guest_id}']")
@@ -252,6 +252,66 @@ def check_camera(host: Page, guest: Page) -> None:
     host.wait_for_function(f"cowatchDebug().members.some(m => m.id === '{guest_id}' && !m.cam)", timeout=10000)
     assert not debug(guest)["penMode"]
     ok("Ctrl+E turns the camera on and off")
+
+
+def film_paused(page: Page, paused: bool) -> None:
+    page.wait_for_function(f"document.querySelector('#video').paused === {'true' if paused else 'false'}", timeout=15000)
+
+
+def check_screen(host: Page, guest: Page) -> None:
+    """The guest asks to share their screen; the host declines, then allows; the film waits."""
+    guest_id = debug(guest)["clientId"]
+    ask = f".share-ask[data-from='{guest_id}']"
+    guest.locator("#stage").hover()
+    guest.click("#screenBtn")
+    host.wait_for_selector(ask, timeout=10000)
+    guest.wait_for_selector(".share-ask[data-mine] video", timeout=5000)
+    assert debug(host)["screen"]["owner"] is None
+    assert not any(p["sendingScreen"] for p in debug(guest)["voice"]["peers"]), "screen sent before the answer"
+    host.click(f"{ask} button.ghost")
+    guest.wait_for_function("!cowatchDebug().screen.mine", timeout=5000)
+    assert debug(host)["screen"]["owner"] is None
+    ok("a guest's request waits for the host, nothing is sent meanwhile; declined, the capture closes")
+
+    host.locator("#stage").hover()
+    host.click("#playBtn")
+    for page in (host, guest):
+        film_paused(page, False)
+    guest.locator("#stage").hover()
+    guest.click("#screenBtn")
+    host.wait_for_selector(f"{ask} button.primary", timeout=10000)
+    host.click(f"{ask} button.primary")
+    for page in (host, guest):
+        page.wait_for_function("cowatchDebug().screen.showing", timeout=20000)
+        film_paused(page, True)
+    assert all(p["sendingScreen"] for p in debug(guest)["voice"]["peers"])
+    assert debug(host)["voice"]["peers"][0]["transceivers"] == 4
+    assert host.locator("#screenTag").inner_text().startswith("Misafir")
+    ok("allowed: the guest's screen covers the film in both windows, and the film waits")
+
+    host.click(f".member.others[data-id='{guest_id}']")
+    host.wait_for_selector("#peerStopShare", state="visible", timeout=5000)
+    host.click("#peerStopShare")
+    for page in (host, guest):
+        page.wait_for_function("!cowatchDebug().screen.owner && !cowatchDebug().screen.mine", timeout=10000)
+        film_paused(page, False)
+    assert host.locator("#screenVideo").is_hidden()
+    ok("the host stops it: the screen goes and the film goes on")
+
+    host.locator("#stage").hover()
+    host.click("#screenBtn")  # the host shares without asking
+    guest.wait_for_function(f"cowatchDebug().screen.owner === '{debug(host)['clientId']}' && cowatchDebug().screen.showing",
+                            timeout=20000)
+    host.locator("#stage").hover()
+    host.click("#screenBtn")
+    guest.wait_for_function("!cowatchDebug().screen.owner", timeout=10000)
+    for page in (host, guest):
+        film_paused(page, False)
+    host.locator("#stage").hover()
+    host.click("#playBtn")
+    for page in (host, guest):
+        film_paused(page, True)
+    ok("the host shares at once and stops; the film is paused again for the next checks")
 
 
 def check_third_viewer(browser, base: str, host: Page, guest: Page) -> None:
@@ -366,6 +426,7 @@ def run(headed: bool) -> None:
 
                 check_voice(host, guest)
                 check_camera(host, guest)
+                check_screen(host, guest)
                 check_third_viewer(browser, base, host, guest)
 
                 host.click("#closeMedia")

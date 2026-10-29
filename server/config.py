@@ -73,6 +73,7 @@ class Settings:
     hls_time: int
     # the host's film folders: the host and co-hosts open videos from them
     library_dirs: tuple[Path, ...]
+    media_control: str  # "everyone" changes the film; "trusted" = only the host and co-hosts
     # add-ons
     addons_builtin: bool  # Cinemeta and Public Domain Movies; 0 = only the ones added by hand
     # voice and camera
@@ -149,6 +150,7 @@ def get_settings() -> Settings:
         audio_filter=_str("AUDIO_FILTER", "dynaudnorm=f=500:g=15"),
         hls_time=_int("HLS_TIME", 4),
         library_dirs=_paths("LIBRARY_DIRS"),
+        media_control="trusted" if _str("MEDIA_CONTROL").lower() == "trusted" else "everyone",
         addons_builtin=_int("ADDONS_BUILTIN", 1) != 0,
         ice_servers=_str("ICE_SERVERS") or (FUNNEL_STUN if funnel else ""),
         os_api_key=_str("OPENSUBTITLES_API_KEY"),

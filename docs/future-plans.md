@@ -111,6 +111,6 @@ Amaç: film ve dizileri afişli bir katalogdan seçip açmak; altyazıları da f
 ## Diğer gelecek işler
 
 - **Faz 2, altyazı otomasyonu:** dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi (README'deki "Sonraki fazlar").
-- **Faz 3, sadece link:** film parçaları da eşler arası (WebRTC DataChannel), doğrudan bağlantı olmazsa Cloudflare TURN. Funnel'ın bant sınırını ve host'un Tailscale bağımlılığını kaldırır.
+- **Faz 3, sadece link:** film parçaları da eşler arası (WebRTC DataChannel), doğrudan bağlantı olmazsa Cloudflare TURN. Funnel'ın bant sınırını ve host'un Tailscale bağımlılığını kaldırır. Gerekenler: sayfa sabit bir HTTPS adresinde (GitHub Pages ya da kendi alan adı), iki tarafı tanıştıran küçük bir sinyal sunucusu (proje sahibinin P2P mesajlaşma uygulamasındaki sinyal ve şifreleme kısmı uyarlanabilir), hls.js'e parçaları kanaldan isteyen bir yükleyici, gönderen tarafta host'un sekmesi ya da `aiortc`. Darboğazlar: host'un upload'u (her izleyiciye ayrı kopya; ~30 Mbps'te 5 Mbps'lik filmle 4–5 kişi), iki taraf da katı NAT arkasındaysa TURN (bütün trafik oradan; kendi VPS'inde coturn ucuz, hazır servislerde iki saatlik film izleyici başına ~4–5 GB), DataChannel'da akış kontrolü ve ileri sarmada gecikme.
 - **Kişi başına %100 üstü ses:** hoparlörle yankı denemesinden sonra gerekirse (`GainNode`); kamera-ses planı, Ses bölümü.
 - **İki izleyicinin Funnel sınırını paylaşıp paylaşmadığı:** ölçülmedi; 3 kişilik ilk gerçek denemede bakılacak.
