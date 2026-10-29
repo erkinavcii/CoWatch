@@ -7,7 +7,7 @@ Klasörde `_handoff/` varsa (git'e girmez) `_handoff/HANDOFF.md`'yi de oku: önc
 ## Kurallar
 
 - **Commit kimliği:** author ve committer `erkinavcii <56629073+erkinavcii@users.noreply.github.com>`. Commit mesajına `Co-Authored-By`, Claude imzası ya da oturum linki ekleme. Mesajlar Türkçe ve önceki commit'lerin üslubunda: kısa bir başlık, gerekirse madde madde ayrıntı.
-- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 53 test; ffmpeg kuruluysa medya testleri de çalışır). Arayüzü ya da WebSocket mesajlarını değiştiren her adımdan sonra tarayıcı testleri de (aşağıda).
+- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 56 test; ffmpeg kuruluysa medya testleri de çalışır). Arayüzü ya da WebSocket mesajlarını değiştiren her adımdan sonra tarayıcı testleri de (aşağıda).
 - **İki README birlikte güncellenir:** `README.md` (İngilizce) ve `README.tr.md` (Türkçe) aynı içeriği taşır.
 - **Arayüz metinleri üç dilde:** `web/i18n.js` içindeki `tr`, `en` ve `ru` anahtarları birebir aynı olmalı.
 - `data/`, `.venv/`, `node_modules/` ve `samples/*.mkv` git'e girmez (`.gitignore`).
@@ -32,7 +32,7 @@ cd torrent-helper; npm.cmd install; cd ..
 Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her biri kendi sunucusunu ve test videosunu açar, bir-iki dakika sürer; `--headed` ile pencereler izlenir.
 
 - `tests/e2e/two_viewers.py`: iki pencerede senkron, kişiye özel altyazı (ikinci satır dahil), imlecin bantlı videoda aynı noktaya düşmesi, dürtme sesi, kalemin rengi ve yeri, temizleme, konsol hataları.
-- `tests/e2e/voice_camera.py`: misafir Tailscale Serve başlığıyla gelir (yerel dosya alanı ona kapalı); Chromium'un sahte kamerası ve mikrofon yerine sentezlenmiş konuşmayla ses, konuşan göstergesi, film sesini kısma, yeniden bağlanma, kamera kutuları, tam ekran, `Ctrl+E`; üçüncü izleyiciyle önizleme, 3 kişilik bağlantı, kutuları sürükleme ve küçültme, bağlantıları yeniden kurma.
+- `tests/e2e/voice_camera.py`: misafir Tailscale Serve başlığıyla gelir (yerel dosya alanı ona kapalı); host ona film klasörü yetkisi verir, filmi misafir klasörden açar, yetki geri alınır; Chromium'un sahte kamerası ve mikrofon yerine sentezlenmiş konuşmayla ses, konuşan göstergesi, film sesini kısma, yeniden bağlanma, kamera kutuları, tam ekran, `Ctrl+E`; üçüncü izleyiciyle önizleme, 3 kişilik bağlantı, kutuları sürükleme ve küçültme, bağlantıları yeniden kurma.
 
 ```powershell
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt  # bir kez
@@ -51,6 +51,7 @@ Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her
 | `server/presence.py` | İmleç, dürtme ve çizim mesajlarının doğrulanması, renk paleti |
 | `server/signaling.py` | Ses ve kamera için WebRTC sinyal mesajlarının (`rtc`) doğrulanması, `ICE_SERVERS` |
 | `server/filepicker.py` | "Gözat…": host'un ekranında sistemin dosya penceresi (tkinter); tarayıcının kendi seçicisi dosyanın tam yolunu vermez |
+| `server/library.py` | Film klasörleri (`LIBRARY_DIRS`): videoları listeleme, klasör numarası ve iç yoldan dosyayı bulma (klasörden çıkamaz) |
 | `server/addons.py` | Stremio eklentileri: manifest, katalog, bilgi, akış, altyazı; hazır eklentiler (`DEFAULT_ADDONS`), host'un ekledikleri `data/addons.json`'da |
 | `server/subtitles.py` | Altyazı çözme (cp1254, cp1251 gibi eski kodlamalar), OpenSubtitles, saklama |
 | `server/oshash.py`, `server/torrent_client.py` | OpenSubtitles hash'i; Node torrent yardımcısıyla konuşma |
@@ -75,6 +76,8 @@ Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her
 - **Konuşan tespiti:** karşı tarafın seviyesi `getSynchronizationSources()`'tan okunur, uzak ses WebAudio'ya bağlanmaz (Chrome'da sessizlik verir). Film sesini kısma kaydırıcıyı oynatmaz: `video.volume = prefs.volume × duck`.
 - **Kısayollar:** değiştirici tuşlu basışlar (`Ctrl`, `Cmd`, `Alt`) tek harfli kısayolları tetiklemez; `Ctrl+D` mikrofon, `Ctrl+E` kamera, `d` kalem.
 - **Eklenti akışları ve altyazıları referansla açılır:** sunucu eklentiden gelen her akışı ve altyazıyı hafızada tutar, istemciye sadece kısa bir `ref` verir (`AddonStore.refs`). Tarayıcı sunucuya hiçbir zaman çekilecek bir adres göndermez; böylece misafir sunucuyu rastgele adreslere istek attırmak için kullanamaz. Eklenti eklemek ve kaldırmak sadece `is_local`.
+- **Yetkili arkadaş (ortak host):** host, kişi kutusundaki "Film klasörü yetkisi ver" ile (`grant` mesajı, sadece `client.host` gönderebilir) arkadaşın tarayıcısına film klasörü yetkisi verir. Yetki `clientId`'ye değil `cw_viewer` çerezine bağlı (`Room.cohosts`), çünkü yeniden bağlanınca kimlik değişir; sadece hafızada, sunucu yeniden başlayınca biter. Yetkili sadece `LIBRARY_DIRS` içinden, klasör numarası ve iç yolla açar (`can_use_library`); yol yazmak, Gözat… ve eklenti ayarları host'ta kalır.
+- **Test istemcisinin WebSocket'i** `base_url` ne olursa olsun `Host: testserver` gönderir; host'u taklit eden bir WebSocket testi `host: localhost:…` başlığını kendisi verir. İki ayrı `TestClient` iki ayrı olay döngüsü açar ve aynı odada mesajlar takılır; host ve misafiri tek istemcide başlıklarla ayır.
 - **Testler bu bilgisayarın ayarlarını görmez:** pytest ve tarayıcı testleri `COWATCH_DOTENV=""` (`.env` okunmaz) ve `ADDONS_BUILTIN=0` (Stremio'nun eklentilerine istek gitmez) ile çalışır. Yeni bir ayar ekleyince testlerin ona `.env`'den bağımlı olmadığına bak.
 - **Tarayıcı testindeki sahte mikrofon** ffmpeg'in `flite` filtresiyle sentezlenmiş konuşma çalar. Chrome'un kendi sahte mikrofonu kısa bipler çıkarıyor, düz bir tonu da gürültü bastırma yarım saniyede siliyor; ikisiyle de konuşan göstergesi güvenilir denenemiyor.
 

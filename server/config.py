@@ -43,6 +43,11 @@ def _str(name: str, default: str = "") -> str:
     return value.strip() if value is not None else default
 
 
+def _paths(name: str) -> tuple[Path, ...]:
+    """Folders separated by ";", like PATH on Windows (a "C:" drive rules out ":")."""
+    return tuple(Path(p.strip().strip("\"'")).expanduser() for p in _str(name).split(";") if p.strip())
+
+
 @dataclass(frozen=True)
 class Settings:
     host: str  # empty = decided by run.py: 127.0.0.1 behind Tailscale Serve, else 0.0.0.0
@@ -66,6 +71,8 @@ class Settings:
     audio_kbps: int
     audio_filter: str
     hls_time: int
+    # the host's film folders: the host and co-hosts open videos from them
+    library_dirs: tuple[Path, ...]
     # add-ons
     addons_builtin: bool  # Cinemeta and Public Domain Movies; 0 = only the ones added by hand
     # voice and camera
@@ -141,6 +148,7 @@ def get_settings() -> Settings:
         audio_kbps=_int("AUDIO_KBPS", 192),
         audio_filter=_str("AUDIO_FILTER", "dynaudnorm=f=500:g=15"),
         hls_time=_int("HLS_TIME", 4),
+        library_dirs=_paths("LIBRARY_DIRS"),
         addons_builtin=_int("ADDONS_BUILTIN", 1) != 0,
         ice_servers=_str("ICE_SERVERS") or (FUNNEL_STUN if funnel else ""),
         os_api_key=_str("OPENSUBTITLES_API_KEY"),

@@ -8,8 +8,10 @@ import os
 import threading
 from typing import Optional
 
+from .library import VIDEO_EXTS
+
 VIDEO_TYPES = [
-    ("Video", "*.mkv *.mp4 *.m4v *.avi *.mov *.webm *.ts *.m2ts *.wmv *.flv *.mpg *.mpeg"),
+    ("Video", " ".join(f"*{ext}" for ext in sorted(VIDEO_EXTS))),
     ("*", "*.*"),
 ]
 _lock = threading.Lock()

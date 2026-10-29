@@ -21,9 +21,11 @@ def now_ms() -> float:
 
 
 class Client:
-    def __init__(self, ws: Optional[WebSocket]):
+    def __init__(self, ws: Optional[WebSocket], viewer: str = "", host: bool = False):
         self.id = uuid.uuid4().hex[:8]
         self.ws = ws
+        self.viewer = viewer  # this browser's cookie: unlike `id`, it survives reconnecting
+        self.host = host  # the host at this computer (`main.is_local`)
         self.name = "?"
         self.color = ""
         self.joined = False  # sent hello: pressed "Join", so it can take part in voice and camera
@@ -57,6 +59,7 @@ class Client:
 class Room:
     def __init__(self) -> None:
         self.clients: dict[str, Client] = {}
+        self.cohosts: set[str] = set()  # viewer cookies the host trusted with the film folders
         self.playing = False
         self.position = 0.0  # film seconds at `updated_at`
         self.updated_at = now_ms()
@@ -129,8 +132,11 @@ class Room:
         self._changed()
 
     # ---- members ------------------------------------------------------------
-    def add(self, ws: Optional[WebSocket]) -> Client:
-        client = Client(ws)
+    def is_cohost(self, viewer: str) -> bool:
+        return bool(viewer) and viewer in self.cohosts
+
+    def add(self, ws: Optional[WebSocket], viewer: str = "", host: bool = False) -> Client:
+        client = Client(ws, viewer, host)
         self.clients[client.id] = client
         return client
 
@@ -167,7 +173,8 @@ class Room:
             "type": "members",
             "members": [
                 {"id": c.id, "name": c.name, "color": c.color, "buffering": c.buffering,
-                 "joined": c.joined, "mic": c.mic, "cam": c.cam}
+                 "joined": c.joined, "mic": c.mic, "cam": c.cam,
+                 "host": c.host, "cohost": self.is_cohost(c.viewer)}
                 for c in self.clients.values()
             ],
         }

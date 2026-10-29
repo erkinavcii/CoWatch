@@ -161,6 +161,12 @@
           <button type="submit" data-i18n="open_file"></button>
         </form>
         <p class="hint" id="hostHint" data-i18n="host_only" hidden></p>
+        <div id="libraryBox" hidden>
+          <h3 data-i18n="library"></h3>
+          <p class="hint" id="libraryHint" hidden></p>
+          <input id="libraryFilter" data-i18n-placeholder="library_filter" autocomplete="off" spellcheck="false">
+          <div id="libraryList" class="file-list library-list"></div>
+        </div>
         <div class="info" id="mediaInfo"></div>
         <div class="info" id="torrentInfo"></div>
         <button id="closeMedia" class="ghost" data-i18n="close_media" hidden></button>
@@ -243,6 +249,8 @@
   <div class="peer-pop" id="peerPop" hidden>
     <span id="peerPopName"></span>
     <input type="range" id="peerVol" min="0" max="1" step="0.05">
+    <button type="button" id="peerGrant" class="ghost" hidden></button>
+    <p class="hint" id="peerGrantHint" data-i18n="grant_hint" hidden></p>
   </div>
   <div id="voices" hidden></div>
 

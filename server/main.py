@@ -26,11 +26,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 import httpx
 from pydantic import BaseModel
+from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocketState
 
 from .addons import AddonError, AddonStore, episode_label, magnet
 from .config import get_settings
-from . import filepicker
+from . import filepicker, library
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
 from .presence import PALETTE, POKE_INTERVAL_S, pick_color, point, stroke_message
@@ -52,6 +53,7 @@ from .torrent_client import HelperError, TorrentHelper
 log = logging.getLogger("cowatch")
 
 COOKIE = "cw_key"
+VIEWER_COOKIE = "cw_viewer"  # one per browser, so the host's trust survives a reconnect
 LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-z]{2,4})?$")
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Set by a reverse proxy in front of us. Tailscale Serve adds Tailscale-User-Login (and drops
@@ -207,6 +209,16 @@ class Controller:
                 self._relay_to(target, {"type": "rtc", "from": client.id, "data": data})
         elif kind == "av":
             if self._set_av(client, msg):
+                await self.room.broadcast(self.room.members_msg())
+        elif kind == "grant" and client.host:
+            # The host trusts a friend with the film folders, or takes it back. Bound to the
+            # friend's browser, not to the connection, so a reconnect keeps it.
+            target = self.room.clients.get(str(msg.get("to", "")))
+            if target is not None and not target.host and target.viewer:
+                if msg.get("value"):
+                    self.room.cohosts.add(target.viewer)
+                else:
+                    self.room.cohosts.discard(target.viewer)
                 await self.room.broadcast(self.room.members_msg())
         elif kind == "hello":
             client.name = clean_name(msg.get("name"))
@@ -572,7 +584,7 @@ def host_name(value: str) -> str:
     return value.rsplit(":", 1)[0] if value.count(":") == 1 else value
 
 
-def is_local(request: Request) -> bool:
+def is_local(request: HTTPConnection) -> bool:
     """The host at this computer, opening the localhost link. Tailscale Serve also connects
     from 127.0.0.1, so the address alone is not enough: the Host header must be a local name
     and no proxy header may be present."""
@@ -581,6 +593,18 @@ def is_local(request: Request) -> bool:
     if host_name(request.headers.get("host", "")) not in LOCAL_HOSTS:
         return False
     return not any(name in request.headers for name in PROXY_HEADERS)
+
+
+def can_use_library(request: HTTPConnection) -> bool:
+    """The host, or a friend the host trusted with the film folders."""
+    return is_local(request) or ctl.room.is_cohost(request.cookies.get(VIEWER_COOKIE, ""))
+
+
+def with_viewer(request: Request, response: Response) -> Response:
+    if not request.cookies.get(VIEWER_COOKIE):
+        response.set_cookie(VIEWER_COOKIE, secrets.token_urlsafe(12), max_age=60 * 60 * 24 * 365,
+                            httponly=True, samesite="lax")
+    return response
 
 
 def _setup_logging() -> None:
@@ -636,10 +660,10 @@ async def index(request: Request):
             return HTMLResponse(UNAUTHORIZED_PAGE, status_code=401)
         response = RedirectResponse("/", status_code=303)
         response.set_cookie(COOKIE, key, max_age=60 * 60 * 24 * 30, httponly=True, samesite="lax")
-        return response
+        return with_viewer(request, response)
     if not authorized(request):
         return HTMLResponse(UNAUTHORIZED_PAGE, status_code=401)
-    return FileResponse(cfg.web_dir / "index.html", headers={"Cache-Control": "no-cache"})
+    return with_viewer(request, FileResponse(cfg.web_dir / "index.html", headers={"Cache-Control": "no-cache"}))
 
 
 # Windows can map .js/.css to odd types through the registry; browsers then refuse them.
@@ -693,9 +717,15 @@ class TorrentRef(BaseModel):
     fileIndex: int
 
 
+class LibraryRef(BaseModel):
+    dir: int
+    path: str
+
+
 class OpenBody(BaseModel):
     torrent: Optional[TorrentRef] = None
     path: Optional[str] = None
+    library: Optional[LibraryRef] = None  # a video from /api/library
     audio: Optional[int] = None
     stream: Optional[str] = None  # a `ref` from /api/addons/streams
 
@@ -734,6 +764,8 @@ async def api_status(request: Request):
         "helper": await ctl.helper.healthy(),
         "osEnabled": ctl.os.enabled,
         "isHost": is_local(request),
+        "canLibrary": can_use_library(request),
+        "libraryConfigured": bool(cfg.library_dirs),
         "downloadThrottled": ctl.download_throttled,
     }
 
@@ -750,17 +782,25 @@ async def api_torrent_add(body: MagnetBody):
 async def api_media_open(body: OpenBody, request: Request):
     if body.path and not is_local(request):
         raise HTTPException(403, detail="local_files_host_only")
+    path = body.path
+    if body.library is not None:
+        if not can_use_library(request):
+            raise HTTPException(403, detail="library_not_allowed")
+        try:
+            path = str(library.resolve(cfg.library_dirs, body.library.dir, body.library.path))
+        except library.LibraryError:
+            raise HTTPException(404, detail="library_unknown_file") from None
     stream = None
     if body.stream:
         stream = ctl.addons.lookup(body.stream)
         if not stream or stream.get("kind") not in ("torrent", "url"):
             raise HTTPException(404, detail="unknown_stream")
-    if not body.path and body.torrent is None and stream is None:
+    if not path and body.torrent is None and stream is None:
         raise HTTPException(400, detail="nothing_to_open")
     if ctl.opening:
         raise HTTPException(409, detail="already_opening")
     torrent = body.torrent.model_dump() if body.torrent else None
-    asyncio.create_task(ctl.open_media(torrent=torrent, path=body.path, audio=body.audio, stream=stream))
+    asyncio.create_task(ctl.open_media(torrent=torrent, path=path, audio=body.audio, stream=stream))
     return {"ok": True}
 
 
@@ -774,6 +814,16 @@ async def api_media_pick(body: PickBody, request: Request):
         return {"path": await asyncio.to_thread(filepicker.pick_video, body.title)}
     except filepicker.PickerError as exc:
         raise HTTPException(409 if exc.code == "picker_busy" else 501, detail=exc.code) from None
+
+
+@app.get("/api/library")
+async def api_library(request: Request):
+    """The videos in the film folders, for the host and co-hosts. Paths are relative to their
+    folder; the folders themselves are shown by name only."""
+    if not can_use_library(request):
+        raise HTTPException(403, detail="library_not_allowed")
+    files = await asyncio.to_thread(library.scan, cfg.library_dirs)
+    return {"dirs": [d.name or str(d) for d in cfg.library_dirs], "files": files}
 
 
 # ---- add-ons: everyone can browse and open; only the host changes the list ----------------------
@@ -918,7 +968,7 @@ async def ws_endpoint(ws: WebSocket):
         await ws.close(code=4401)
         return
     await ws.accept()
-    client = ctl.room.add(ws)
+    client = ctl.room.add(ws, ws.cookies.get(VIEWER_COOKIE, ""), is_local(ws))
     await client.send(ctl.welcome(client))
     await ctl.room.broadcast(ctl.room.members_msg())
     try:

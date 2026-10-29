@@ -77,8 +77,9 @@ def fake_voice(work: Path) -> Path:
     return out
 
 
-def start_server(port: int, data_dir: Path) -> subprocess.Popen:
-    env = dict(os.environ, DATA_DIR=str(data_dir), ACCESS_KEY=KEY, OPENSUBTITLES_API_KEY="", COWATCH_DOTENV="", ADDONS_BUILTIN="0")
+def start_server(port: int, data_dir: Path, library: Path) -> subprocess.Popen:
+    env = dict(os.environ, DATA_DIR=str(data_dir), ACCESS_KEY=KEY, OPENSUBTITLES_API_KEY="", COWATCH_DOTENV="",
+               ADDONS_BUILTIN="0", LIBRARY_DIRS=str(library))
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server.main:app", "--host", "127.0.0.1", "--port", str(port),
@@ -143,6 +144,33 @@ def tile_plays(page: Page, member_id: str) -> None:
 def hears(page: Page) -> None:
     """Sound is coming in from the other viewer."""
     page.wait_for_function("cowatchDebug().voice.peers.some(p => p.level > 0.001)", timeout=15000)
+
+
+def toggle_trust(host: Page, guest_id: str) -> None:
+    host.click(f".member.others[data-id='{guest_id}']")
+    host.wait_for_selector("#peerGrant", state="visible", timeout=5000)
+    host.click("#peerGrant")
+
+
+def check_library(host: Page, guest: Page, video: Path) -> None:
+    """The host trusts the guest with the film folder; the guest opens the film from it."""
+    item = f"#libraryList button[title$='/{video.name}']"
+    host.wait_for_selector(item, timeout=10000)
+    assert guest.locator("#libraryBox").is_hidden(), "guest sees the film folder before the host trusts them"
+    guest_id = debug(guest)["clientId"]
+    toggle_trust(host, guest_id)
+    guest.wait_for_function(f"cowatchDebug().members.some(m => m.id === '{guest_id}' && m.cohost)", timeout=5000)
+    guest.wait_for_selector(item, timeout=10000)
+    assert guest.locator("#pathForm").is_hidden(), "a trusted guest still must not type paths"
+    host.wait_for_selector(f".member[data-id='{guest_id}'] .role", timeout=5000)
+    ok("host trusts the guest: the film folder shows up for them, with a badge")
+    guest.click(item)
+    for page in (host, guest):
+        page.wait_for_function("document.querySelector('#video').readyState >= 2", timeout=90000)
+    ok("the guest opened the film from the host's folder; stream loaded in both")
+    toggle_trust(host, guest_id)
+    guest.wait_for_selector("#libraryBox", state="hidden", timeout=10000)
+    ok("trust taken back: the film folder is gone for the guest")
 
 
 def check_voice(host: Page, guest: Page) -> None:
@@ -293,7 +321,7 @@ def run(headed: bool) -> None:
     voice = fake_voice(work)
     port = free_port()
     base = f"http://localhost:{port}"
-    server = start_server(port, work / "data")
+    server = start_server(port, work / "data", video.parent)
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
@@ -315,11 +343,7 @@ def run(headed: bool) -> None:
                 assert guest.locator("#pathForm").is_hidden(), "guest sees the local file field"
                 ok("local file field: host only")
 
-                host.fill("#pathInput", str(video))
-                host.click("#pathForm button[type=submit]")
-                for page in (host, guest):
-                    page.wait_for_function("document.querySelector('#video').readyState >= 2", timeout=90000)
-                ok("stream loaded in both")
+                check_library(host, guest, video)
 
                 # Subtitles, pointers, pokes and the pen are in two_viewers.py.
                 host.click("#playBtn")

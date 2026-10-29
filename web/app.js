@@ -13,6 +13,8 @@
     filmTitle: $('#filmTitle'), members: $('#members'), conn: $('#conn'), uiLang: $('#uiLang'),
     magnetForm: $('#magnetForm'), magnetInput: $('#magnetInput'), fileList: $('#fileList'),
     pathForm: $('#pathForm'), pathInput: $('#pathInput'), hostHint: $('#hostHint'),
+    libraryBox: $('#libraryBox'), libraryHint: $('#libraryHint'), libraryFilter: $('#libraryFilter'),
+    libraryList: $('#libraryList'), peerGrant: $('#peerGrant'), peerGrantHint: $('#peerGrantHint'),
     mediaInfo: $('#mediaInfo'), torrentInfo: $('#torrentInfo'), closeMedia: $('#closeMedia'),
     primarySel: $('#primarySel'), secondarySel: $('#secondarySel'), offsetOut: $('#offsetOut'),
     sizeRange: $('#sizeRange'), bottomRange: $('#bottomRange'), searchForm: $('#searchForm'),
@@ -78,7 +80,7 @@
     room: { playing: false, position: 0, updatedAt: 0, rate: 1, loading: false, waiting: [], seq: 0 },
     media: null, progress: null, members: [], tracks: [], cues: new Map(), osEnabled: false, opening: false,
     joined: false, hls: null, streamId: null, primary: '', secondary: '',
-    bufferingSent: false, waitTimer: null, dragging: false, isHost: false, autoplayBlocked: false,
+    bufferingSent: false, waitTimer: null, dragging: false, isHost: false, canLibrary: false, libraryConfigured: false, cohost: null, autoplayBlocked: false,
     torrent: null, downloadThrottled: false,
     palette: ['#ff6b6b', '#4dabf7', '#51cf66', '#fcc419', '#cc5de8', '#ff922b', '#22b8cf', '#f06595'],
     penMode: false, iceServers: [],
@@ -546,6 +548,13 @@
     for (const stroke of strokes.values()) if (!stroke.done && !ids.has(stroke.owner)) finishStroke(stroke);
     const me = memberById(S.clientId);
     if (me && me.color && me.color !== prefs.color) { prefs.color = me.color; savePrefs(); }
+    // The host trusted me with the film folders, or took it back: kept across reconnects, so
+    // only a real change is news.
+    const cohost = !!(me && me.cohost);
+    if (me && cohost !== S.cohost) {
+      if (S.cohost !== null) { toast(t(cohost ? 'cohost_granted' : 'cohost_revoked')); pollStatus(); }
+      S.cohost = cohost;
+    }
     renderToolbar();
     syncPeers();
     renderCams();
@@ -1426,6 +1435,10 @@
     el.peerPopName.textContent = t('peer_volume', { name: m.name });
     const vol = prefs.peerVolume[m.name];
     el.peerVol.value = typeof vol === 'number' ? vol : 1;
+    const grantable = S.isHost && !m.host;
+    el.peerGrant.hidden = !grantable;
+    el.peerGrant.textContent = t(m.cohost ? 'grant_revoke' : 'grant_give');
+    el.peerGrantHint.hidden = !grantable || !!m.cohost;
     const r = anchor.getBoundingClientRect();
     const beside = anchor.classList.contains('cam'); // a tile: to its left; a name: below it
     el.peerPop.style.top = `${beside ? r.top : r.bottom + 6}px`;
@@ -1435,6 +1448,11 @@
   el.members.addEventListener('click', (e) => {
     const chip = e.target.closest('.member.others');
     if (chip) openPeerPop(chip.dataset.id, chip);
+  });
+  el.peerGrant.addEventListener('click', () => {
+    const m = memberById(popFor);
+    if (m) send({ type: 'grant', to: m.id, value: !m.cohost });
+    el.peerPop.hidden = true;
   });
   el.peerVol.addEventListener('input', () => {
     const m = memberById(popFor);
@@ -1642,6 +1660,67 @@
     }
   });
 
+  // ---------------------------------------------------------------- film folders
+  // The host's LIBRARY_DIRS. The host and the friends the host trusted (co-hosts) pick a video
+  // here; the server takes only a folder number and a path inside that folder.
+  const LIBRARY_SHOWN = 200;
+  const L = { files: [], dirs: [], loaded: false, loading: false, at: 0 };
+  async function loadLibrary () {
+    if (L.loading) return;
+    L.loading = true;
+    try {
+      const data = await api('/api/library');
+      L.files = data.files || [];
+      L.dirs = data.dirs || [];
+      L.loaded = true;
+      L.at = Date.now();
+    } catch {
+      L.files = []; L.loaded = false; // the right was taken back meanwhile
+    } finally {
+      L.loading = false;
+    }
+    renderLibraryList();
+  }
+  function renderLibraryBox () {
+    el.libraryBox.hidden = !(S.canLibrary && (S.libraryConfigured || S.isHost));
+    el.libraryFilter.hidden = !S.libraryConfigured;
+    el.libraryList.hidden = !S.libraryConfigured;
+    if (!S.libraryConfigured) { el.libraryHint.textContent = t('library_not_set'); el.libraryHint.hidden = false; }
+  }
+  function renderLibraryList () {
+    const q = el.libraryFilter.value.trim().toLocaleLowerCase();
+    const items = q ? L.files.filter((f) => f.path.toLocaleLowerCase().includes(q)) : L.files;
+    el.libraryList.replaceChildren();
+    for (const f of items.slice(0, LIBRARY_SHOWN)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.title = `${L.dirs[f.dir] || ''}/${f.path}`;
+      b.textContent = `${f.name} `;
+      const where = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : L.dirs[f.dir] || '';
+      const small = document.createElement('small');
+      small.textContent = `${where} · ${fmtBytes(f.size)}`;
+      b.appendChild(small);
+      b.addEventListener('click', () => openLibrary(f));
+      el.libraryList.appendChild(b);
+    }
+    let hint = '';
+    if (L.loaded && !L.files.length) hint = t('library_empty');
+    else if (q && !items.length) hint = t('library_no_match');
+    else if (items.length > LIBRARY_SHOWN) hint = t('library_more', { n: items.length });
+    el.libraryHint.textContent = hint;
+    el.libraryHint.hidden = !hint;
+  }
+  async function openLibrary (f) {
+    try {
+      await api('/api/media/open', { json: { library: { dir: f.dir, path: f.path } } });
+    } catch (err) {
+      toast(errorText(err), 'error');
+      loadLibrary(); // moved or deleted since the list was made
+    }
+  }
+  el.libraryFilter.addEventListener('input', renderLibraryList);
+  el.libraryFilter.addEventListener('focus', () => { if (Date.now() - L.at > 30000) loadLibrary(); });
+
   el.closeMedia.addEventListener('click', async () => {
     try { await api('/api/media/close', { method: 'POST' }); } catch (err) { toast(errorText(err), 'error'); }
   });
@@ -1650,6 +1729,10 @@
     try {
       const status = await api('/api/status');
       S.isHost = !!status.isHost;
+      const could = S.canLibrary;
+      S.canLibrary = !!status.canLibrary;
+      S.libraryConfigured = !!status.libraryConfigured;
+      if (S.canLibrary && !could && S.libraryConfigured) loadLibrary();
       S.osEnabled = !!status.osEnabled;
       S.torrent = status.torrent;
       S.downloadThrottled = !!status.downloadThrottled;
@@ -2051,6 +2134,12 @@
       const titles = [];
       if (m.buffering) { chip.classList.add('buffering'); titles.push(t('buffering')); }
       chip.textContent = me ? `${m.name} (${t('you')})` : m.name;
+      if (m.host || m.cohost) {
+        const role = document.createElement('span');
+        role.className = 'role';
+        role.textContent = t(m.host ? 'role_host' : 'role_cohost');
+        chip.appendChild(role);
+      }
       // My own state is known here at once; the server's copy comes back a moment later.
       const micOn = me ? !!voice.mic : !!m.mic;
       if (m.joined && !micOn) {
@@ -2084,6 +2173,7 @@
   function renderMediaPanel () {
     el.pathForm.hidden = !S.isHost;
     el.hostHint.hidden = S.isHost;
+    renderLibraryBox();
     el.closeMedia.hidden = !S.media;
     el.osOff.hidden = S.osEnabled;
     el.addonSubs.hidden = !(S.media && S.media.content);
