@@ -108,37 +108,75 @@ Amaç: film ve dizileri afişli bir katalogdan seçip açmak; altyazıları da f
 - **Eklentilerin güvenilirliği:** Üçüncü taraf eklentiler kapanabilir, yavaşlayabilir; sorgular zaman aşımıyla yapılır, biri cevap vermezse diğerleri gösterilir.
 - **Kimin ne açabileceği:** Bugün torrent eklemek herkese açık. Eklentiden film açmak da öyle kalabilir; eklenti listesini değiştirmek sadece host'a.
 
-## Kendi kopyandan izle (seçmeli)
+## Kendi kopyandan izle (seçmeli; karar sonra)
 
-Bugün filmi sadece host'un bilgisayarı okur ya da indirir; ffmpeg HLS parçalarına böler ve her izleyici parçaları host'tan çeker (Funnel'da ≈ 7–8 Mbps, host'un upload'u izleyici sayısıyla bölünür). Fikir: filmin aynısı kimde varsa, o izleyici kendi kopyasını oynatsın; host'tan parça çekmesin. Senkron aynı kalır, çünkü sunucu zaten "filmin şu saniyesi" der; izleyicinin filmi nereden oynattığı fark etmez. "Biri takılırsa herkes bekler" kuralı da olduğu gibi çalışır.
+### Bugün nasıl çalışıyor (basit anlatım)
 
-### Kararlar (29 Ekim 2026)
+Upload sunucusu sensin. Siteye bir torrent linki girildiğinde (ya da yerel bir dosya, eklentiden bir kaynak açıldığında):
 
-| Konu | Karar |
-| --- | --- |
-| Zorunlu mu | Hayır, izleyici başına seçmeli. Kopyası olmayan linkle gelir ve bugünkü gibi host'tan izler; ikisi aynı odada aynı kuralla senkron kalır. |
-| İlk adım | "Aynı dosya bende de var": izleyici kendi bilgisayarındaki dosyayı seçer, OpenSubtitles hash'i ve boyutu host'un dosyasıyla aynıysa kendi kopyasını oynatır. Torrent yok, hukuki risk değişmez. |
-| Torrent | Sonra ve isteğe bağlı: izleyicinin bilgisayarında torrent yardımcısı ve ffmpeg (CoWatch'ın misafir kipi), aynı infohash ve dosya. |
+1. **İndiren sadece senin bilgisayarın.** Torrent'i senin bilgisayarındaki torrent yardımcısı indirir; arkadaşların hiçbir şey indirmez, torrent ağına da bağlanmaz.
+2. **Senin bilgisayarın filmi parçalara böler.** ffmpeg filmi birkaç saniyelik parçalara ayırır, tarayıcının oynatamayacağı biçimleri çevirir.
+3. **Parçaları herkese sen gönderirsin.** Her arkadaş parçaları senin bilgisayarından ister. İstek ve parçalar Tailscale Funnel üzerinden gider: arkadaş → Funnel aktarıcısı → senin bilgisayarın → Funnel → arkadaş. Her izleyiciye ayrı bir kopya gider; yani senin upload'un ve Funnel'ın ≈ 7–8 Mbps sınırı izleyici sayısıyla bölünür.
+4. **Senkron da senin bilgisayarında.** Oynat/durdur, ileri sarma, "biri takılırsa herkes bekler" kuralı senin bilgisayarındaki CoWatch sunucusunda; bunlar küçük mesajlardır, Funnel'dan geçer.
+5. **Ses, kamera ve ekran senden geçmez.** Bunlar tarayıcıdan tarayıcıya doğrudan gider (Cloudflare STUN sadece kurulurken adres söyler).
 
-### Artıları
+Torrent'te senin bilgisayarın hem indirir (torrent ağından) hem yükler (her izleyiciye). Aşağıdaki fikir bu yükü kaldırmayı amaçlıyor.
 
-- Funnel'ın bant sınırı ve host'un upload'u o izleyici için önemsizleşir; kalite kaynağın kendisi, dönüştürme gerekmez (4K dahil).
-- İzleyici sayısı arttıkça host'a yük binmez; sunucudan sadece küçük mesajlar geçer (oynat/durdur, imleç, çizim, onaylar). Ses, kamera ve ekran zaten doğrudan.
-- İndirilmiş kısımda ileri sarma anında; ffmpeg'in yeniden başlaması yok.
+### "Arkadaşım torrent'i kendisi indirsin" fikri
 
-### Eksileri ve riskler
+Mantıklı bir fikir. Senkron tarafı sandığın kadar zor değil, ama başka yerlerde bedeli var.
 
-- **Sadece link biter:** Tarayıcı normal torrent ağına bağlanamaz (tarayıcıdaki WebTorrent sadece WebRTC eşleriyle konuşur, film torrent'lerinde bunlar neredeyse yok) ve MKV, HEVC, AC3, DTS'nin çoğunu oynatamaz. Torrent ve çoğu dosya için izleyicinin de bir uygulama kurması gerekir. Tarayıcının oynatabildiği dosyalar (H.264 + AAC MP4) "aynı dosya bende de var"da kurulumsuz çalışabilir.
-- **Hukuki risk herkese yayılır:** Torrent indiren herkes aynı anda yükleme yapar ve IP adresi torrent ağında görünür. Bugün bu sadece host. Bu yüzden torrent kipi kişisel kullanımla sınırlı kalır; ilk adım torrent'e dokunmaz.
-- **Hızlar farklı:** Herkesin torrent hızı farklı; en yavaş olan herkesi bekletir, ilk açılışta da bekleme olur.
-- **Disk:** Her cihazda filmin tamamına yer gerekir; telefonlarda pek olmaz.
+Senkron neden zor değil: Senkron zaten "filmin şu saniyesindeyiz" bilgisiyle çalışıyor. Bir izleyicinin filmi senden mi yoksa kendi diskinden mi oynattığının bir önemi yok. Aynı torrent'in aynı dosyası her yerde aynıdır; bunu dosyanın hash'i garanti eder, altyazılar da aynı hash'le eşleşir. "Biri takılırsa herkes bekler" kuralı da zaten var: arkadaşının indirmesi geride kalırsa senin filmin de durur.
 
-### Adımlar
+Artıları:
+
+- Darboğaz kalkar: Funnel'ın 7–8 Mbps sınırı ve senin upload'un artık önemli olmaz. Herkes kendi indirme hızıyla izler, 4K bile olur, dönüştürme gerekmez.
+- Kişi sayısı: İzleyici sayısı arttıkça sana bir yük gelmez.
+- Trafik: Sunucudan sadece küçük mesajlar geçer: oynat/durdur, imleç, çizim, onaylar. Ses, kamera ve ekran zaten doğrudan gidiyor.
+- İleri sarma: İndirilmiş kısımda anında olur; ffmpeg'in yeniden başlaması gerekmez.
+
+Eksileri:
+
+- "Sadece link" biter: Tarayıcı normal torrent ağına bağlanamaz. Tarayıcıdaki WebTorrent sadece WebRTC destekleyen eşlerle konuşur, film torrent'lerinde de bunlar neredeyse yok. Ayrıca tarayıcı MKV, HEVC, AC3 ve DTS'nin çoğunu oynatamaz; bunları bugün senin ffmpeg'in çeviriyor. Yani arkadaşın da torrent yardımcısını ve ffmpeg'i, yani bir "CoWatch misafir uygulamasını" kurmak zorunda kalır.
+- Hukuki risk herkese yayılır: En ciddi eksi bu. Torrent indirirken herkes aynı anda yükleme de yapar ve IP adresi torrent ağında görünür. Bugün bu risk sadece sende. Bu modelde her arkadaşın kendi başına telif bildirimi alabilir.
+- Başlangıç farkı: Herkesin torrent hızı farklı. En yavaş olan herkesi bekletir, ilk açılışta da beklemek gerekir.
+- Disk ve telefon: Her cihazda filmin tamamı için yer gerekir. Telefonda bu pek mümkün değil.
+
+Önerim: zorunlu değil, seçmeli bir mod — "kendi kopyandan izle".
+
+- Kopyası olan: Uygulamayı kuran ya da dosyası zaten elinde olan kendi kopyasını açar. Sunucu dosyanın hash'ine bakıp aynı film olduğunu doğrular. Bu kişi senden parça çekmez.
+- Kopyası olmayan: Linkle gelir, bugünkü gibi senden izler.
+- Senkron: İkisi de aynı odada aynı kuralla senkron kalır.
+
+Bu modun en kolay ve risksiz ilk adımı "aynı dosya bende de var" seçeneği. Torrent'e hiç dokunmaz; mevcut hash kodunu kullanır.
+
+### Açık soru: kipi kim seçer?
+
+Karar sonra verilecek. Seçenekler:
+
+| Kim seçer | Nasıl | Artısı | Eksisi |
+| --- | --- | --- | --- |
+| İzleyici | "Aynı dosya bende de var" düğmesine kendisi basar | Basit, kimseye sürpriz yok | İzleyici bilmezse kullanılmaz |
+| Sunucu (otomatik) | Sunucu durumu görür ve karar verir ya da önerir (aşağıda) | Kimse düşünmeden en iyi yol seçilir | Yanlış karar takılmaya yol açabilir; kuralların denenmesi gerekir |
+| Host | `.env` ya da ayarlar sayfasında `OWN_COPY=off` / `ask` / `auto` | Host odasını bilir | Bir ayar daha |
+
+Sunucunun karar verirken bakabileceği şeyler:
+
+- **Kopya var mı:** İzleyicinin tarayıcısı ya da misafir uygulaması aynı hash ve boyutta bir dosya bildirdiyse sunucu "kendi kopyandan izle" der.
+- **Tarayıcı oynatabilir mi:** Dosyanın biçimi (H.264 + AAC MP4 gibi) tarayıcıya uygun değilse ve misafir uygulaması yoksa host'tan izlemeye devam edilir.
+- **Host'un yükü:** İzleyiciler sık takılıyorsa (`buffering` mesajları) ya da izleyici sayısı × film bit hızı Funnel'ın ve upload'un sınırını aşıyorsa, misafir uygulaması olanlara torrent'e geçmeyi önerir.
+- **Torrent'in sağlığı:** Eş sayısı azsa izleyiciyi torrent'e geçirmek takılmayı artırır; o zaman host'tan izlemek daha iyidir.
+- **Hukuki tercih:** Torrent kipi sadece izleyici açıkça kabul ettiyse; sunucu kendiliğinden kimseyi torrent ağına sokmaz.
+
+En güvenli başlangıç: sunucu öneri yapar ("Bu filmin aynısı sende var, kendi kopyandan izlemek ister misin?"), izleyici onaylar. Otomatik geçiş sonra, kurallar gerçek denemelerle oturunca.
+
+### Adımlar (öneri, karar sonra)
 
 1. **Sunucu:** açık filmin hash'ini ve boyutunu odaya bildir (`media` mesajında zaten `mediaKey` var; yerel dosya ve hash'i bulunan torrent için bu OpenSubtitles hash'i, yanına boyut eklenir). İzleyicinin "bende de var" bildirimini ve hash eşleşmesini kabul et.
 2. **İstemci:** "Aynı dosya bende de var" düğmesi; tarayıcının dosya seçicisiyle seçilen dosyanın hash'i tarayıcıda hesaplanır (ilk ve son 64 KB, `server/oshash.py`'nin aynısı). Eşleşirse `video.src` yerel dosyaya (`URL.createObjectURL`) bağlanır; film zamanı `video.currentTime` olur (`streamStart` 0). Tarayıcı oynatamazsa uyarı verip host'tan izlemeye döner.
 3. **Senkron:** iki kaynak türüyle aynı oda; tarayıcı testinde biri host'tan, biri yerel kopyadan izleyen iki pencere.
-4. **Sonra, isteğe bağlı:** misafir kipinde torrent yardımcısı ve yerel ffmpeg; dağıtım planındaki kurulum dosyasıyla birlikte.
+4. **Kipi kim seçer:** yukarıdaki açık soruya göre; önce sunucunun önerisi ve izleyicinin onayı.
+5. **Sonra, isteğe bağlı:** misafir kipinde torrent yardımcısı ve yerel ffmpeg; dağıtım planındaki kurulum dosyasıyla birlikte.
 
 ## Diğer gelecek işler
 
