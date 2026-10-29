@@ -1614,14 +1614,31 @@
     }
   }
 
-  el.pathForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const path = el.pathInput.value.trim().replace(/^"(.*)"$/, '$1');
-    if (!path) return;
+  async function openPath (path) {
     try {
       await api('/api/media/open', { json: { path } });
     } catch (err) {
       toast(errorText(err), 'error');
+    }
+  }
+  el.pathForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const path = el.pathInput.value.trim().replace(/^"(.*)"$/, '$1');
+    if (!path) { toast(t('path_needed')); el.pathInput.focus(); return; }
+    openPath(path);
+  });
+  // The system's file dialog opens on the host's screen (the server runs there); the browser's
+  // own picker would not tell us the file's full path.
+  const pickFileBtn = $('#pickFileBtn');
+  pickFileBtn.addEventListener('click', async () => {
+    pickFileBtn.disabled = true;
+    try {
+      const { path } = await api('/api/media/pick', { json: { title: t('pick_file_title') } });
+      if (path) { el.pathInput.value = path; openPath(path); }
+    } catch (err) {
+      toast(errorText(err), 'error');
+    } finally {
+      pickFileBtn.disabled = false;
     }
   });
 

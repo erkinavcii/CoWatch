@@ -72,7 +72,7 @@ Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olara
 
 ## Kullanım
 
-1. **Film aç:** kendi dosyan için "Bu bilgisayardaki dosya yolu"na tam yolu yaz (bu alan güvenlik için sadece host bilgisayarda görünür). Torrent için magnet linkini yapıştırıp "Torrent ekle"ye bas; torrent'te birden fazla video varsa listeden seç.
+1. **Film aç:** kendi dosyan için "Gözat…"a bas ve host bilgisayarda açılan dosya penceresinden seç, ya da "Bu bilgisayardaki dosya yolu"na tam yolu yazıp "Dosyayı aç"a bas (ikisi de güvenlik için sadece host bilgisayarda görünür). Torrent için magnet linkini yapıştırıp "Torrent ekle"ye bas; torrent'te birden fazla video varsa listeden seç.
 2. **Göz at:** "Göz at" kartı [Stremio eklentilerinin](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/protocol.md) kataloglarını gösterir: afişler, arama, sezonlar ve bölümler, eklentilerin bir film ya da bölüm için bildiği kaynaklar. "Aç" bir kaynağı herkes için oynatır. İçerik barındırmayan iki eklenti hazır gelir: Cinemeta (katalog ve bilgiler) ve Public Domain Movies (telif süresi dolmuş filmler). Host, "Eklentiler" altından başka eklentileri `…/manifest.json` adresiyle ekleyebilir; bunlar sadece o bilgisayarda, `data/addons.json`'da durur. Eklentiden açılan bir film için "Altyazı ekle" altındaki "Eklentilerde ara", o eklentilerin sunduğu altyazıları filmin kimliği ve dosya hash'iyle listeler.
 3. **Altyazı ekle:** "Altyazı ekle" altında dil kodlarını yazıp OpenSubtitles'ta ara (ör. `tr,en,ru`) ya da `.srt/.ass/.vtt` dosyası yükle. Türkçe `cp1254`, Rusça `cp1251` gibi eski kodlamalar otomatik düzeltilir.
 4. **Kendi altyazını seç:** yüklenen altyazılar odadaki herkesin listesine gelir ama kimin ekranında ne görüneceğini herkes kendisi seçer. "Ana altyazı" alttaki büyük beyaz satırdır. "İkinci altyazı" isteğe bağlıdır ve üstte küçük sarı satır olarak çıkar; iki dili aynı anda izlemek içindir (sen TR + EN, arkadaşın RU + EN gibi). Zaman kaydırma, yazı boyutu ve yükseklik de kişiye özel. Tercih edilen dil hatırlanır; yeni filmde o dilde altyazı varsa otomatik seçilir.
@@ -95,7 +95,7 @@ Tek bilgisayarda, iki tarayıcı penceresiyle:
    ffmpeg -f lavfi -i testsrc=size=1280x720:rate=24 -f lavfi -i "sine=frequency=440" -t 120 -c:v libx264 -g 48 -pix_fmt yuv420p -af volume=0.1 -c:a ac3 -ac 6 samples\test-video.mkv
    ```
 2. `.\.venv\Scripts\python run.py` ile başlat, "Bu bilgisayardan" linkini aç, adını yaz ve Katıl'a bas.
-3. "Bu bilgisayardaki dosya yolu" alanına `samples\test-video.mkv` dosyasının tam yolunu yapıştır. Dosya Gezgini'nde dosyaya sağ tıklayıp "Yol olarak kopyala" diyebilirsin; tırnaklar sorun değil.
+3. "Gözat…"a basıp `samples\test-video.mkv` dosyasını seç ya da tam yolunu "Bu bilgisayardaki dosya yolu" alanına yapıştır. Dosya Gezgini'nde dosyaya sağ tıklayıp "Yol olarak kopyala" diyebilirsin; tırnaklar sorun değil.
 4. Aynı linki gizli pencerede aç ve başka bir adla katıl.
 5. "Altyazı ekle" altında ilk pencerede `samples\test.tr.srt` dosyasını `tr` diliyle, ikinci pencerede `samples\test.ru.srt` dosyasını `ru` diliyle yükle. İki dosya da eski kodlamalı (cp1254 ve cp1251); Türkçe ve Rusça harfler düzgün görünmeli.
 6. Oynat. Altyazıdaki saniye ekrandaki büyük rakamla aynı olmalı ve iki pencere aynı karede kalmalı. İleri sarmayı, durdurmayı ve ±0.5 kaydırmayı dene.

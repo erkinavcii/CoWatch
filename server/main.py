@@ -30,6 +30,7 @@ from starlette.websockets import WebSocketState
 
 from .addons import AddonError, AddonStore, episode_label, magnet
 from .config import get_settings
+from . import filepicker
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
 from .presence import PALETTE, POKE_INTERVAL_S, pick_color, point, stroke_message
@@ -703,6 +704,10 @@ class AddonBody(BaseModel):
     url: str
 
 
+class PickBody(BaseModel):
+    title: str = "Co-Watch"
+
+
 class RefBody(BaseModel):
     ref: str
 
@@ -757,6 +762,18 @@ async def api_media_open(body: OpenBody, request: Request):
     torrent = body.torrent.model_dump() if body.torrent else None
     asyncio.create_task(ctl.open_media(torrent=torrent, path=body.path, audio=body.audio, stream=stream))
     return {"ok": True}
+
+
+@app.post("/api/media/pick")
+async def api_media_pick(body: PickBody, request: Request):
+    """Opens the file dialog on the host's screen; the path picked comes back to the host's
+    browser, which then opens it like a typed path."""
+    if not is_local(request):
+        raise HTTPException(403, detail="local_files_host_only")
+    try:
+        return {"path": await asyncio.to_thread(filepicker.pick_video, body.title)}
+    except filepicker.PickerError as exc:
+        raise HTTPException(409 if exc.code == "picker_busy" else 501, detail=exc.code) from None
 
 
 # ---- add-ons: everyone can browse and open; only the host changes the list ----------------------

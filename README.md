@@ -72,7 +72,7 @@ The key in the link is the room's password; the browser stores it as a cookie on
 
 ## Usage
 
-1. **Open a film:** for your own file, type its full path into "File path on this computer" (for security, this field only appears on the host computer). For a torrent, paste the magnet link and press "Add torrent"; if it holds several videos, pick one from the list.
+1. **Open a film:** for your own file, press "Browse…" and pick it in the file dialog that opens on the host computer, or type its full path into "File path on this computer" and press "Open file" (for security, both only appear on the host computer). For a torrent, paste the magnet link and press "Add torrent"; if it holds several videos, pick one from the list.
 2. **Browse:** the "Browse" card shows catalogs from [Stremio add-ons](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/protocol.md): posters, search, seasons and episodes, and the sources the add-ons know for a film or episode. "Open" plays a source for everyone. Two add-ons that host no content come built in: Cinemeta (catalogs and details) and Public Domain Movies (films out of copyright). The host can add other add-ons by their `…/manifest.json` address under "Add-ons"; they are kept only on that computer, in `data/addons.json`. For a film opened from an add-on, "Search the add-ons" under "Add subtitles" lists the subtitles those add-ons offer, matched by the film's id and file hash.
 3. **Add subtitles:** under "Add subtitles", search OpenSubtitles by language codes (e.g. `tr,en,ru`) or upload an `.srt/.ass/.vtt` file. Old encodings such as Turkish `cp1254` and Russian `cp1251` are fixed automatically.
 4. **Pick your own subtitles:** uploaded subtitles go to everyone's list, but each viewer picks what shows on their own screen. The "main subtitle" is the large white line at the bottom. The "second subtitle" is optional and shows as a smaller yellow line above it, for watching in two languages at once (you TR + EN, your friend RU + EN). Timing offset, text size and height are personal too. Preferred languages are remembered, so in a new film a subtitle in that language is selected automatically.
@@ -95,7 +95,7 @@ On one computer, with two browser windows:
    ffmpeg -f lavfi -i testsrc=size=1280x720:rate=24 -f lavfi -i "sine=frequency=440" -t 120 -c:v libx264 -g 48 -pix_fmt yuv420p -af volume=0.1 -c:a ac3 -ac 6 samples\test-video.mkv
    ```
 2. Start with `.\.venv\Scripts\python run.py`, open the "Bu bilgisayardan" (this computer) link, type your name and press Join.
-3. Paste the full path of `samples\test-video.mkv` into "File path on this computer". In File Explorer you can right-click the file and choose "Copy as path"; the quotes are fine.
+3. Press "Browse…" and pick `samples\test-video.mkv`, or paste its full path into "File path on this computer". In File Explorer you can right-click the file and choose "Copy as path"; the quotes are fine.
 4. Open the same link in a private window and join under another name.
 5. Under "Add subtitles", upload `samples\test.tr.srt` with language `tr` in the first window and `samples\test.ru.srt` with `ru` in the second. Both use old encodings (cp1254 and cp1251); Turkish and Russian letters should show correctly.
 6. Press play. The second in the subtitle should match the big number on screen, and both windows should stay on the same frame. Try seeking, pausing and the ±0.5 offset.

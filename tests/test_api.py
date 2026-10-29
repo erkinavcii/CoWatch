@@ -62,6 +62,21 @@ def test_host_is_only_the_localhost_link_on_this_computer():
         assert resp.status_code == 403
 
 
+def test_file_dialog_is_for_the_host_only(monkeypatch):
+    import server.filepicker as filepicker
+    monkeypatch.setattr(filepicker, "pick_video", lambda title: r"C:\Films\Film.mkv")
+    with TestClient(app, cookies={"cw_key": KEY}) as guest:
+        assert guest.post("/api/media/pick", json={"title": "x"}).status_code == 403
+    with TestClient(app, base_url="http://localhost:8000", cookies={"cw_key": KEY}, client=("127.0.0.1", 5)) as host:
+        assert host.post("/api/media/pick", json={"title": "x"}).json() == {"path": r"C:\Films\Film.mkv"}
+
+        def busy(title):
+            raise filepicker.PickerError("picker_busy")
+        monkeypatch.setattr(filepicker, "pick_video", busy)
+        resp = host.post("/api/media/pick", json={"title": "x"})
+        assert resp.status_code == 409 and resp.json()["detail"] == "picker_busy"
+
+
 def test_websocket_welcome_ping_and_members():
     with TestClient(app, cookies={"cw_key": KEY}) as client:
         with client.websocket_connect("/ws") as ws:
