@@ -32,7 +32,7 @@ cd torrent-helper; npm.cmd install; cd ..
 
 Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her biri kendi sunucusunu ve test videosunu açar, bir-iki dakika sürer; `--headed` ile pencereler izlenir.
 
-- `tests/e2e/two_viewers.py`: iki pencerede senkron, kişiye özel altyazı (ikinci satır dahil), imlecin bantlı videoda aynı noktaya düşmesi, dürtme sesi, kalemin rengi ve yeri, temizleme, konsol hataları.
+- `tests/e2e/two_viewers.py`: iki pencerede senkron, kişiye özel altyazı (ikinci satır dahil), imlecin bantlı videoda aynı noktaya düşmesi, dürtme sesi, tıklamanın oynatıp durdurması ve çift tıklamanın durdurmadan tam ekrana geçmesi, kalemin rengi ve yeri, temizleme, konsol hataları.
 - `tests/e2e/voice_camera.py`: misafir Tailscale Serve başlığıyla gelir (yerel dosya alanı ona kapalı); host ona film klasörü yetkisi verir, filmi misafir klasörden açar, yetki geri alınır; Chromium'un sahte kamerası ve mikrofon yerine sentezlenmiş konuşmayla ses, konuşan göstergesi, film sesini kısma, yeniden bağlanma, kamera kutuları, tam ekran, `Ctrl+E`; üçüncü izleyiciyle önizleme, 3 kişilik bağlantı, kutuları sürükleme ve küçültme, bağlantıları yeniden kurma.
 
 ```powershell

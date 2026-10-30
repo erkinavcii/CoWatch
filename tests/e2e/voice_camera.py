@@ -245,7 +245,8 @@ def check_camera(host: Page, guest: Page) -> None:
     host.wait_for_function("document.querySelectorAll('#cams .cam').length === 0", timeout=5000)
     ok("camera off: released, and the tiles go away")
 
-    guest.locator("#stage").click(position={"x": 5, "y": 5})  # focus the page, not a field
+    # Focus off any field, without a click on the picture (that would play or pause the film).
+    guest.evaluate("document.activeElement && document.activeElement.blur()")
     guest.keyboard.press("Control+e")
     host.wait_for_function(f"cowatchDebug().members.some(m => m.id === '{guest_id}' && m.cam)", timeout=10000)
     guest.keyboard.press("Control+e")
@@ -351,7 +352,10 @@ def check_third_viewer(browser, base: str, host: Page, guest: Page) -> None:
     box = tile.bounding_box()
     assert box["x"] < stage["x"] + stage["width"] / 2 and box["y"] > stage["y"] + stage["height"] / 2, box
     assert host.locator("#peerPop").is_hidden(), "dropping the tiles opened the volume box"
-    ok("tiles dragged to the bottom left corner")
+    playing = host.evaluate("cowatchDebug().room.playing")
+    host.wait_for_timeout(500)  # a click on the picture would play or pause after 250 ms
+    assert host.evaluate("cowatchDebug().room.playing") == playing, "dropping the tiles played or paused the film"
+    ok("tiles dragged to the bottom left corner, the film left alone")
 
     width = tile.bounding_box()["width"]
     tile.hover()

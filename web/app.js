@@ -519,11 +519,27 @@
   }
   el.pipBtn.addEventListener('click', togglePip);
   el.pipReturn.addEventListener('click', () => { if (PIP.win) PIP.win.close(); });
-  el.stage.addEventListener('dblclick', (e) => { if (!isUi(e.target) && !S.penMode) toggleFullscreen(); });
-  // A click on the picture pokes the others (see presence below); pausing for everyone
-  // takes the button or the space key, so nobody stops the film by accident.
+  el.stage.addEventListener('dblclick', (e) => {
+    clearTimeout(clickTimer);
+    if (!isUi(e.target) && !S.penMode) toggleFullscreen();
+  });
+  // A click on the picture plays or pauses for everyone, and pokes the others too (see
+  // presence below). It waits a moment, so a double click goes fullscreen without also
+  // pausing and playing. On a touch screen a tap only shows the controls.
+  // Only a press that began on the picture and stayed put counts: letting go of a dragged
+  // camera tile or a pen stroke over the picture is not a click.
+  let clickTimer = null;
+  let pressAt = null;
+  el.stage.addEventListener('pointerdown', (e) => { pressAt = { x: e.clientX, y: e.clientY, ui: isUi(e.target) }; });
   el.stage.addEventListener('click', (e) => {
-    if (!isUi(e.target) && S.autoplayBlocked) video.play().catch(() => {});
+    if (isUi(e.target)) return;
+    if (S.autoplayBlocked) { video.play().catch(() => {}); return; }
+    clearTimeout(clickTimer);
+    const press = pressAt;
+    pressAt = null;
+    if (!press || press.ui || Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) return;
+    if (e.detail > 1 || S.penMode || e.pointerType === 'touch' || screen.owner) return;
+    clickTimer = setTimeout(togglePlay, 250);
   });
 
   document.addEventListener('keydown', (e) => {

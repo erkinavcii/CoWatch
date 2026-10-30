@@ -224,7 +224,7 @@ def run(headed: bool) -> None:
             check("the ball carries the name and colour", ball["name"] == "Erkin" and ball["color"] == color["Erkin"],
                   f"{ball['name']} {ball['color']}")
 
-            # ---- poke: blink, ring and sound for both; the film neither starts nor stops
+            # ---- poke: blink, ring and sound for both; the same click plays or pauses for everyone
             sounds = (a.evaluate("() => window.__sounds"), b.evaluate("() => window.__sounds"))
             playing = a.evaluate(f"() => {DBG}.room.playing")
             a.mouse.down()
@@ -238,8 +238,26 @@ def run(headed: bool) -> None:
             time.sleep(0.4)
             after = (a.evaluate("() => window.__sounds"), b.evaluate("() => window.__sounds"))
             check("a click plays the poke sound in both windows", after[0] > sounds[0] and after[1] > sounds[1], f"{sounds} -> {after}")
-            check("a click on the picture does not start or stop the film",
-                  a.evaluate(f"() => {DBG}.room.playing") == playing and b.evaluate(f"() => {DBG}.room.playing") == playing)
+            flipped = f"() => {DBG}.room.playing === {'false' if playing else 'true'}"
+            try:
+                a.wait_for_function(flipped, timeout=3000)
+                b.wait_for_function(flipped, timeout=3000)
+                toggled = True
+            except PlaywrightTimeout:
+                toggled = False
+            check("a click on the picture plays or pauses for everyone", toggled)
+            time.sleep(0.6)  # past the double-click interval, so this is a click of its own
+            a.mouse.down()  # and back, for the checks below
+            a.mouse.up()
+            a.wait_for_function(f"() => {DBG}.room.playing === {'true' if playing else 'false'}", timeout=3000)
+            time.sleep(0.6)
+            a.dblclick("#stage", position={"x": 300, "y": 200})
+            a.wait_for_function("() => document.fullscreenElement", timeout=3000)
+            time.sleep(0.5)
+            check("a double click goes fullscreen without playing or pausing",
+                  a.evaluate(f"() => {DBG}.room.playing") == playing)
+            a.evaluate("() => document.exitFullscreen()")
+            a.wait_for_function("() => !document.fullscreenElement")
 
             # ---- pen: a line drawn in A shows in B at the same place, in A's colour
             blur(a)
