@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocketState
 
-from .addons import AddonError, AddonStore, episode_label, magnet
+from .addons import AddonError, AddonStore, episode_label, magnet, subtitle_key
 from .config import CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
 from . import filepicker, library, stremio, tailscale
 from .stremio import StremioError
@@ -125,7 +125,11 @@ class Controller:
         return self.session.public() if self.ready else None
 
     def tracks(self) -> list[dict]:
-        return self.store.list(self.session.source.media_key) if self.session else []
+        if not self.session:
+            return []
+        # An add-on's track carries the key its entry in the add-on list has (see addon_subtitles).
+        return [{**t, "key": subtitle_key(t["url"])} if t.get("url") else t
+                for t in self.store.list(self.session.source.media_key)]
 
     async def status(self, key: str, level: str = "info", **params) -> None:
         await self.room.broadcast({"type": "status", "key": key, "level": level, "params": params})
@@ -529,12 +533,9 @@ class Controller:
         src = session.source
         if not src.content_id:
             return []
-        found = await self.addons.subtitles(src.content_type, src.content_id, src.moviehash, src.size, src.title)
-        added = {t.get("url") for t in self.tracks()}
-        for sub in found:
-            item = self.addons.lookup(sub["ref"])
-            sub["added"] = bool(item and item["url"] in added)
-        return found
+        # Each carries a `key`; a track made from it has the same one, so the page sees which
+        # are in the room (and which no longer are, after a delete) without a new search.
+        return await self.addons.subtitles(src.content_type, src.content_id, src.moviehash, src.size, src.title)
 
     async def add_addon_subtitle(self, ref: str) -> dict:
         session = self._require_session()
@@ -543,13 +544,13 @@ class Controller:
             raise HTTPException(404, detail="unknown_subtitle")
         existing = self.store.find(session.source.media_key, url=item["url"])
         if existing:
-            return existing
+            return {**existing, "key": subtitle_key(item["url"])}
         data = await self.addons.download(item["url"], MAX_SUBTITLE_BYTES)
         cues = parse_cues(decode_bytes(data, item["lang"]))
-        track = self.store.add(session.source.media_key, item["lang"], item["addon"], "addon", cues,
+        track = self.store.add(session.source.media_key, item["lang"], item.get("label") or item["addon"], "addon", cues,
                                extra={"url": item["url"]})
         await self.broadcast_tracks()
-        return track
+        return {**track, "key": subtitle_key(item["url"])}
 
     # ---- background loops ---------------------------------------------------------------
     async def progress_loop(self) -> None:

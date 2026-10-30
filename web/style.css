@@ -310,6 +310,8 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .track-list .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .track-list .badge { font-size: 11px; color: var(--ok); white-space: nowrap; }
 .track-list button { padding: 3px 8px; font-size: 12px; }
+.track-list .badge.on { padding: 1px 7px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.track-list li.on { border-color: var(--accent); }
 
 /* ---- browse: add-on catalogs, a title's episodes and sources ---- */
 .card.wide { grid-column: 1 / -1; }
@@ -411,7 +413,7 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 /* ---- text chat: a panel over the bottom left of the picture; while it is closed, new messages peek there ---- */
 .chat-btn { position: relative; margin-left: 6px; }
 .chat-btn.on { background: rgba(255, 255, 255, .18); }
-.badge {
+.chat-btn .badge {
   position: absolute; top: 0; right: -3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
   background: var(--accent); color: var(--accent-ink); font-size: 10.5px; font-weight: 700; line-height: 16px; pointer-events: none;
 }

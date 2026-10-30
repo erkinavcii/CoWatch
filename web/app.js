@@ -1784,6 +1784,7 @@
     ensureCues(S.primary);
     ensureCues(S.secondary);
     renderTracks();
+    if (AS.list.length) renderAddonSubs(); // added and deleted ones change their buttons
   }
 
   function selectTrack (slot, trackId) {
@@ -2688,25 +2689,39 @@
     const li = document.createElement('li');
     const lang = document.createElement('span'); lang.className = 'lang'; lang.textContent = sub.lang.toUpperCase();
     const label = document.createElement('span'); label.className = 'label';
-    label.textContent = `${langName(sub.lang)} · ${sub.addon}`;
+    label.textContent = `${langName(sub.lang)} · ${sub.label || sub.addon}`;
     li.append(lang, label);
-    const add = document.createElement('button'); add.type = 'button'; add.className = 'ghost';
-    add.textContent = sub.added ? t('subs_addons_added') : t('addons_add');
-    add.disabled = !!sub.added;
-    add.addEventListener('click', async () => {
-      add.disabled = true;
-      try {
-        const track = await api('/api/addons/subtitles', { json: { ref: sub.ref } });
-        toast(t('uploaded', { label: track.label }));
-        sub.added = true; // stays marked when the list is filtered or paged again
-        add.textContent = t('subs_addons_added');
-        if (!S.primary) selectTrack('primary', track.id);
-      } catch (err) {
-        add.disabled = false;
-        toast(errorText(err), 'error');
-      }
-    });
-    li.appendChild(add);
+    const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'ghost';
+    // Already in the room (a track has its key): one click makes it the main subtitle. Deleted
+    // from the room: back to "Add", since the list follows the tracks.
+    const track = S.tracks.find((tr) => tr.key === sub.key);
+    if (track && track.id === S.primary) {
+      btn.textContent = t('subs_addons_on');
+      btn.disabled = true;
+      li.classList.add('on');
+    } else if (track) {
+      btn.textContent = t('subs_addons_use');
+      btn.addEventListener('click', () => selectTrack('primary', track.id));
+    } else {
+      btn.textContent = t('addons_add');
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        try {
+          const added = await api('/api/addons/subtitles', { json: { ref: sub.ref } });
+          toast(t('uploaded', { label: added.label }));
+          // Trying another one in the same language (the last was out of step, say) switches to it.
+          const current = S.tracks.find((tr) => tr.id === S.primary);
+          if (!current || current.lang === added.lang) {
+            if (!S.tracks.some((tr) => tr.id === added.id)) S.tracks = [...S.tracks, added]; // before the broadcast
+            selectTrack('primary', added.id);
+          }
+        } catch (err) {
+          btn.disabled = false;
+          toast(errorText(err), 'error');
+        }
+      });
+    }
+    li.appendChild(btn);
     return li;
   }
 
@@ -2977,6 +2992,11 @@
       const lang = document.createElement('span'); lang.className = 'lang'; lang.textContent = track.lang.toUpperCase();
       const label = document.createElement('span'); label.className = 'label'; label.textContent = track.label; label.title = track.label;
       li.append(lang, label);
+      for (const [slot, key] of [[S.primary, 'subs_is_primary'], [S.secondary, 'subs_is_secondary']]) {
+        if (slot !== track.id) continue;
+        const tag = document.createElement('span'); tag.className = 'badge on'; tag.textContent = t(key);
+        li.appendChild(tag);
+      }
       if (track.hashMatch) {
         const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = t('hash_match');
         li.appendChild(badge);

@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import server.addons as addons
-from server.addons import AddonError, AddonStore, episode_label, magnet, manifest_url, subtitle_lang
+from server.addons import AddonError, AddonStore, episode_label, magnet, manifest_url, subtitle_key, subtitle_lang
 from server.main import app, ctl
 
 KEY = "test-key"
@@ -60,6 +60,8 @@ def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"subtitles": [
             {"id": "1", "url": "https://subs.example/1.srt", "lang": "tur"},
             {"id": "2", "url": "ftp://subs.example/2.srt", "lang": "eng"},
+            {"id": "3", "url": "https://subs.example/3.srt", "lang": "tur"},
+            {"id": "4", "url": "https://subs.example/4.srt", "lang": "eng"},
         ]})
     if host == "subs.example":
         return httpx.Response(200, content="1\n00:00:01,000 --> 00:00:02,000\nMerhaba\n".encode())
@@ -132,8 +134,12 @@ def test_streams_come_back_as_references(store):
 def test_subtitles_from_addons(store):
     run(store.add(STREAMS))
     subs = run(store.subtitles("movie", "tt0012349", "00ff00ff00ff00ff", 1234, "kid.mkv"))
-    assert [(s["lang"], s["addon"]) for s in subs] == [("tr", "Streams")]  # the ftp one is dropped
+    # The ftp one is dropped; two in one language are told apart by number, a lone one is not.
+    assert [(s["lang"], s["label"]) for s in subs] == [("tr", "Streams #1"), ("tr", "Streams #2"), ("en", "Streams")]
+    assert all(s["addon"] == "Streams" for s in subs)
+    assert len({s["key"] for s in subs}) == 3 and subs[0]["key"] == subtitle_key("https://subs.example/1.srt")
     item = store.lookup(subs[0]["ref"])
+    assert item["label"] == "Streams #1" and "url" not in subs[0]  # the page gets no address
     assert run(store.download(item["url"], 1000)).startswith(b"1\n")
     with pytest.raises(AddonError) as info:
         run(store.download(item["url"], 10))

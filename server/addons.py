@@ -11,11 +11,12 @@ request arbitrary URLs."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import secrets
 import time
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -424,13 +425,20 @@ class AddonStore:
                 data = await self._get(addon, "subtitles", kind, item_id, extra)
             except AddonError:
                 continue
+            found = []
             for sub in (data.get("subtitles") or [])[:300]:
                 url = _web_url(sub.get("url")) if isinstance(sub, dict) else None
-                if not url:
-                    continue
-                lang = subtitle_lang(sub.get("lang"))
-                ref = self._remember({"kind": "subtitle", "url": url, "lang": lang, "addon": addon.name})
-                out.append({"ref": ref, "lang": lang, "addon": addon.name})
+                if url:
+                    found.append((url, subtitle_lang(sub.get("lang"))))
+            # Add-ons give no names, only addresses: several in one language are told apart by
+            # number, in the add-on's order (usually best match first).
+            total = Counter(lang for _, lang in found)
+            seen: Counter = Counter()
+            for url, lang in found:
+                seen[lang] += 1
+                label = f"{addon.name} #{seen[lang]}" if total[lang] > 1 else addon.name
+                ref = self._remember({"kind": "subtitle", "url": url, "lang": lang, "addon": addon.name, "label": label})
+                out.append({"ref": ref, "lang": lang, "addon": addon.name, "label": label, "key": subtitle_key(url)})
         return out
 
     async def download(self, url: str, limit: int) -> bytes:
@@ -445,6 +453,12 @@ class AddonStore:
         if len(resp.content) > limit:
             raise AddonError("file too large", "file_too_large")
         return resp.content
+
+
+def subtitle_key(url: str) -> str:
+    """Ties a subtitle in an add-on's list to the track made from it, without giving the
+    browser its address."""
+    return hashlib.sha1(url.encode()).hexdigest()[:12]
 
 
 def magnet(info_hash: str, name: str, trackers: list[str]) -> str:
