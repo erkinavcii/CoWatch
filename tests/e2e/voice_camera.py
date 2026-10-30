@@ -349,8 +349,10 @@ def check_third_viewer(browser, base: str, host: Page, guest: Page) -> None:
     host.mouse.move(stage["x"] + 80, stage["y"] + stage["height"] - 120, steps=10)
     host.mouse.up()
     host.wait_for_function("document.querySelector('#camsBox').parentNode.id === 'sideLeft'", timeout=3000)
-    box = tile.bounding_box()
-    assert box["x"] < stage["x"] + stage["width"] / 2 and box["y"] > stage["y"] + stage["height"] / 2, box
+    # The whole stack sits in the bottom left; with the chat column beside it the picture is short
+    # enough that the top tile of three may reach above the middle.
+    box = host.locator("#camsBox").bounding_box()
+    assert box["x"] < stage["x"] + stage["width"] / 2 and box["y"] + box["height"] > stage["y"] + stage["height"] * 0.75, box
     assert host.locator("#peerPop").is_hidden(), "dropping the tiles opened the volume box"
     playing = host.evaluate("cowatchDebug().room.playing")
     host.wait_for_timeout(500)  # a click on the picture would play or pause after 250 ms

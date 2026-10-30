@@ -57,6 +57,7 @@
     awayMsg: $('#awayMsg'), pipReturn: $('#pipReturn'),
     chatBtn: $('#chatBtn'), chatBadge: $('#chatBadge'), chatBox: $('#chatBox'), chatClose: $('#chatClose'),
     chatLog: $('#chatLog'), chatForm: $('#chatForm'), chatInput: $('#chatInput'), chatPeek: $('#chatPeek'),
+    watch: $('#watch'), chatDock: $('#chatDock'),
   };
   const video = el.video;
   // Screen sharing (see "screen sharing" below): who shares, who waits for an answer, and my
@@ -69,7 +70,7 @@
     name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '', offsetMs: 0,
     fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false, color: '', sfx: true,
     micDevice: '', duck: true, peerVolume: {}, micHintShown: false, camDevice: '', showSelf: true, showCams: true,
-    camCorner: 'tr', camsSmall: false, browseCatalog: '',
+    camCorner: 'tr', camsSmall: false, browseCatalog: '', chatDock: true,
   };
   const prefs = (() => {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULT_PREFS }; }
@@ -463,6 +464,7 @@
     MINI.visible = entries[0].isIntersecting;
     if (MINI.visible) MINI.off = false; // closed for this trip down the page only
     renderMini();
+    if (CHAT.unread) renderChat(); // scrolled back to the chat column
   }, { threshold: 0.2 }).observe(el.stageWrap);
 
   function renderMini () {
@@ -496,6 +498,7 @@
     el.stage.classList.remove('mini');
     el.stage.classList.add('pip');
     win.document.body.appendChild(el.stage);
+    placeChat(); // the column stays behind: the panel goes along, over the picture
     resumeAfterMove();
     el.stageWrap.classList.add('away');
     el.awayMsg.hidden = false;
@@ -514,6 +517,7 @@
       el.stageWrap.style.height = '';
       PIP.win = null;
       renderMini();
+      placeChat();
     });
     win.requestAnimationFrame(pipFrame);
   }
@@ -2726,14 +2730,18 @@
   }
 
   // ---------------------------------------------------------------- text chat
-  // A panel over the bottom left of the picture, so it stays in fullscreen and in the
-  // always-on-top window. The server keeps the last messages for those who join later and
-  // sends each one back to its sender too, so everyone sees them in the same order. While
-  // the panel is closed, new messages show there for a few seconds and count on the button.
-  const CHAT = { open: false, unread: 0, messages: [] };
+  // On a wide screen the chat is a column right of the film, open unless closed (kept in
+  // prefs). In fullscreen, in the always-on-top window and on narrow screens the same panel
+  // moves over the bottom left of the picture instead, closed until asked for. The server
+  // keeps the last messages for those who join later and sends each one back to its sender
+  // too, so everyone sees them in the same order. Messages nobody sees (the panel is closed,
+  // or the page is scrolled away from it) peek over the picture for a few seconds and count
+  // on the button.
+  const CHAT = { overlay: false, unread: 0, messages: [] };
   const CHAT_KEEP = 100; // as many as the server keeps
   const CHAT_PEEK_MS = 7000;
   const CHAT_PEEK_MAX = 3;
+  const wideScreen = window.matchMedia('(min-width: 1100px)');
 
   function chatLine (msg) {
     const li = document.createElement('li');
@@ -2752,8 +2760,33 @@
     el.chatLog.replaceChildren(...CHAT.messages.map(chatLine));
     el.chatLog.scrollTop = el.chatLog.scrollHeight;
   }
-  // Seen only with the panel open on the stage: in the corner box it is hidden.
-  const chatSeen = () => CHAT.open && !el.stage.classList.contains('mini');
+  const chatDocked = () => el.chatBox.parentNode === el.chatDock;
+  const chatOpen = () => (chatDocked() ? prefs.chatDock : CHAT.overlay);
+  // In sight: the column while its part of the page is on screen, the panel unless the film
+  // is in the corner box (where it is hidden).
+  const chatSeen = () => chatOpen() && (chatDocked() ? MINI.visible : !el.stage.classList.contains('mini'));
+
+  function placeChat () {
+    const fs = (document.fullscreenElement || document.webkitFullscreenElement) === el.stage;
+    const parent = wideScreen.matches && !fs && !PIP.win ? el.chatDock : el.stage;
+    if (el.chatBox.parentNode !== parent) parent.appendChild(el.chatBox);
+    renderChat();
+  }
+  function renderChat () {
+    const open = chatOpen();
+    const docked = chatDocked();
+    el.watch.classList.toggle('docked', docked && open);
+    el.chatBox.hidden = !open;
+    el.stage.classList.toggle('chat-open', open && !docked);
+    if (chatSeen() && CHAT.unread) {
+      CHAT.unread = 0;
+      el.chatPeek.replaceChildren();
+      el.chatLog.scrollTop = el.chatLog.scrollHeight;
+    }
+    el.chatBtn.classList.toggle('on', open);
+    el.chatBadge.hidden = !CHAT.unread;
+    el.chatBadge.textContent = CHAT.unread > 99 ? '99+' : String(CHAT.unread);
+  }
   function onChat (msg) {
     CHAT.messages.push(msg);
     if (CHAT.messages.length > CHAT_KEEP) CHAT.messages.shift();
@@ -2765,35 +2798,31 @@
     if (atEnd || own) log.scrollTop = log.scrollHeight;
     if (own || chatSeen()) return;
     CHAT.unread += 1;
-    renderChatBtn();
-    if (CHAT.open) return;
+    renderChat();
+    if (chatOpen() && !chatDocked()) return; // the panel is open, only the corner box hides it
     const node = chatLine(msg);
     el.chatPeek.appendChild(node);
     while (el.chatPeek.children.length > CHAT_PEEK_MAX) el.chatPeek.firstChild.remove();
     setTimeout(() => { node.classList.add('gone'); setTimeout(() => node.remove(), 400); }, CHAT_PEEK_MS);
   }
-  function renderChatBtn () {
-    el.chatBtn.classList.toggle('on', CHAT.open);
-    el.chatBadge.hidden = !CHAT.unread;
-    el.chatBadge.textContent = CHAT.unread > 99 ? '99+' : String(CHAT.unread);
-  }
   function setChat (open) {
-    CHAT.open = open;
-    el.chatBox.hidden = !open;
-    el.stage.classList.toggle('chat-open', open);
+    if (chatDocked()) { prefs.chatDock = open; savePrefs(); } else CHAT.overlay = open;
+    renderChat();
     if (open) {
-      CHAT.unread = 0;
       el.chatPeek.replaceChildren();
       el.chatLog.scrollTop = el.chatLog.scrollHeight;
       el.chatInput.focus();
     } else if (el.chatInput.ownerDocument.activeElement === el.chatInput) {
       el.chatInput.blur(); // the keys are the player's again
     }
-    renderChatBtn();
   }
-  el.chatBtn.addEventListener('click', () => setChat(!CHAT.open));
+  el.chatBtn.addEventListener('click', () => setChat(!chatOpen()));
   el.chatClose.addEventListener('click', () => setChat(false));
-  el.chatInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); setChat(false); } });
+  el.chatInput.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    if (chatDocked()) el.chatInput.blur(); else setChat(false); // the column stays, the panel goes
+  });
   el.chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const text = el.chatInput.value.trim();
@@ -2802,9 +2831,12 @@
     send({ type: 'chat', text });
     el.chatInput.value = '';
   });
-  // Back from the corner box with the panel open: what came meanwhile is now in sight.
-  new MutationObserver(() => { if (chatSeen() && CHAT.unread) { CHAT.unread = 0; renderChatBtn(); } })
+  wideScreen.addEventListener('change', placeChat);
+  document.addEventListener('fullscreenchange', placeChat);
+  // Back from the corner box: what came meanwhile is now in sight.
+  new MutationObserver(() => { if (chatSeen() && CHAT.unread) renderChat(); })
     .observe(el.stage, { attributes: true, attributeFilter: ['class'] });
+  placeChat();
 
   // ---------------------------------------------------------------- join
   el.nameInput.value = prefs.name;

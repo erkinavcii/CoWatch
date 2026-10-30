@@ -281,36 +281,57 @@ def run(headed: bool) -> None:
             toasts = a.evaluate("() => [...document.querySelectorAll('.toast')].map(t => t.textContent).join(' | ')")
             check("clearing removes the drawings for everyone and says who did it", "Masha" in toasts, toasts)
 
-            # ---- chat: B writes with the panel open, A sees it peek over the picture and on the button
+            # ---- chat: A's wide window has it as a column right of the film, B's narrow one over the picture
             blur(a)
             a.keyboard.press("d")  # pen off
+            dock = a.evaluate("""() => { const box = document.querySelector('#chatBox');
+              const c = box.getBoundingClientRect(), s = document.querySelector('#stage').getBoundingClientRect();
+              return {docked: box.parentNode.id === 'chatDock', open: !box.hidden,
+                      beside: c.left >= s.right && Math.abs(c.top - s.top) < 2 && Math.abs(c.height - s.height) < 2}; }""")
+            check("on a wide screen the chat is an open column right of the film, as tall as it", all(dock.values()), str(dock))
             blur(b)
             b.keyboard.press("c")
-            check("c opens the chat with the cursor in an empty box",
-                  b.evaluate("() => !document.querySelector('#chatBox').hidden && document.activeElement.id === 'chatInput'"
-                             " && document.querySelector('#chatInput').value === ''"))
+            check("on a narrow one c opens it over the picture with the cursor in an empty box",
+                  b.evaluate("() => document.querySelector('#chatBox').parentNode.id === 'stage' && !document.querySelector('#chatBox').hidden"
+                             " && document.activeElement.id === 'chatInput' && document.querySelector('#chatInput').value === ''"))
             b.keyboard.type("Merhaba <b>herkes</b>")
             b.keyboard.press("Enter")
-            b.wait_for_function("() => document.querySelector('#chatLog').textContent.includes('Merhaba')", timeout=3000)
-            a.wait_for_function("() => document.querySelector('#chatPeek .chat-msg')", timeout=3000)
-            peek = a.evaluate("""() => { const m = document.querySelector('#chatPeek .chat-msg');
+            a.wait_for_function("() => document.querySelector('#chatLog').textContent.includes('Merhaba')", timeout=3000)
+            line = a.evaluate("""() => { const m = document.querySelector('#chatLog .chat-msg:last-child');
               return {text: m.textContent, html: m.querySelector('span').innerHTML, color: m.style.getPropertyValue('--c'),
-                      badge: document.querySelector('#chatBadge').hidden ? '' : document.querySelector('#chatBadge').textContent}; }""")
-            check("a message shows over the other window's picture as plain text, with the sender's name and colour",
-                  peek["text"] == "MashaMerhaba <b>herkes</b>" and "<b>" not in peek["html"] and peek["color"] == color["Masha"],
-                  str(peek))
-            check("the closed chat counts the unread message", peek["badge"] == "1", peek["badge"])
-            playing = a.evaluate(f"() => {DBG}.room.playing")
+                      badge: !document.querySelector('#chatBadge').hidden, peek: document.querySelectorAll('#chatPeek .chat-msg').length}; }""")
+            check("the message reaches the column as plain text, with the sender's name and colour, nothing unread",
+                  line["text"] == "MashaMerhaba <b>herkes</b>" and "<b>" not in line["html"] and line["color"] == color["Masha"]
+                  and not line["badge"] and not line["peek"], str(line))
+
+            a.click("#chatClose")
+            check("closing the column gives the film its room back",
+                  a.evaluate("() => !document.querySelector('#watch').classList.contains('docked')"))
+            b.keyboard.type("ikinci")
+            b.keyboard.press("Enter")
+            a.wait_for_function("() => document.querySelector('#chatPeek .chat-msg')", timeout=3000)
+            badge = a.evaluate("() => document.querySelector('#chatBadge').hidden ? '' : document.querySelector('#chatBadge').textContent")
+            check("with the column closed a message peeks over the picture and counts", badge == "1", badge)
             a.click("#chatBtn")
-            a.click("#chatLog")
-            time.sleep(0.6)
-            seen = a.evaluate("""() => ({log: document.querySelector('#chatLog').textContent,
+            time.sleep(0.3)
+            seen = a.evaluate("""() => ({docked: document.querySelector('#watch').classList.contains('docked'),
               badge: document.querySelector('#chatBadge').hidden, peek: document.querySelectorAll('#chatPeek .chat-msg').length})""")
-            check("opening the chat clears the count and shows the message", seen["badge"] and not seen["peek"]
-                  and "Merhaba" in seen["log"], str(seen))
-            check("a click in the chat neither pauses nor pokes", a.evaluate(f"() => {DBG}.room.playing") == playing)
+            check("the button brings the column back and clears the count", seen["docked"] and seen["badge"] and not seen["peek"], str(seen))
+
+            a.evaluate("() => document.querySelector('#stage').requestFullscreen()")
+            a.wait_for_function("() => document.fullscreenElement && document.querySelector('#chatBox').parentNode.id === 'stage'", timeout=3000)
+            check("in fullscreen the chat moves over the picture, closed", a.evaluate("() => document.querySelector('#chatBox').hidden"))
+            a.evaluate("() => document.exitFullscreen()")
+            a.wait_for_function("() => !document.fullscreenElement && document.querySelector('#chatBox').parentNode.id === 'chatDock'",
+                                timeout=3000)
+
+            playing = b.evaluate(f"() => {DBG}.room.playing")
+            b.click("#chatLog")
+            time.sleep(0.6)
+            check("a click in the panel over the picture neither pauses nor pokes", b.evaluate(f"() => {DBG}.room.playing") == playing)
+            b.click("#chatInput")
             b.keyboard.press("Escape")
-            check("Escape closes the chat", b.evaluate("() => document.querySelector('#chatBox').hidden"))
+            check("Escape closes the panel", b.evaluate("() => document.querySelector('#chatBox').hidden"))
 
             check("no errors in either window", not errors, " || ".join(errors))
             browser.close()

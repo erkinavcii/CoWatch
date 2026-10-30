@@ -425,7 +425,8 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .stage.chat-open .side.left { left: calc(20px + min(340px, 42%)); } /* camera tiles move beside it */
 .chat-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 4px 12px; font-size: 13px; color: var(--muted); }
 .chat-close { padding: 2px 8px; border: 0; background: transparent; font-size: 13px; }
-.chat-log { flex: 1 1 auto; min-height: 40px; overflow-y: auto; margin: 0; padding: 0 12px 6px; list-style: none; display: grid; align-content: start; gap: 4px; }
+.chat-log { flex: 1 1 auto; min-height: 40px; overflow-y: auto; margin: 0; padding: 0 12px 6px; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.chat-log > :first-child { margin-top: auto; } /* the newest sit right above the box, as in any chat */
 .chat-msg { font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere; }
 .chat-msg b { color: var(--c, var(--text)); margin-right: 6px; }
 .chat-form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--line); }
@@ -440,6 +441,23 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 @keyframes peek-in { from { opacity: 0; transform: translateY(6px); } }
 .stage.idle .chat-peek { bottom: 20px; } /* the controls are hidden: down to the corner */
 .stage:fullscreen .chat-msg { font-size: 15px; }
+
+/* On a wide screen the chat is a column right of the film, as tall as the film. It is placed
+   absolutely in its cell, so a long chat never makes the row (and the film) taller. */
+.watch { display: grid; gap: 16px; }
+.watch:not(.docked) .chat-dock { display: none; }
+@media (min-width: 1100px) {
+  .layout:has(> .watch.docked) { max-width: 1756px; }
+  .watch.docked { grid-template-columns: minmax(0, calc(78vh * 16 / 9)) 340px; justify-content: center; }
+}
+.chat-dock { position: relative; min-height: 0; }
+.chat-dock .chat {
+  inset: 0; width: auto; max-height: none; z-index: auto;
+  background: var(--panel); border-radius: var(--radius); box-shadow: none;
+}
+.chat-dock .chat-head { padding: 8px 8px 8px 14px; font-size: 14px; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--line); }
+.chat-dock .chat-log { padding: 8px 14px; }
+.chat-dock .chat-msg { font-size: 14px; }
 
 /* ---- the player follows: a corner box when scrolled away, or its own always-on-top window ---- */
 .stage-wrap { position: relative; scroll-margin-top: 64px; } /* clear of the sticky header */
