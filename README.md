@@ -1,8 +1,16 @@
 # Co-Watch
 
-**English** · [Türkçe](README.tr.md)
+**English** · [Türkçe](README.tr.md) · [![tests](https://github.com/erkinavcii/CoWatch/actions/workflows/tests.yml/badge.svg)](https://github.com/erkinavcii/CoWatch/actions/workflows/tests.yml)
 
 Watch the same film at the same time with friends far away, while everyone picks their own subtitle language. You can watch with Turkish + English subtitles while your friend sees Russian + English.
+
+![Two viewers of the same film at the same moment: on the left Turkish and English subtitles with the chat beside the film, on the right Russian subtitles. Both see each other's pointer and the circle drawn with the pen.](docs/images/two-viewers.png)
+
+- **Your own subtitles:** each viewer picks a main and a second subtitle language; the film stays in sync for everyone.
+- **Original quality, your own computer:** the host's file or torrent is streamed as it is when the browsers can play it (through Funnel, heavy files are converted to fit its bandwidth); no upload, no account, no server to rent.
+- **One link for friends:** with Tailscale Funnel a friend needs only a browser.
+- **Together:** voice, camera, screen sharing, chat, and pointers and a pen over the picture that land on the same spot of the film on every screen.
+- **Stremio add-ons:** catalogs, sources and subtitles from add-ons you choose; only add-ons that host no content come built in.
 
 Phase 1 (MVP): your own video file or a torrent → streamed in original quality (no re-encoding) → synced playback in everyone's browser + personal dual subtitles.
 
@@ -174,7 +182,7 @@ python tests/e2e/two_viewers.py       # sync, subtitles, pointers, pokes, pen, c
 python tests/e2e/voice_camera.py      # voice and camera
 ```
 
-Each browser test starts its own server and test video and opens Chromium windows. `two_viewers.py` checks sync, each viewer's own subtitles, that a pointer lands on the same spot of a letterboxed picture on another screen size, poke sounds, the pen and clearing, and the chat. `voice_camera.py` joins as a friend coming through Tailscale Serve and checks voice, the camera tiles, a third viewer joining from the preview, and connections rebuilding themselves (with Chromium's fake camera, and synthesised speech as the microphone).
+Each browser test starts its own server and test video and opens Chromium windows. `two_viewers.py` checks sync, each viewer's own subtitles, that a pointer lands on the same spot of a letterboxed picture on another screen size, poke sounds, the pen and clearing, and the chat. GitHub Actions runs `pytest` on Windows and Linux for every push. `voice_camera.py` joins as a friend coming through Tailscale Serve and checks voice, the camera tiles, a third viewer joining from the preview, and connections rebuilding themselves (with Chromium's fake camera, and synthesised speech as the microphone).
 
 In the browser console, `cowatchDebug()` shows the sync values (film time, expected position, drift).
 

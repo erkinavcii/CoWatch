@@ -1,8 +1,16 @@
 # Co-Watch
 
-[English](README.md) · **Türkçe**
+[English](README.md) · **Türkçe** · [![tests](https://github.com/erkinavcii/CoWatch/actions/workflows/tests.yml/badge.svg)](https://github.com/erkinavcii/CoWatch/actions/workflows/tests.yml)
 
 Uzaktaki arkadaşlarınla aynı filmi aynı anda izle; herkes kendi altyazı dilini seçsin. Sen Türkçe + İngilizce görürken karşı taraf Rusça + İngilizce görebilir.
+
+![Aynı filmi aynı anda izleyen iki kişi: solda Türkçe ve İngilizce altyazı, filmin yanında sohbet; sağda Rusça altyazı. İkisi de birbirinin imlecini ve kalemle çizilen halkayı görüyor.](docs/images/two-viewers.png)
+
+- **Herkese kendi altyazısı:** her izleyici bir ana ve bir ikinci altyazı dili seçer; film herkeste senkron kalır.
+- **Orijinal kalite, kendi bilgisayarın:** host'un dosyası ya da torrent'i, tarayıcılar oynatabiliyorsa olduğu gibi akar (Funnel üzerinden ağır dosyalar onun bant genişliğine göre dönüştürülür); yükleme yok, hesap yok, kiralık sunucu yok.
+- **Arkadaşa tek link:** Tailscale Funnel'la arkadaşın sadece tarayıcı açar.
+- **Birlikte:** ses, kamera, ekran paylaşımı, sohbet; videonun üstünde her ekranda filmin aynı yerine düşen imleçler ve kalem.
+- **Stremio eklentileri:** seçtiğin eklentilerden katalog, kaynak ve altyazı; hazır gelenler sadece içerik barındırmayan eklentiler.
 
 Faz 1 (MVP): kendi video dosyan ya da bir torrent → orijinal kalitede akış (yeniden encode yok) → herkesin tarayıcısında senkron oynatma + kişiye özel çift altyazı.
 
@@ -174,7 +182,7 @@ python tests/e2e/two_viewers.py       # senkron, altyazı, imleç, dürtme, kale
 python tests/e2e/voice_camera.py      # ses ve kamera
 ```
 
-Her tarayıcı testi kendi sunucusunu ve test videosunu başlatıp Chromium pencereleri açar. `two_viewers.py` senkronu, herkesin kendi altyazısını, imlecin bantlı videoda başka ekran boyutunda da aynı noktaya düştüğünü, dürtme sesini, kalemi, temizlemeyi ve sohbeti dener. `voice_camera.py` Tailscale Serve'den gelen bir arkadaş olarak katılır; sesi, kamera kutularını, önizlemeden katılan üçüncü bir izleyiciyi ve bağlantıların kendiliğinden yeniden kurulmasını dener (Chromium'un sahte kamerası, mikrofon yerine sentezlenmiş konuşma).
+Her tarayıcı testi kendi sunucusunu ve test videosunu başlatıp Chromium pencereleri açar. `two_viewers.py` senkronu, herkesin kendi altyazısını, imlecin bantlı videoda başka ekran boyutunda da aynı noktaya düştüğünü, dürtme sesini, kalemi, temizlemeyi ve sohbeti dener. GitHub Actions her push'ta `pytest`'i Windows ve Linux'ta koşturur. `voice_camera.py` Tailscale Serve'den gelen bir arkadaş olarak katılır; sesi, kamera kutularını, önizlemeden katılan üçüncü bir izleyiciyi ve bağlantıların kendiliğinden yeniden kurulmasını dener (Chromium'un sahte kamerası, mikrofon yerine sentezlenmiş konuşma).
 
 Tarayıcı konsolunda `cowatchDebug()` senkron değerlerini gösterir (film zamanı, beklenen konum, fark).
 

@@ -40,18 +40,31 @@ class Client:
         self.buffering_since: Optional[float] = None
         self.alive = True
         self._lock = asyncio.Lock()
+        self._waiting: dict[tuple, dict] = {}  # (type, sender) -> the newest lossy message held back
 
     @property
     def buffering(self) -> bool:
         return self.buffering_since is not None
 
     async def send(self, msg: dict, lossy: bool = False) -> bool:
-        """`lossy`: skip the message if one is still on its way to this client. For cursor
-        positions, where only the newest one matters and a slow link should not pile up."""
+        """`lossy`: for cursor positions, where only the newest matters and a slow link should
+        not pile up. While another message is on its way to this client, the position waits,
+        replaced by any newer one from the same sender, and goes when the way is clear. (It
+        used to be dropped, and when it was the last one, the ball stayed where the pointer
+        had been a moment before.)"""
         if not self.alive or self.ws is None:
             return False
+        key = (msg.get("type"), msg.get("from"))
         if lossy and self._lock.locked():
-            return False
+            self._waiting[key] = msg
+            return True
+        self._waiting.pop(key, None)  # this one is newer (a hidden pointer, say)
+        sent = await self._send(msg)
+        while sent and self._waiting and not self._lock.locked():
+            sent = await self._send(self._waiting.pop(next(iter(self._waiting))))
+        return sent
+
+    async def _send(self, msg: dict) -> bool:
         try:
             async with self._lock:
                 await asyncio.wait_for(self.ws.send_json(msg), timeout=10)

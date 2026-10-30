@@ -1,6 +1,9 @@
 import dataclasses
 import json
 import subprocess
+import sys
+
+import pytest
 
 import run
 from server import tailscale
@@ -116,6 +119,8 @@ def test_funnel_brings_a_stun_server_unless_one_is_set(monkeypatch):
         get_settings.cache_clear()
 
 
+# Pretending to be Windows (os.name = "nt") elsewhere breaks pathlib itself.
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
 def test_tailscale_found_in_the_default_windows_folder(monkeypatch, tmp_path):
     exe = tmp_path / "Tailscale" / "tailscale.exe"
     exe.parent.mkdir()
