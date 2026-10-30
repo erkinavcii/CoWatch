@@ -55,6 +55,8 @@
     iceServers: $('#iceServers'), newKeyBtn: $('#newKeyBtn'),
     stageWrap: $('#stageWrap'), miniBack: $('#miniBack'), miniClose: $('#miniClose'), pipBtn: $('#pipBtn'),
     awayMsg: $('#awayMsg'), pipReturn: $('#pipReturn'),
+    chatBtn: $('#chatBtn'), chatBadge: $('#chatBadge'), chatBox: $('#chatBox'), chatClose: $('#chatClose'),
+    chatLog: $('#chatLog'), chatForm: $('#chatForm'), chatInput: $('#chatInput'), chatPeek: $('#chatPeek'),
   };
   const video = el.video;
   // Screen sharing (see "screen sharing" below): who shares, who waits for an answer, and my
@@ -242,6 +244,7 @@
         onScreen(msg.screen || {});
         applyMedia(msg.media);
         applyTracks(msg.tracks || []);
+        setChatHistory(msg.chat);
         renderAll();
         break;
       case 'pong': onPong(msg); break;
@@ -263,6 +266,7 @@
       case 'draw': onDraw(msg); break;
       case 'draw_clear': clearStrokes(msg.from); break;
       case 'rtc': onRtc(msg); break;
+      case 'chat': onChat(msg); break;
       default: break;
     }
   }
@@ -497,6 +501,7 @@
     el.awayMsg.hidden = false;
     // Keys pressed in the small window work as on the page (space, arrows, m...).
     win.document.addEventListener('keydown', (e) => {
+      if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return; // typing in the chat
       const copy = new KeyboardEvent('keydown', { key: e.key, code: e.code, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey });
       if (!document.dispatchEvent(copy) || copy.defaultPrevented) e.preventDefault();
     });
@@ -560,6 +565,7 @@
     else if (e.key === 'f') toggleFullscreen();
     else if (e.key === 'm') el.muteBtn.click();
     else if (e.key === 'd') setPen(!S.penMode);
+    else if (e.key === 'c') { e.preventDefault(); setChat(true); } // preventDefault: no "c" in the box
     else if (e.key === 'Escape') {
       el.palette.hidden = true; el.micMenu.hidden = true; el.camMenu.hidden = true; el.peerPop.hidden = true;
       if (S.penMode) setPen(false);
@@ -588,7 +594,7 @@
   const MAX_STROKES = 300;
   const MAX_STROKE_POINTS = 4000;
 
-  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable, .share-asks, .mini-back, .mini-close'));
+  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable, .share-asks, .mini-back, .mini-close, .chat'));
   const hovers = (e) => e.pointerType === 'mouse' || e.pointerType === 'pen';
   const memberById = (id) => S.members.find((m) => m.id === id);
   const colorOf = (id) => { const m = memberById(id); return (m && m.color) || '#ffffff'; };
@@ -1608,6 +1614,8 @@
   // says the screen is mine; the picture and sound go on the connections' third and fourth
   // transceivers, so sharing never needs a new offer.
   const amTrusted = () => S.isHost || !!(memberById(S.clientId) || {}).cohost;
+  // Phone browsers cannot capture the screen: on a narrow screen the button gives its room away.
+  el.screenBtn.classList.toggle('no-share', !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia));
   async function toggleScreen () {
     if (screen.stream) { stopMyScreen(true); return; }
     if (!S.joined) return;
@@ -2701,6 +2709,87 @@
     li.appendChild(add);
     return li;
   }
+
+  // ---------------------------------------------------------------- text chat
+  // A panel over the bottom left of the picture, so it stays in fullscreen and in the
+  // always-on-top window. The server keeps the last messages for those who join later and
+  // sends each one back to its sender too, so everyone sees them in the same order. While
+  // the panel is closed, new messages show there for a few seconds and count on the button.
+  const CHAT = { open: false, unread: 0, messages: [] };
+  const CHAT_KEEP = 100; // as many as the server keeps
+  const CHAT_PEEK_MS = 7000;
+  const CHAT_PEEK_MAX = 3;
+
+  function chatLine (msg) {
+    const li = document.createElement('li');
+    li.className = 'chat-msg';
+    li.style.setProperty('--c', msg.color || '#ffffff');
+    const name = document.createElement('b');
+    name.textContent = msg.name;
+    const text = document.createElement('span');
+    text.textContent = msg.text;
+    li.append(name, text);
+    li.title = new Date(msg.ts).toLocaleTimeString(prefs.uiLang, { hour: '2-digit', minute: '2-digit' });
+    return li;
+  }
+  function setChatHistory (messages) {
+    CHAT.messages = Array.isArray(messages) ? messages.slice(-CHAT_KEEP) : [];
+    el.chatLog.replaceChildren(...CHAT.messages.map(chatLine));
+    el.chatLog.scrollTop = el.chatLog.scrollHeight;
+  }
+  // Seen only with the panel open on the stage: in the corner box it is hidden.
+  const chatSeen = () => CHAT.open && !el.stage.classList.contains('mini');
+  function onChat (msg) {
+    CHAT.messages.push(msg);
+    if (CHAT.messages.length > CHAT_KEEP) CHAT.messages.shift();
+    const log = el.chatLog;
+    const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 40; // not while reading back
+    log.appendChild(chatLine(msg));
+    while (log.children.length > CHAT.messages.length) log.firstChild.remove();
+    const own = msg.from === S.clientId;
+    if (atEnd || own) log.scrollTop = log.scrollHeight;
+    if (own || chatSeen()) return;
+    CHAT.unread += 1;
+    renderChatBtn();
+    if (CHAT.open) return;
+    const node = chatLine(msg);
+    el.chatPeek.appendChild(node);
+    while (el.chatPeek.children.length > CHAT_PEEK_MAX) el.chatPeek.firstChild.remove();
+    setTimeout(() => { node.classList.add('gone'); setTimeout(() => node.remove(), 400); }, CHAT_PEEK_MS);
+  }
+  function renderChatBtn () {
+    el.chatBtn.classList.toggle('on', CHAT.open);
+    el.chatBadge.hidden = !CHAT.unread;
+    el.chatBadge.textContent = CHAT.unread > 99 ? '99+' : String(CHAT.unread);
+  }
+  function setChat (open) {
+    CHAT.open = open;
+    el.chatBox.hidden = !open;
+    el.stage.classList.toggle('chat-open', open);
+    if (open) {
+      CHAT.unread = 0;
+      el.chatPeek.replaceChildren();
+      el.chatLog.scrollTop = el.chatLog.scrollHeight;
+      el.chatInput.focus();
+    } else if (el.chatInput.ownerDocument.activeElement === el.chatInput) {
+      el.chatInput.blur(); // the keys are the player's again
+    }
+    renderChatBtn();
+  }
+  el.chatBtn.addEventListener('click', () => setChat(!CHAT.open));
+  el.chatClose.addEventListener('click', () => setChat(false));
+  el.chatInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); setChat(false); } });
+  el.chatForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = el.chatInput.value.trim();
+    if (!text) return;
+    if (!S.connected) { toast(t('chat_offline'), 'error'); return; } // the text stays in the box
+    send({ type: 'chat', text });
+    el.chatInput.value = '';
+  });
+  // Back from the corner box with the panel open: what came meanwhile is now in sight.
+  new MutationObserver(() => { if (chatSeen() && CHAT.unread) { CHAT.unread = 0; renderChatBtn(); } })
+    .observe(el.stage, { attributes: true, attributeFilter: ['class'] });
 
   // ---------------------------------------------------------------- join
   el.nameInput.value = prefs.name;

@@ -7,9 +7,12 @@ import asyncio
 import logging
 import time
 import uuid
+from collections import deque
 from typing import Optional
 
 from starlette.websockets import WebSocket
+
+from .presence import CHAT_HISTORY, Bucket
 
 log = logging.getLogger("cowatch.room")
 
@@ -33,6 +36,7 @@ class Client:
         self.mic = False
         self.cam = False
         self.last_poke = 0.0
+        self.chat_bucket = Bucket()
         self.buffering_since: Optional[float] = None
         self.alive = True
         self._lock = asyncio.Lock()
@@ -63,6 +67,8 @@ class Room:
         self.cohosts: set[str] = set()  # viewer cookies the host trusted with the film folders
         self.screen: Optional[str] = None  # client id of the one sharing their screen, one at a time
         self.share_asks: dict[str, float] = {}  # client id -> when they asked to share (monotonic)
+        self.chat: deque[dict] = deque(maxlen=CHAT_HISTORY)  # the last chat messages, oldest first
+        self.chat_seq = 0
         self.playing = False
         self.position = 0.0  # film seconds at `updated_at`
         self.updated_at = now_ms()

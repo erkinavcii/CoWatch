@@ -85,8 +85,9 @@ Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olara
 9. **Girmeden önce:** giriş ekranında Meet'teki gibi önizlemeli mikrofon ve kamera tuşları ve ses göstergesi var; orada açtığın şey odaya girince de açık kalır. İkisi de kapalı başlar.
 10. **Arkadaşa yetki:** host üstteki adlardan birine tıklayıp "Film klasörü yetkisi ver"e basabilir. Arkadaş da "Film klasörü" listesini görür ve oradan herkes için film açabilir; ama yol yazamaz, diskteki başka dosyalara erişemez, eklentileri değiştiremez. Adının yanında küçük bir "yetkili" yazısı çıkar; aynı yerdeki "Yetkiyi geri al" bitirir. Yetki arkadaşın tarayıcısına bağlıdır: bağlantı kopsa da kalır, uygulama yeniden başlayana kadar sürer. Torrent ve eklenti kaynaklarını açmak ve filmi kapatmak linki olan herkese açık; Ayarlar'da "Sadece sen ve yetki verdiklerin" seçilirse (`.env`'de `MEDIA_CONTROL=trusted`) sadece host ve yetkililer yapabilir.
 11. **Ekran paylaşımı:** kameranın yanındaki ekran düğmesi bir pencereyi, bir tarayıcı sekmesini ya da bütün ekranı paylaşır; tarayıcı sunuyorsa sesiyle birlikte (Windows'ta Chrome ve Edge). Paylaşılan ekran herkeste filmin yerine geçer, film paylaşım bitene kadar durur; imleç topları ve kalem onun üstünde de çalışır. Aynı anda tek ekran olur. Host ve yetkililer hemen paylaşır; diğerleri önce neyi paylaşacağını seçer, sonra host (ya da bir yetkili) "… ekranını paylaşmak istiyor" kartında "İzin ver" ya da "Reddet" diyene kadar bekler. O zamana kadar hiçbir şey gönderilmez; 30 saniyede cevap gelmezse istek düşer. Biri zaten paylaşıyorsa yenisine izin vermek onunkini bitirir. Host üstteki adından herkesin paylaşımını durdurabilir. Görüntü kamera gibi doğrudan diğerlerine gider, izleyici başına en çok 4 Mbps kadar; DRM'li siteler (Netflix gibi) paylaşımda siyah görünür.
-12. **Bağlantı koparsa:** sayfa odaya kendiliğinden yeniden bağlanır; kopan ses ve kamera bağlantıları (Wi-Fi değişimi, dizüstünün uykuya geçmesi) kendiliğinden yeniden kurulur.
-13. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` film sesi, `d` kalem, `Ctrl+D` mikrofon, `Ctrl+E` kamera, `Esc` kalemi kapat. Videoya tıklamak oynatır ya da durdurur. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
+12. **Sohbet:** kontrollerdeki konuşma balonu (`c`) videonun sol altında bir sohbet paneli açar; tam ekranda ve ayrı küçük pencerede de kalır. Enter gönderir, `Esc` kapatır. Panel kapalıyken yeni mesajlar aynı köşede birkaç saniye görünür, düğmedeki sayı okunmayanları sayar. Son 100 mesaj sonradan gelenleri bekler; sadece host bilgisayarın hafızasında durur, uygulama yeniden başlayınca silinir. Mesaj başına en çok 500 karakter; art arda beşten sonra kısa bir bekleme.
+13. **Bağlantı koparsa:** sayfa odaya kendiliğinden yeniden bağlanır; kopan ses ve kamera bağlantıları (Wi-Fi değişimi, dizüstünün uykuya geçmesi) kendiliğinden yeniden kurulur.
+14. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` film sesi, `d` kalem, `c` sohbet, `Ctrl+D` mikrofon, `Ctrl+E` kamera, `Esc` kalemi ya da sohbeti kapat. Videoya tıklamak oynatır ya da durdurur. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
 
 Arayüz Türkçe, İngilizce ve Rusça kullanılabiliyor.
 
@@ -169,11 +170,11 @@ Co-Watch içerik sağlamaz, barındırmaz ve dağıtmaz. Kendi dosyaların ya da
 pip install -r requirements-dev.txt
 python -m pytest                      # ffmpeg kuruluysa medya testleri de çalışır
 python -m playwright install chromium # bir kere, tarayıcı testleri için
-python tests/e2e/two_viewers.py       # senkron, altyazı, imleç, dürtme, kalem; izlemek için --headed
+python tests/e2e/two_viewers.py       # senkron, altyazı, imleç, dürtme, kalem, sohbet; izlemek için --headed
 python tests/e2e/voice_camera.py      # ses ve kamera
 ```
 
-Her tarayıcı testi kendi sunucusunu ve test videosunu başlatıp Chromium pencereleri açar. `two_viewers.py` senkronu, herkesin kendi altyazısını, imlecin bantlı videoda başka ekran boyutunda da aynı noktaya düştüğünü, dürtme sesini, kalemi ve temizlemeyi dener. `voice_camera.py` Tailscale Serve'den gelen bir arkadaş olarak katılır; sesi, kamera kutularını, önizlemeden katılan üçüncü bir izleyiciyi ve bağlantıların kendiliğinden yeniden kurulmasını dener (Chromium'un sahte kamerası, mikrofon yerine sentezlenmiş konuşma).
+Her tarayıcı testi kendi sunucusunu ve test videosunu başlatıp Chromium pencereleri açar. `two_viewers.py` senkronu, herkesin kendi altyazısını, imlecin bantlı videoda başka ekran boyutunda da aynı noktaya düştüğünü, dürtme sesini, kalemi, temizlemeyi ve sohbeti dener. `voice_camera.py` Tailscale Serve'den gelen bir arkadaş olarak katılır; sesi, kamera kutularını, önizlemeden katılan üçüncü bir izleyiciyi ve bağlantıların kendiliğinden yeniden kurulmasını dener (Chromium'un sahte kamerası, mikrofon yerine sentezlenmiş konuşma).
 
 Tarayıcı konsolunda `cowatchDebug()` senkron değerlerini gösterir (film zamanı, beklenen konum, fark).
 

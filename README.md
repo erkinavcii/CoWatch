@@ -85,8 +85,9 @@ The key in the link is the room's password; the browser stores it as a cookie on
 9. **Before joining:** the join screen has the same microphone and camera buttons with a preview and a level meter, as in Meet; whatever is on there is on when you join. Both start off.
 10. **Trusting a friend:** the host can click a friend's name at the top and press "Let them open the film folder". The friend then sees the "Film folder" list too and can open films from it for everyone, but cannot type paths, reach other files on the disk or change the add-ons. A small "trusted" label shows next to their name; "Take it back" in the same place ends it. The trust belongs to the friend's browser, so it survives a dropped connection, and lasts until the app restarts. Anyone with the link can open torrents and add-on sources and close the film; with "Only you and the friends you trust" under Settings (`MEDIA_CONTROL=trusted` in `.env`), only the host and trusted friends can.
 11. **Screen sharing:** the screen button next to the camera shares a window, a browser tab or the whole screen, with its sound when the browser offers it (Chrome and Edge on Windows). The shared screen covers the film for everyone and the film pauses until the share ends; pointers and the pen work on it too. One screen at a time. The host and trusted friends share at once; anyone else first picks what to share, then waits while the host (or a trusted friend) sees "… wants to share their screen" with "Allow" and "Decline". Nothing is sent before that, and without an answer the request lapses after 30 seconds. If someone is already sharing, allowing a new share ends theirs. The host can stop anyone's share from their name at the top. The picture goes straight to the others, like the camera, at up to about 4 Mbps per viewer; DRM-protected sites (Netflix and the like) show black in a share.
-12. **Connection drops:** the page reconnects to the room by itself, and voice and camera connections that drop (Wi-Fi change, laptop sleep) are rebuilt by themselves.
-13. **Shortcuts:** space play/pause, ← → 10 s, `f` fullscreen, `m` mute the film, `d` pen, `Ctrl+D` microphone, `Ctrl+E` camera, `Esc` pen off. Clicking the video plays or pauses. On touch screens, tapping the video only shows the controls; pausing for everyone takes the button.
+12. **Chat:** the speech bubble in the controls (`c`) opens a chat panel over the bottom left of the video; it stays in fullscreen and in the small window. Enter sends, `Esc` closes. While it is closed, new messages show in the same corner for a few seconds and a number on the button counts them. The last 100 messages wait for those who join later; they live only in the host computer's memory and are gone when the app restarts. At most 500 characters per message, and five in a row before a short wait.
+13. **Connection drops:** the page reconnects to the room by itself, and voice and camera connections that drop (Wi-Fi change, laptop sleep) are rebuilt by themselves.
+14. **Shortcuts:** space play/pause, ← → 10 s, `f` fullscreen, `m` mute the film, `d` pen, `c` chat, `Ctrl+D` microphone, `Ctrl+E` camera, `Esc` pen or chat off. Clicking the video plays or pauses. On touch screens, tapping the video only shows the controls; pausing for everyone takes the button.
 
 The interface is available in Turkish, English and Russian.
 
@@ -169,11 +170,11 @@ Co-Watch does not provide, host or distribute any content. It is made for your o
 pip install -r requirements-dev.txt
 python -m pytest                      # media tests run too when ffmpeg is installed
 python -m playwright install chromium # once, for the browser tests
-python tests/e2e/two_viewers.py       # sync, subtitles, pointers, pokes, pen; --headed to watch
+python tests/e2e/two_viewers.py       # sync, subtitles, pointers, pokes, pen, chat; --headed to watch
 python tests/e2e/voice_camera.py      # voice and camera
 ```
 
-Each browser test starts its own server and test video and opens Chromium windows. `two_viewers.py` checks sync, each viewer's own subtitles, that a pointer lands on the same spot of a letterboxed picture on another screen size, poke sounds, the pen and clearing. `voice_camera.py` joins as a friend coming through Tailscale Serve and checks voice, the camera tiles, a third viewer joining from the preview, and connections rebuilding themselves (with Chromium's fake camera, and synthesised speech as the microphone).
+Each browser test starts its own server and test video and opens Chromium windows. `two_viewers.py` checks sync, each viewer's own subtitles, that a pointer lands on the same spot of a letterboxed picture on another screen size, poke sounds, the pen and clearing, and the chat. `voice_camera.py` joins as a friend coming through Tailscale Serve and checks voice, the camera tiles, a third viewer joining from the preview, and connections rebuilding themselves (with Chromium's fake camera, and synthesised speech as the microphone).
 
 In the browser console, `cowatchDebug()` shows the sync values (film time, expected position, drift).
 

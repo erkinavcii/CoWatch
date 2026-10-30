@@ -1,6 +1,6 @@
 """Shared pointers and drawings: checks for the small messages viewers exchange about the
-picture (cursor positions, pokes, pen strokes). Coordinates are fractions of the video
-picture, not of the window, so they land on the same spot of the film on every screen."""
+picture (cursor positions, pokes, pen strokes), and for the text chat. Coordinates are
+fractions of the video picture, not of the window, so they land on the same spot of the film on every screen."""
 
 from __future__ import annotations
 
@@ -70,3 +70,38 @@ def stroke_message(msg: dict, sender_id: str, fallback_color: str) -> Optional[d
     if not points and not out.get("start") and not out.get("end"):
         return None
     return out
+
+
+# ---- text chat ---------------------------------------------------------------------
+CHAT_MAX_CHARS = 500
+CHAT_HISTORY = 100  # kept in memory for those who join later; gone when the server restarts
+CHAT_BURST = 5  # messages in a row before the limit applies
+CHAT_REFILL_S = 1.0  # then one message per this many seconds
+
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]+")  # line breaks, direction overrides
+
+
+def chat_text(value) -> Optional[str]:
+    """A chat message as one line of plain text, or None if nothing is left of it."""
+    if not isinstance(value, str):
+        return None
+    text = _CONTROL.sub(" ", value).strip()[:CHAT_MAX_CHARS].strip()
+    return text or None
+
+
+class Bucket:
+    """Lets `burst` messages through at once, then one every `refill_s` seconds."""
+
+    def __init__(self, burst: int = CHAT_BURST, refill_s: float = CHAT_REFILL_S) -> None:
+        self.burst, self.refill_s = burst, refill_s
+        self.tokens = float(burst)
+        self.at: Optional[float] = None
+
+    def take(self, now: float) -> bool:
+        if self.at is not None:
+            self.tokens = min(self.burst, self.tokens + (now - self.at) / self.refill_s)
+        self.at = now
+        if self.tokens < 1:
+            return False
+        self.tokens -= 1
+        return True

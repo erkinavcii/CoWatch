@@ -1,7 +1,8 @@
 from fastapi.testclient import TestClient
 
 from server.main import app
-from server.presence import MAX_POINTS, PALETTE, pick_color, point, stroke_message
+from server.presence import (CHAT_BURST, CHAT_HISTORY, CHAT_MAX_CHARS, MAX_POINTS, PALETTE, Bucket, chat_text,
+                             pick_color, point, stroke_message)
 
 KEY = "test-key"
 
@@ -97,3 +98,51 @@ def test_colors_cursors_pokes_and_drawings_reach_the_others():
                 a.send_json({"type": "color", "color": "#123456"})
                 a.send_json({"type": "color", "color": PALETTE[6].upper()})
                 _members_until(b, lambda ms: any(m["id"] == a_id and m["color"] == PALETTE[6] for m in ms))
+
+
+def test_chat_text_is_one_line_of_plain_text():
+    assert chat_text("  hello\nthere ") == "hello there"
+    assert chat_text("a‮b") == "a b"  # no direction overrides to disguise text
+    assert chat_text("x" * 2000) == "x" * CHAT_MAX_CHARS
+    assert chat_text(" \t\n ") is None
+    assert chat_text(42) is None and chat_text(None) is None
+
+
+def test_bucket_allows_a_burst_then_one_per_interval():
+    bucket = Bucket(burst=3, refill_s=1.0)
+    assert [bucket.take(0.0) for _ in range(4)] == [True, True, True, False]
+    assert bucket.take(0.5) is False
+    assert bucket.take(1.0) is True and bucket.take(1.0) is False
+    assert [bucket.take(100.0) for _ in range(4)] == [True, True, True, False]  # never more than the burst
+
+
+def test_chat_reaches_everyone_and_waits_for_those_who_join_later():
+    with TestClient(app, cookies={"cw_key": KEY}) as client:
+        with client.websocket_connect("/ws") as a:
+            a_id = _next(a, {"welcome"})["clientId"]
+            a.send_json({"type": "chat", "text": "before joining"})  # no name yet: dropped
+            a.send_json({"type": "hello", "name": "A"})
+            _members_until(a, lambda ms: any(m["id"] == a_id for m in ms))
+
+            with client.websocket_connect("/ws") as b:
+                assert _next(b, {"welcome"})["chat"] == []
+                b.send_json({"type": "hello", "name": "B"})
+                a.send_json({"type": "chat", "text": "  hi\nall  "})
+                for ws in (a, b):  # the sender gets it back too, in the same order as the others
+                    msg = _next(ws, {"chat"})
+                    assert msg["from"] == a_id and msg["name"] == "A" and msg["text"] == "hi all"
+                    assert msg["color"] == PALETTE[0] and msg["id"] == 1 and msg["ts"] > 0
+                a.send_json({"type": "chat", "text": "   "})  # nothing left: dropped
+
+                # Too many at once: the rest are dropped and the sender is told.
+                for n in range(CHAT_BURST + 1):
+                    b.send_json({"type": "chat", "text": f"m{n}"})
+                texts = [_next(a, {"chat"})["text"] for _ in range(CHAT_BURST)]
+                assert texts == [f"m{n}" for n in range(CHAT_BURST)]
+                slow = _next(b, {"status"})
+                assert slow["key"] == "chat_slow" and slow["level"] == "error"
+
+            with client.websocket_connect("/ws") as c:
+                history = _next(c, {"welcome"})["chat"]
+                assert [m["text"] for m in history] == ["hi all"] + [f"m{n}" for n in range(CHAT_BURST)]
+                assert len(history) <= CHAT_HISTORY

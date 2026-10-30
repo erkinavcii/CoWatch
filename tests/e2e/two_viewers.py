@@ -281,6 +281,37 @@ def run(headed: bool) -> None:
             toasts = a.evaluate("() => [...document.querySelectorAll('.toast')].map(t => t.textContent).join(' | ')")
             check("clearing removes the drawings for everyone and says who did it", "Masha" in toasts, toasts)
 
+            # ---- chat: B writes with the panel open, A sees it peek over the picture and on the button
+            blur(a)
+            a.keyboard.press("d")  # pen off
+            blur(b)
+            b.keyboard.press("c")
+            check("c opens the chat with the cursor in an empty box",
+                  b.evaluate("() => !document.querySelector('#chatBox').hidden && document.activeElement.id === 'chatInput'"
+                             " && document.querySelector('#chatInput').value === ''"))
+            b.keyboard.type("Merhaba <b>herkes</b>")
+            b.keyboard.press("Enter")
+            b.wait_for_function("() => document.querySelector('#chatLog').textContent.includes('Merhaba')", timeout=3000)
+            a.wait_for_function("() => document.querySelector('#chatPeek .chat-msg')", timeout=3000)
+            peek = a.evaluate("""() => { const m = document.querySelector('#chatPeek .chat-msg');
+              return {text: m.textContent, html: m.querySelector('span').innerHTML, color: m.style.getPropertyValue('--c'),
+                      badge: document.querySelector('#chatBadge').hidden ? '' : document.querySelector('#chatBadge').textContent}; }""")
+            check("a message shows over the other window's picture as plain text, with the sender's name and colour",
+                  peek["text"] == "MashaMerhaba <b>herkes</b>" and "<b>" not in peek["html"] and peek["color"] == color["Masha"],
+                  str(peek))
+            check("the closed chat counts the unread message", peek["badge"] == "1", peek["badge"])
+            playing = a.evaluate(f"() => {DBG}.room.playing")
+            a.click("#chatBtn")
+            a.click("#chatLog")
+            time.sleep(0.6)
+            seen = a.evaluate("""() => ({log: document.querySelector('#chatLog').textContent,
+              badge: document.querySelector('#chatBadge').hidden, peek: document.querySelectorAll('#chatPeek .chat-msg').length})""")
+            check("opening the chat clears the count and shows the message", seen["badge"] and not seen["peek"]
+                  and "Merhaba" in seen["log"], str(seen))
+            check("a click in the chat neither pauses nor pokes", a.evaluate(f"() => {DBG}.room.playing") == playing)
+            b.keyboard.press("Escape")
+            check("Escape closes the chat", b.evaluate("() => document.querySelector('#chatBox').hidden"))
+
             check("no errors in either window", not errors, " || ".join(errors))
             browser.close()
     finally:

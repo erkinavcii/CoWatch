@@ -408,6 +408,37 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .list-foot .hint { margin: 0; }
 #addonSubsMore { justify-self: start; }
 
+/* ---- text chat: a panel over the bottom left of the picture; while it is closed, new messages peek there ---- */
+.chat-btn { position: relative; margin-left: 6px; }
+.chat-btn.on { background: rgba(255, 255, 255, .18); }
+.badge {
+  position: absolute; top: 0; right: -3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-ink); font-size: 10.5px; font-weight: 700; line-height: 16px; pointer-events: none;
+}
+.chat, .chat-peek { position: absolute; z-index: 8; left: 10px; bottom: 84px; width: min(340px, 42%); }
+.chat {
+  display: flex; flex-direction: column; max-height: calc(100% - 100px); cursor: auto; user-select: text;
+  background: rgba(10, 11, 14, .86); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
+}
+.stage.chat-open .side.left { left: calc(20px + min(340px, 42%)); } /* camera tiles move beside it */
+.chat-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 6px 4px 12px; font-size: 13px; color: var(--muted); }
+.chat-close { padding: 2px 8px; border: 0; background: transparent; font-size: 13px; }
+.chat-log { flex: 1 1 auto; min-height: 40px; overflow-y: auto; margin: 0; padding: 0 12px 6px; list-style: none; display: grid; align-content: start; gap: 4px; }
+.chat-msg { font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere; }
+.chat-msg b { color: var(--c, var(--text)); margin-right: 6px; }
+.chat-form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--line); }
+.chat-form input { flex: 1; min-width: 0; }
+.chat-form button { padding: 5px 10px; }
+.chat-peek { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; pointer-events: none; }
+.chat-peek .chat-msg {
+  justify-self: start; max-width: 100%; padding: 5px 10px; border-radius: 10px; border-left: 3px solid var(--c, var(--accent));
+  background: rgba(10, 11, 14, .78); box-shadow: 0 2px 10px rgba(0, 0, 0, .4); animation: peek-in .2s ease; transition: opacity .4s ease;
+}
+.chat-peek .chat-msg.gone { opacity: 0; }
+@keyframes peek-in { from { opacity: 0; transform: translateY(6px); } }
+.stage.idle .chat-peek { bottom: 20px; } /* the controls are hidden: down to the corner */
+.stage:fullscreen .chat-msg { font-size: 15px; }
+
 /* ---- the player follows: a corner box when scrolled away, or its own always-on-top window ---- */
 .stage-wrap { position: relative; scroll-margin-top: 64px; } /* clear of the sticky header */
 .mini-back, .mini-close { display: none; }
@@ -417,7 +448,8 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 }
 .has-mini .toasts { bottom: calc(32px + min(380px, 46vw) * 9 / 16); }
 .has-mini { padding-bottom: calc(32px + min(380px, 46vw) * 9 / 16); } /* the page's end can scroll clear of the box */
-.stage.mini .controls, .stage.mini .side, .stage.mini .share-asks, .stage.mini .screen-tag { display: none; }
+.stage.mini .controls, .stage.mini .side, .stage.mini .share-asks, .stage.mini .screen-tag,
+.stage.mini .chat, .stage.mini .chat-peek { display: none; }
 .stage.mini .sub.primary { font-size: calc(13px * var(--sub-scale)); }
 .stage.mini .sub.secondary { font-size: calc(11px * var(--sub-scale)); }
 .stage.mini:not(.idle) .subs { bottom: var(--sub-bottom); }
@@ -501,7 +533,16 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
   .cams-box.small { --cam-w: 52px; }
   .cams { gap: 5px; flex-direction: row; min-width: 0; }
   #backBtn, #fwdBtn { display: none; } /* the bar is too narrow; the seek bar and arrow keys remain */
+  .bar { gap: 2px; }
+  .bar .icon { width: 32px; }
+  .bar .icon.caret { width: 16px; }
+  .av-group, .chat-btn { margin-left: 2px; }
+  #pipBtn, #screenBtn.no-share { display: none; } /* phones have neither the window nor screen capture */
   .cam-name { font-size: 10px; left: 3px; bottom: 3px; padding: 0 5px; }
   .toolbar { padding: 3px; gap: 2px; }
   .toolbar .tool { width: 32px; height: 32px; }
+  /* The picture is short: the open panel takes all of it above the controls. */
+  .chat { left: 6px; right: 6px; top: 6px; bottom: 70px; width: auto; max-height: none; }
+  .chat-peek { left: 6px; bottom: 70px; width: 70%; }
+  .chat-peek .chat-msg:not(:last-child) { display: none; }
 }

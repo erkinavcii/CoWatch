@@ -36,7 +36,7 @@ from . import filepicker, library, stremio, tailscale
 from .stremio import StremioError
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
-from .presence import PALETTE, POKE_INTERVAL_S, pick_color, point, stroke_message
+from .presence import PALETTE, POKE_INTERVAL_S, chat_text, pick_color, point, stroke_message
 from .room import Client, Room, now_ms
 from .signaling import ice_servers, rtc_data
 from .subtitles import (
@@ -157,11 +157,12 @@ class Controller:
             "palette": list(PALETTE),
             "iceServers": ice_servers(cfg.ice_servers),
             "screen": self.room.screen_msg(),
+            "chat": list(self.room.chat),
         }
 
-    def _relay(self, sender: Client, msg: dict, lossy: bool = False) -> None:
-        """Pass a pointer or drawing message to everyone else without waiting for it, so a
-        slow viewer never holds up the sender's own commands (play, pause, seek)."""
+    def _relay(self, sender: Optional[Client], msg: dict, lossy: bool = False) -> None:
+        """Pass a pointer or drawing message to everyone else (everyone, with no sender) without
+        waiting for it, so a slow viewer never holds up the sender's own commands (play, pause, seek)."""
         task = asyncio.create_task(self.room.broadcast(msg, exclude=sender, lossy=lossy))
         self._relays.add(task)
         task.add_done_callback(self._relays.discard)
@@ -204,6 +205,19 @@ class Controller:
                 self._relay(client, out)
         elif kind == "draw_clear":
             self._relay(client, {"type": "draw_clear", "from": client.id})
+        elif kind == "chat" and client.joined:
+            # Back to the sender too: everyone sees the messages in the server's order.
+            text = chat_text(msg.get("text"))
+            if text is None:
+                return
+            if not client.chat_bucket.take(time.monotonic()):
+                await client.send({"type": "status", "key": "chat_slow", "level": "error", "params": {}})
+                return
+            self.room.chat_seq += 1
+            out = {"type": "chat", "id": self.room.chat_seq, "from": client.id, "name": client.name,
+                   "color": client.color, "text": text, "ts": now_ms()}
+            self.room.chat.append(out)
+            self._relay(None, out)
         elif kind == "color":
             color = str(msg.get("color", "")).lower()
             if color in PALETTE and color != client.color:
