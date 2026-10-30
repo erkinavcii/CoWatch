@@ -177,6 +177,9 @@ def run(headed: bool) -> None:
             b.select_option("#secondarySel", next(t["id"] for t in tracks if t["lang"] == "tr"))
 
             # ---- sync: play in one window, pause in the other
+            # The host's page is longer (share card): after the subtitle cards it is scrolled far
+            # enough that the button would end up under the sticky header.
+            a.evaluate("() => window.scrollTo(0, 0)")
             a.click("#playBtn", force=True)
             time.sleep(4)
             ta, tb = film_time(a), film_time(b)

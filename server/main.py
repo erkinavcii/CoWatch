@@ -14,24 +14,25 @@ import json
 import logging
 import math
 import mimetypes
+import os
 import re
 import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocketState
 
 from .addons import AddonError, AddonStore, episode_label, magnet
-from .config import get_settings
-from . import filepicker, library
+from .config import CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
+from . import filepicker, library, tailscale
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
 from .presence import PALETTE, POKE_INTERVAL_S, pick_color, point, stroke_message
@@ -61,6 +62,9 @@ LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 PROXY_HEADERS = ("tailscale-user-login", "x-forwarded-for", "forwarded")
 
 cfg = get_settings()
+# Set by run.py: restarts the server with the saved settings and knows the friends' link.
+# None when the app is started some other way (the tests, plain uvicorn).
+launcher = None
 
 
 def clean_name(value) -> str:
@@ -887,6 +891,132 @@ async def api_library(request: Request):
         raise HTTPException(403, detail="library_not_allowed")
     files = await asyncio.to_thread(library.scan, cfg.library_dirs)
     return {"dirs": [d.name or str(d) for d in cfg.library_dirs], "files": files}
+
+
+# ---- settings, sharing and Tailscale: the host only ----------------------------------------------
+class SettingsBody(BaseModel):
+    connection: Literal[CHOICES["connection"]]
+    quality: Literal[CHOICES["quality"]]
+    qualityMbps: float = Field(ge=1, le=200)
+    libraryDirs: list[str] = Field(max_length=50)
+    mediaControl: Literal[CHOICES["mediaControl"]]
+    port: int = Field(ge=1024, le=65535)
+    torrentUploadLimit: int = Field(ge=0, le=1_000_000)
+    iceServers: str = Field(max_length=2000)
+    osApiKey: str = Field(max_length=200)
+    osUsername: str = Field(max_length=200)
+    osPassword: Optional[str] = Field(None, max_length=200)  # None keeps the saved one
+
+
+def require_local(request: HTTPConnection) -> None:
+    if not is_local(request):
+        raise HTTPException(403, detail="host_only")
+
+
+def local_link(port: int, key: str) -> str:
+    return f"http://localhost:{port}/?k={key}"
+
+
+def restart_soon() -> bool:
+    """Restarts after the answer has gone out. False when not started by run.py."""
+    if launcher is None:
+        return False
+    asyncio.get_running_loop().call_later(0.5, launcher.restart)
+    return True
+
+
+@app.get("/api/settings")
+async def api_settings(request: Request):
+    require_local(request)
+    saved = load_saved(cfg.data_dir)
+    password = saved.pop("osPassword")
+    return {
+        "values": {**saved, "hasPassword": bool(password)},
+        "locked": locked_settings(),
+        # what runs now: for the locked choices, the value from .env
+        "current": {
+            "connection": cfg.connection, "maxCopyKbps": cfg.max_copy_kbps, "transcodeKbps": cfg.transcode_kbps,
+            "libraryDirs": [str(d) for d in cfg.library_dirs], "mediaControl": cfg.media_control,
+            "port": cfg.port, "torrentUploadLimit": cfg.torrent_upload_limit, "iceServers": cfg.ice_servers,
+            "osApiKey": cfg.os_api_key, "osUsername": cfg.os_username,
+        },
+        "keyLocked": "ACCESS_KEY" in os.environ,
+        "canRestart": launcher is not None,
+        "mediaOpen": ctl.session is not None,
+    }
+
+
+@app.post("/api/settings")
+async def api_settings_save(body: SettingsBody, request: Request):
+    require_local(request)
+    values = body.model_dump()
+    values["libraryDirs"] = [str(local_path(d)) for d in values["libraryDirs"] if d.strip()]
+    for folder in values["libraryDirs"]:
+        if not Path(folder).is_dir():
+            raise HTTPException(400, detail=f"library_dir_missing: {folder}")
+    urls = [part.strip() for part in values["iceServers"].split(",") if part.strip()]
+    values["iceServers"] = ",".join(urls)
+    if len(ice_servers(values["iceServers"])) != len(urls):
+        raise HTTPException(400, detail="ice_invalid")
+    saved = load_saved(cfg.data_dir)
+    if values["osPassword"] is None:
+        values["osPassword"] = saved["osPassword"]
+    for key in locked_settings():  # .env wins anyway; keep what was saved for the day it goes
+        values[key] = saved[key]
+    save_saved(cfg.data_dir, values)
+    port = cfg.port if "port" in locked_settings() else values["port"]
+    return {"restart": restart_soon(), "localLink": local_link(port, cfg.access_key)}
+
+
+@app.post("/api/settings/key")
+async def api_settings_new_key(request: Request):
+    """A new room key: every link sent so far stops working."""
+    require_local(request)
+    if "ACCESS_KEY" in os.environ:
+        raise HTTPException(409, detail="key_locked")
+    key = new_access_key(cfg.data_dir)
+    return {"restart": restart_soon(), "localLink": local_link(cfg.port, key)}
+
+
+@app.post("/api/settings/pick-folder")
+async def api_settings_pick_folder(body: PickBody, request: Request):
+    require_local(request)
+    try:
+        return {"path": await asyncio.to_thread(filepicker.pick_folder, body.title)}
+    except filepicker.PickerError as exc:
+        raise HTTPException(409 if exc.code == "picker_busy" else 501, detail=exc.code) from None
+
+
+@app.get("/api/share")
+async def api_share(request: Request):
+    """The links and what stands in their way: Tailscale missing, off, logged out, or Funnel
+    waiting for the tailnet's consent."""
+    require_local(request)
+    share = launcher.share_state() if launcher is not None else {"state": "unknown"}
+    return {
+        "connection": cfg.connection,
+        "localLink": local_link(cfg.port, cfg.access_key),
+        "friendLink": launcher.friend_link if launcher is not None else None,
+        "share": share,
+        "tailscale": await asyncio.to_thread(tailscale.status) if cfg.connection != "http" else None,
+        "canRestart": launcher is not None,
+    }
+
+
+@app.post("/api/share/retry")
+async def api_share_retry(request: Request):
+    require_local(request)
+    if not restart_soon():
+        raise HTTPException(409, detail="restart_unavailable")
+    return {"ok": True}
+
+
+@app.post("/api/tailscale/open")
+async def api_tailscale_open(request: Request):
+    require_local(request)
+    if not await asyncio.to_thread(tailscale.open_app):
+        raise HTTPException(501, detail="tailscale_open_failed")
+    return {"ok": True}
 
 
 # ---- add-ons: everyone can browse and open; only the host changes the list ----------------------

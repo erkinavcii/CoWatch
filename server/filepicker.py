@@ -27,6 +27,15 @@ class PickerError(Exception):
 def pick_video(title: str) -> Optional[str]:
     """Shows the dialog and blocks until it closes, so run it in a thread. The path picked,
     or None if the dialog was cancelled."""
+    return _pick(title, folder=False)
+
+
+def pick_folder(title: str) -> Optional[str]:
+    """Like pick_video, for a film folder on the settings page."""
+    return _pick(title, folder=True)
+
+
+def _pick(title: str, folder: bool) -> Optional[str]:
     global _last_dir
     if not _lock.acquire(blocking=False):
         raise PickerError("picker_busy")  # one is already open, maybe behind a window
@@ -43,14 +52,18 @@ def pick_video(title: str) -> Optional[str]:
         try:
             root.withdraw()
             root.attributes("-topmost", True)  # in front of the browser
-            path = filedialog.askopenfilename(parent=root, title=title[:100], filetypes=VIDEO_TYPES,
-                                              initialdir=_last_dir or os.path.expanduser("~"))
+            start = _last_dir or os.path.expanduser("~")
+            if folder:
+                path = filedialog.askdirectory(parent=root, title=title[:100], initialdir=start, mustexist=True)
+            else:
+                path = filedialog.askopenfilename(parent=root, title=title[:100], filetypes=VIDEO_TYPES,
+                                                  initialdir=start)
         finally:
             root.destroy()
         if not path:
             return None
         path = os.path.normpath(path)  # C:/Films/a.mkv -> C:\Films\a.mkv, as the host would type it
-        _last_dir = os.path.dirname(path)
+        _last_dir = path if folder else os.path.dirname(path)
         return path
     finally:
         _lock.release()

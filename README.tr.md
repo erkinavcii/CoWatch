@@ -49,7 +49,7 @@ Windows (PowerShell, proje klasöründe):
 py -m venv .venv
 .\.venv\Scripts\python -m pip install -r requirements.txt
 cd torrent-helper; npm.cmd install; cd ..
-copy .env.example .env      # isteğe bağlı: ayarlar ve OpenSubtitles anahtarı
+copy .env.example .env      # isteğe bağlı, geliştiriciler için: ayarlar normalde ayarlar sayfasında
 .\.venv\Scripts\python run.py
 ```
 
@@ -62,17 +62,19 @@ Bu bilgisayardan:  http://localhost:8000/?k=ANAHTAR
 Arkadaşlar için:   https://pc.tail1234.ts.net/?k=ANAHTAR   <- arkadaşına bunu gönder
 ```
 
-Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olarak kaydedilir. Anahtar `data/access_key.txt` içinde durur; silersen yeni anahtar üretilir ve eski linkler çalışmaz.
+Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olarak kaydedilir. Anahtar `data/access_key.txt` içinde durur; Ayarlar → Gelişmiş'teki "Yeni oda anahtarı üret" onu değiştirir, eski linkler çalışmaz.
 
-**Tailscale Serve ile HTTPS:** Tailscale çalışıyorsa `run.py` `tailscale serve`'ü başlatır ve arkadaşlarına `https://….ts.net` linki verir; tarayıcılar kamerayı ve mikrofonu sadece güvenli sayfalarda açıyor. Bir kereliğine [Tailscale yönetim panelinde](https://login.tailscale.com/admin/dns) MagicDNS ve HTTPS Certificates'ı aç (eksik bir şey varsa `tailscale serve` açma linkini kendisi yazar). Bilgisayarın adı herkese açık sertifika kayıtlarına düşer; adda kişisel bilgi varsa önce değiştir. Serve, `run.py` ile birlikte kapanır. Sunucu bu durumda sadece bu bilgisayarı dinler, eski `http://100.x.y.z:8000` linki artık çalışmaz. `.env`'de `TAILSCALE_SERVE=0` verirsen ya da Tailscale yoksa eskisi gibi düz http linkleri gelir (Windows da Python için güvenlik duvarı izni sorar).
+**Paylaş kartı ve ayarlar:** host bilgisayarda sayfada bir "Paylaş" kartı çıkar: arkadaş linki, kopyala düğmesi ve QR kodu; Tailscale'in durumu ve ne yapılacağı (indir, aç, oturum aç, Funnel'a izin ver, yeniden dene). "Ayarlar" düğmesi arkadaşların nasıl gireceğini (Funnel, Serve ya da düz http), görüntü kalitesini, film klasörlerini, filmi kimin açacağını, OpenSubtitles hesabını ve "Gelişmiş" altında portu, torrent upload sınırını, STUN sunucularını ve yeni oda anahtarını ayarlar. Ayarlar `data/settings.json`'da durur. Kaydedince sunucu birkaç saniyeliğine yeniden başlar (açık film kapanır, sayfalar kendiliğinden bağlanır). `.env`'de verilen bir değer kazanır ve sayfada kilitli görünür. Kartı ve ayarları sadece host bilgisayar görür.
+
+**Tailscale Serve ile HTTPS:** Tailscale çalışıyorsa `run.py` `tailscale serve`'ü başlatır ve arkadaşlarına `https://….ts.net` linki verir; tarayıcılar kamerayı ve mikrofonu sadece güvenli sayfalarda açıyor. Bir kereliğine [Tailscale yönetim panelinde](https://login.tailscale.com/admin/dns) MagicDNS ve HTTPS Certificates'ı aç (eksik bir şey varsa `tailscale serve` açma linkini kendisi yazar). Bilgisayarın adı herkese açık sertifika kayıtlarına düşer; adda kişisel bilgi varsa önce değiştir. Serve, `run.py` ile birlikte kapanır. Sunucu bu durumda sadece bu bilgisayarı dinler, eski `http://100.x.y.z:8000` linki artık çalışmaz. Ayarlar'da "Düz http"yi seçersen (`.env`'de `TAILSCALE_SERVE=0`) ya da Tailscale yoksa eskisi gibi düz http linkleri gelir (Windows da Python için güvenlik duvarı izni sorar).
 
 **Arkadaşın için:** Tailscale'i kursun, sen de onu Tailscale yönetim panelinden tailnet'ine davet et (ücretsiz kişisel plan 6 kullanıcıya kadar). Sadece bu bilgisayarı paylaşmak film için yeter, ama o zaman iki arkadaş kamera ve ses için birbirine ulaşamaz. Sonra linki açıp adını yazsın ve "Katıl"a bassın.
 
-**Arkadaşın Tailscale kurmadan (Funnel):** `.env`'de `TAILSCALE_FUNNEL=1` verirsen `run.py` bunun yerine `tailscale funnel`'ı başlatır: aynı `https://….ts.net` linki, ama bütün internete açık; arkadaşına sadece tarayıcı yeter. İlk seferde `tailscale funnel` bu bilgisayar için Funnel'a izin verme linkini yazar. Odayı o zaman sadece linkteki anahtar korur; linki yalnızca birlikte izleyeceğin kişilere gönder. Ses ve kamera ev modemlerini Cloudflare'in ücretsiz STUN sunucusuyla aşar; bazı ağlarda (sıkı şirket ya da mobil ağlar) yine de bağlanamayabilir. Film Tailscale'in aktarıcı sunucularından geçer, bunların Tailscale'in açıklamadığı bir bant sınırı var. Bir ölçümde evin upload'u yaklaşık 30 Mbps iken Funnel üzerinden izleyiciye yaklaşık 7–8 Mbps ulaştı; yani yaklaşık 5–6 Mbps'e kadar dosyalar rahat oynar. Daha ağır dosyalar için `.env`'de `MAX_COPY_KBPS=5500` ver, dönüştürülsünler ("Upload hızı" bölümüne bak).
+**Arkadaşın Tailscale kurmadan (Funnel):** Ayarlar'da "Linki olan herkes (Funnel)"i seçersen (`.env`'de `TAILSCALE_FUNNEL=1`) `run.py` bunun yerine `tailscale funnel`'ı başlatır: aynı `https://….ts.net` linki, ama bütün internete açık; arkadaşına sadece tarayıcı yeter. İlk seferde `tailscale funnel` bu bilgisayar için Funnel'a izin verme linkini yazar; Paylaş kartı onu "İzin ver" düğmesi olarak gösterir. Odayı o zaman sadece linkteki anahtar korur; linki yalnızca birlikte izleyeceğin kişilere gönder. Ses ve kamera ev modemlerini Cloudflare'in ücretsiz STUN sunucusuyla aşar; bazı ağlarda (sıkı şirket ya da mobil ağlar) yine de bağlanamayabilir. Film Tailscale'in aktarıcı sunucularından geçer, bunların Tailscale'in açıklamadığı bir bant sınırı var. Bir ölçümde evin upload'u yaklaşık 30 Mbps iken Funnel üzerinden izleyiciye yaklaşık 7–8 Mbps ulaştı; yani yaklaşık 5–6 Mbps'e kadar dosyalar rahat oynar. Bu yüzden görüntü kalitesi "Otomatik"teyken (varsayılan) Funnel'da daha ağır dosyalar 4,5 Mbps'e dönüştürülür ("Upload hızı" bölümüne bak).
 
 ## Kullanım
 
-1. **Film aç:** kendi dosyan için "Gözat…"a bas ve host bilgisayarda açılan dosya penceresinden seç, ya da "Bu bilgisayardaki dosya yolu"na tam yolu yazıp "Dosyayı aç"a bas (ikisi de güvenlik için sadece host bilgisayarda görünür). Bir film klasörü ayarlıysa (`.env`'de `LIBRARY_DIRS`), içindeki videolar "Film klasörü"nde arama kutusuyla listelenir; tıklayınca açılır. Torrent için magnet linkini yapıştırıp "Torrent ekle"ye bas; torrent'te birden fazla video varsa listeden seç.
+1. **Film aç:** kendi dosyan için "Gözat…"a bas ve host bilgisayarda açılan dosya penceresinden seç, ya da "Bu bilgisayardaki dosya yolu"na tam yolu yazıp "Dosyayı aç"a bas (ikisi de güvenlik için sadece host bilgisayarda görünür). Bir film klasörü ayarlıysa (Ayarlar → Film klasörleri ya da `.env`'de `LIBRARY_DIRS`), içindeki videolar "Film klasörü"nde arama kutusuyla listelenir; tıklayınca açılır. Torrent için magnet linkini yapıştırıp "Torrent ekle"ye bas; torrent'te birden fazla video varsa listeden seç.
 2. **Göz at:** "Göz at" kartı [Stremio eklentilerinin](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/protocol.md) kataloglarını gösterir: afişler, arama, sezonlar ve bölümler, eklentilerin bir film ya da bölüm için bildiği kaynaklar. "Aç" bir kaynağı herkes için oynatır. İçerik barındırmayan iki eklenti hazır gelir: Cinemeta (katalog ve bilgiler) ve Public Domain Movies (telif süresi dolmuş filmler). Host, "Eklentiler" altından başka eklentileri `…/manifest.json` adresiyle ekleyebilir; bunlar sadece o bilgisayarda, `data/addons.json`'da durur. Eklentiden açılan bir film için "Altyazı ekle" altındaki "Eklentilerde ara", o eklentilerin sunduğu altyazıları filmin kimliği ve dosya hash'iyle listeler.
 3. **Altyazı ekle:** "Altyazı ekle" altında dil kodlarını yazıp OpenSubtitles'ta ara (ör. `tr,en,ru`) ya da `.srt/.ass/.vtt` dosyası yükle. Türkçe `cp1254`, Rusça `cp1251` gibi eski kodlamalar otomatik düzeltilir.
 4. **Kendi altyazını seç:** yüklenen altyazılar odadaki herkesin listesine gelir ama kimin ekranında ne görüneceğini herkes kendisi seçer. "Ana altyazı" alttaki büyük beyaz satırdır. "İkinci altyazı" isteğe bağlıdır ve üstte küçük sarı satır olarak çıkar; iki dili aynı anda izlemek içindir (sen TR + EN, arkadaşın RU + EN gibi). Zaman kaydırma, yazı boyutu ve yükseklik de kişiye özel. Tercih edilen dil hatırlanır; yeni filmde o dilde altyazı varsa otomatik seçilir.
@@ -81,7 +83,7 @@ Linkteki anahtar odanın şifresidir; ilk açılışta tarayıcıya çerez olara
 7. **Ses:** zamanın yanındaki mikrofon tuşu (`Ctrl+D`) mikrofonunu açıp kapatır; kapalı başlar, kırmızıysa kapalıdır. Ses sunucudan geçmeden doğrudan diğerlerine gider. Kapatınca mikrofon gerçekten bırakılır (sekmedeki kırmızı nokta söner), adının yanında üstü çizili mikrofon görünür. Konuşan kişi üstte ve topunda kendi renginde parlar, film sesi o sırada kısılır. Tuşun yanındaki ok mikrofonu seçtirir ve kısmayı kapatır. Üstte birinin adına tıklayıp onu ne kadar yüksek duyacağını ayarlayabilirsin. Yankı hoparlörle denenene kadar kulaklık kullan. Arkadaşların için HTTPS linki gerekir (Kurulum'a bak); tarayıcılar düz http'de mikrofonu açmıyor.
 8. **Kamera:** kamera tuşu (`Ctrl+E`) aynı şekilde çalışır; kapatınca kameranın ışığı söner. Birinin kamerası açıkken videonun sağ üstünde, filmi küçültmeden küçük kutular çıkar: kamerası açık olanın görüntüsü, kapalı olanın renkli topu, en altta ayna gibi çevrilmiş kendi görüntün. Kutular tam ekranda da kalır; telefonda üstte yan yana dizilir. Tuşun yanındaki ok kamerayı seçtirir, kendi kutunu ya da bütün kutuları gizler. Bir kutuya tıklayınca o kişinin ses seviyesi açılır. Kutuları sürükleyip istediğin köşeye taşıyabilirsin; köşelerindeki küçük tuş onları küçültür. Kamera her izleyiciye en fazla yaklaşık 0,5 Mbps gönderir.
 9. **Girmeden önce:** giriş ekranında Meet'teki gibi önizlemeli mikrofon ve kamera tuşları ve ses göstergesi var; orada açtığın şey odaya girince de açık kalır. İkisi de kapalı başlar.
-10. **Arkadaşa yetki:** host üstteki adlardan birine tıklayıp "Film klasörü yetkisi ver"e basabilir. Arkadaş da "Film klasörü" listesini görür ve oradan herkes için film açabilir; ama yol yazamaz, diskteki başka dosyalara erişemez, eklentileri değiştiremez. Adının yanında küçük bir "yetkili" yazısı çıkar; aynı yerdeki "Yetkiyi geri al" bitirir. Yetki arkadaşın tarayıcısına bağlıdır: bağlantı kopsa da kalır, uygulama yeniden başlayana kadar sürer. Torrent ve eklenti kaynaklarını açmak ve filmi kapatmak linki olan herkese açık; `.env`'de `MEDIA_CONTROL=trusted` olursa sadece host ve yetkililer yapabilir.
+10. **Arkadaşa yetki:** host üstteki adlardan birine tıklayıp "Film klasörü yetkisi ver"e basabilir. Arkadaş da "Film klasörü" listesini görür ve oradan herkes için film açabilir; ama yol yazamaz, diskteki başka dosyalara erişemez, eklentileri değiştiremez. Adının yanında küçük bir "yetkili" yazısı çıkar; aynı yerdeki "Yetkiyi geri al" bitirir. Yetki arkadaşın tarayıcısına bağlıdır: bağlantı kopsa da kalır, uygulama yeniden başlayana kadar sürer. Torrent ve eklenti kaynaklarını açmak ve filmi kapatmak linki olan herkese açık; Ayarlar'da "Sadece sen ve yetki verdiklerin" seçilirse (`.env`'de `MEDIA_CONTROL=trusted`) sadece host ve yetkililer yapabilir.
 11. **Ekran paylaşımı:** kameranın yanındaki ekran düğmesi bir pencereyi, bir tarayıcı sekmesini ya da bütün ekranı paylaşır; tarayıcı sunuyorsa sesiyle birlikte (Windows'ta Chrome ve Edge). Paylaşılan ekran herkeste filmin yerine geçer, film paylaşım bitene kadar durur; imleç topları ve kalem onun üstünde de çalışır. Aynı anda tek ekran olur. Host ve yetkililer hemen paylaşır; diğerleri önce neyi paylaşacağını seçer, sonra host (ya da bir yetkili) "… ekranını paylaşmak istiyor" kartında "İzin ver" ya da "Reddet" diyene kadar bekler. O zamana kadar hiçbir şey gönderilmez; 30 saniyede cevap gelmezse istek düşer. Biri zaten paylaşıyorsa yenisine izin vermek onunkini bitirir. Host üstteki adından herkesin paylaşımını durdurabilir. Görüntü kamera gibi doğrudan diğerlerine gider, izleyici başına en çok 4 Mbps kadar; DRM'li siteler (Netflix gibi) paylaşımda siyah görünür.
 12. **Bağlantı koparsa:** sayfa odaya kendiliğinden yeniden bağlanır; kopan ses ve kamera bağlantıları (Wi-Fi değişimi, dizüstünün uykuya geçmesi) kendiliğinden yeniden kurulur.
 13. **Kısayollar:** boşluk oynat/durdur, ← → 10 sn, `f` tam ekran, `m` film sesi, `d` kalem, `Ctrl+D` mikrofon, `Ctrl+E` kamera, `Esc` kalemi kapat. Dokunmatik ekranda videoya dokunmak sadece kontrolleri gösterir; herkes için durdurmak buton ister.
@@ -121,9 +123,11 @@ Gereken upload ≈ dosyanın bitrate'i × 1,3. Dosyanın bitrate'ini bilmiyorsan
 | Telefonla çekilmiş video (1080p) | ~15-20 Mbps | dönüştürmek şart |
 | Dönüştürülmüş akış (`TRANSCODE_KBPS=5000`) | 5 Mbps | 8 Mbps |
 
-İki izleyici varsa ikiyle çarp. Upload'un düşükse `.env` içinde `MAX_COPY_KBPS` ver (ör. `6000`): bundan ağır dosyalar otomatik dönüştürülür. H.264 olmayan (HEVC/x265, 10-bit) videolar zaten her zaman dönüştürülür. Ekran kartın varsa `VIDEO_ENCODER=h264_nvenc` (NVIDIA), `h264_qsv` (Intel) ya da `h264_amf` (AMD) işlemciyi rahatlatır.
+İki izleyici varsa ikiyle çarp. Upload'un düşükse Ayarlar → Görüntü kalitesi'nde "Elle sınır"ı seç (ör. 6 Mbps; `.env`'de `MAX_COPY_KBPS=6000`): bundan ağır dosyalar otomatik dönüştürülür. H.264 olmayan (HEVC/x265, 10-bit) videolar zaten her zaman dönüştürülür. Ekran kartın varsa `VIDEO_ENCODER=h264_nvenc` (NVIDIA), `h264_qsv` (Intel) ya da `h264_amf` (AMD) işlemciyi rahatlatır.
 
 ## Ayarlar (.env)
+
+Bunların çoğu ayarlar sayfasında. `.env` geliştiriciler ve geri kalanlar için; orada verilen bir değişken sayfadakini geçer.
 
 | Değişken | Varsayılan | Açıklama |
 |---|---|---|
@@ -135,8 +139,8 @@ Gereken upload ≈ dosyanın bitrate'i × 1,3. Dosyanın bitrate'ini bilmiyorsan
 | `ADDONS_BUILTIN` | 1 | 0 = hazır eklentiler (Cinemeta, Public Domain Movies) olmadan, sadece elle eklenenler |
 | `ICE_SERVERS` | – | Ses ve kamera için virgülle ayrılmış `stun:` adresleri; boş = sadece izleyicilerin kendi adresleri (Tailscale üzerinden), Funnel'da Cloudflare'in STUN'u |
 | `TORRENT_UPLOAD_LIMIT` | 64 | Torrent'in upload sınırı (KB/s), 0 = sınırsız |
-| `MAX_COPY_KBPS` | 0 | Bunun üstündeki H.264 dosyalar dönüştürülür, 0 = hep orijinal |
-| `TRANSCODE_KBPS` | 5000 | Dönüştürülen akışın hedef bitrate'i |
+| `MAX_COPY_KBPS` | 0 (Funnel'da 5500) | Bunun üstündeki H.264 dosyalar dönüştürülür, 0 = hep orijinal |
+| `TRANSCODE_KBPS` | 5000 (Funnel'da 4500) | Dönüştürülen akışın hedef bitrate'i |
 | `VIDEO_ENCODER` | libx264 | Dönüştürme encoder'ı |
 | `MAX_HEIGHT` | 1080 | Dönüştürmede en fazla yükseklik |
 | `AUDIO_FILTER` | dynaudnorm | Ses dengeleme; boş bırakırsan kapanır |
@@ -171,7 +175,7 @@ Her tarayıcı testi kendi sunucusunu ve test videosunu başlatıp Chromium penc
 
 Tarayıcı konsolunda `cowatchDebug()` senkron değerlerini gösterir (film zamanı, beklenen konum, fark).
 
-Dosyalar: `server/` (FastAPI: oda, senkron, medya, altyazı, imleç ve çizim, ses ve kamera sinyalleri, eklentiler), `torrent-helper/` (Node: magnet → HTTP akış), `web/` (istemci; hls.js `web/vendor` içinde, Apache-2.0).
+Dosyalar: `server/` (FastAPI: oda, senkron, medya, altyazı, imleç ve çizim, ses ve kamera sinyalleri, eklentiler), `torrent-helper/` (Node: magnet → HTTP akış), `web/` (istemci; hls.js ve QR kodu üreticisi `web/vendor` içinde).
 
 ## Sonraki fazlar
 
@@ -185,3 +189,4 @@ Dosyalar: `server/` (FastAPI: oda, senkron, medya, altyazı, imleç ve çizim, s
 [GNU AGPL v3.0](LICENSE) ya da sonraki sürümleri. Kısaca: kullanabilir, değiştirebilir ve dağıtabilirsin; değiştirdiğin bir sürümü başkalarına ağ üzerinden sunarsan kaynak kodunu da onlara açman gerekir. Bu yüzden uygulamanın giriş ekranında kaynak koda link var.
 
 `web/vendor/hls.light.min.js`: [hls.js](https://github.com/video-dev/hls.js), Apache-2.0 (`web/vendor/hls.js.LICENSE`).
+`web/vendor/qrcode.js`: [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator), MIT (`web/vendor/qrcode.js.LICENSE`).

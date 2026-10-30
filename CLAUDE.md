@@ -7,7 +7,7 @@ Klasörde `_handoff/` varsa (git'e girmez) `_handoff/HANDOFF.md`'yi de oku: önc
 ## Kurallar
 
 - **Commit kimliği:** author ve committer `erkinavcii <56629073+erkinavcii@users.noreply.github.com>`. Commit mesajına `Co-Authored-By`, Claude imzası ya da oturum linki ekleme. Mesajlar Türkçe ve önceki commit'lerin üslubunda: kısa bir başlık, gerekirse madde madde ayrıntı.
-- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 60 test; ffmpeg kuruluysa medya testleri de çalışır). Arayüzü ya da WebSocket mesajlarını değiştiren her adımdan sonra tarayıcı testleri de (aşağıda).
+- **Commit'ten önce testler:** `.\.venv\Scripts\python -m pytest -q` (şu an 69 test; ffmpeg kuruluysa medya testleri de çalışır). Arayüzü ya da WebSocket mesajlarını değiştiren her adımdan sonra tarayıcı testleri de (aşağıda).
 - **İki README birlikte güncellenir:** `README.md` (İngilizce) ve `README.tr.md` (Türkçe) aynı içeriği taşır.
 - **Arayüz metinleri üç dilde:** `web/i18n.js` içindeki `tr`, `en` ve `ru` anahtarları birebir aynı olmalı.
 - `data/`, `.venv/`, `node_modules/` ve `samples/*.mkv` git'e girmez (`.gitignore`).
@@ -26,6 +26,7 @@ cd torrent-helper; npm.cmd install; cd ..
 - Dosyaları PowerShell 5.1'in `Get-Content` / `Set-Content`'i ile düzenleme: BOM'suz UTF-8'i ANSI sanıp Türkçe ve Rusça harfleri bozuyor, yazarken BOM ekliyor. Edit aracı ya da Bash (`sed`) kullan.
 - Test videosu komutu ve iki pencereli deneme adımları README'nin "Hızlı deneme" bölümünde.
 - Çalışan sunucu kodu hafızada tutar: Python tarafında değişiklik varsa `run.py` yeniden başlatılır.
+- ffmpeg winget ile kurulduysa (`Gyan.FFmpeg`) yeni açılan konsollar onu PATH'te bulur; kurulumdan önce açılmış bir kabukta `$LOCALAPPDATA/Microsoft/WinGet/Links`'i PATH'e ekle.
 
 ## Tarayıcı testleri
 
@@ -45,19 +46,21 @@ Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her
 
 | Yer | Ne yapar |
 | --- | --- |
-| `server/main.py` | FastAPI uygulaması: WebSocket mesajları (`Controller.handle`), API, erişim anahtarı, HLS dosyaları |
+| `server/main.py` | FastAPI uygulaması: WebSocket mesajları (`Controller.handle`), API, erişim anahtarı, HLS dosyaları, ayarlar ve paylaşım API'si (`/api/settings`, `/api/share`) |
+| `server/config.py` | Ayarlar: ayarlar sayfasının seçimleri (`data/settings.json`, `DEFAULTS`, `saved_env`) ve üstüne ortam değişkenleri ile `.env` |
+| `server/tailscale.py` | Tailscale'in durumu (`status`: missing, stopped, login, running), tepsi uygulamasını açma, Serve/Funnel süreci (`Share`: çıktısından izin linkini okur) |
 | `server/room.py` | Oda durumu ve senkron kuralları; oynatma durumunun tek doğru kaynağı sunucu |
 | `server/media.py` | ffprobe, kopya ya da dönüştürme kararı, ffmpeg ile HLS (fMP4) üretimi |
 | `server/presence.py` | İmleç, dürtme ve çizim mesajlarının doğrulanması, renk paleti |
 | `server/signaling.py` | Ses ve kamera için WebRTC sinyal mesajlarının (`rtc`) doğrulanması, `ICE_SERVERS` |
-| `server/filepicker.py` | "Gözat…": host'un ekranında sistemin dosya penceresi (tkinter); tarayıcının kendi seçicisi dosyanın tam yolunu vermez |
+| `server/filepicker.py` | "Gözat…": host'un ekranında sistemin dosya ya da klasör penceresi (tkinter); tarayıcının kendi seçicisi dosyanın tam yolunu vermez |
 | `server/library.py` | Film klasörleri (`LIBRARY_DIRS`): videoları listeleme, klasör numarası ve iç yoldan dosyayı bulma (klasörden çıkamaz) |
 | `server/addons.py` | Stremio eklentileri: manifest, katalog, bilgi, akış, altyazı; hazır eklentiler (`DEFAULT_ADDONS`), host'un ekledikleri `data/addons.json`'da |
 | `server/subtitles.py` | Altyazı çözme (cp1254, cp1251 gibi eski kodlamalar), OpenSubtitles, saklama |
 | `server/oshash.py`, `server/torrent_client.py` | OpenSubtitles hash'i; Node torrent yardımcısıyla konuşma |
 | `torrent-helper/index.mjs` | webtorrent: magnet linkinden HTTP Range akışı |
 | `web/app.js` | İstemci: senkron, altyazı çizimi, imleç topları, kalem, ses ve kamera (eş bağlantıları, konuşan göstergesi, film sesini kısma, kamera kutuları) |
-| `run.py` | Başlatıcı: torrent yardımcısı, Tailscale Serve (HTTPS linki), Uvicorn |
+| `run.py` | Başlatıcı (`Launcher`): torrent yardımcısı, Tailscale Serve/Funnel (HTTPS linki), Uvicorn; ayarlar kaydedilince hepsini yeni ayarlarla yeniden başlatır |
 | `tests/` | pytest testleri; `tests/e2e/` tarayıcı testleri (pytest toplamaz) |
 
 ## Bilinen tuzaklar
@@ -80,14 +83,18 @@ Arayüz, senkron ya da WebSocket mesajları değiştiyse ikisini de koştur. Her
 - **Ekran paylaşımı:** aynı anda tek ekran (`Room.screen`). Host ve yetkililer `share_request` ile hemen alır; diğerleri `Room.share_asks`'e girer, host ya da yetkili `share_answer` ile cevaplar, 30 sn'de düşer (`watchdog_loop`). Odada onaylayan kimse yoksa onaysız verilir. Durum hep tek mesajla yayılır: `{type: "screen", owner, pending}`; istemci reddedildiğini kendi kimliğinin `pending`'den sahiplik almadan çıkmasından anlar (`screen.asking` cevap gelene kadar bunu bekletir). `getDisplayMedia` sadece tıklamanın hemen ardından açılabildiği için yakalama tıklamada açılır ama ekran sunucuda o kişinin olana kadar gönderilmez (`applyLocalTracks`). Paylaşım başlarken film oynuyorsa sunucu durdurur, bitince devam ettirir (`set_screen`, `screen_paused`). Playwright'ın Chromium'u sahte bayraklarla sahte bir ekran ve ses veriyor.
 - **Test istemcisinin WebSocket'i** `base_url` ne olursa olsun `Host: testserver` gönderir; host'u taklit eden bir WebSocket testi `host: localhost:…` başlığını kendisi verir. İki ayrı `TestClient` iki ayrı olay döngüsü açar ve aynı odada mesajlar takılır; host ve misafiri tek istemcide başlıklarla ayır.
 - **Testler bu bilgisayarın ayarlarını görmez:** pytest ve tarayıcı testleri `COWATCH_DOTENV=""` (`.env` okunmaz) ve `ADDONS_BUILTIN=0` (Stremio'nun eklentilerine istek gitmez) ile çalışır. Yeni bir ayar ekleyince testlerin ona `.env`'den bağımlı olmadığına bak.
+- **Ayarlar sayfası:** seçimler `data/settings.json`'da, `.env` ve ortam değişkenlerinin altında (`get_settings`'te `{**saved_env(saved), **os.environ}`). Bir seçimin değişkeni ortamda varsa sayfada kilitli (`locked_settings`, `ENV_NAMES`) ve sunucu kaydederken onu eskisi gibi bırakır. Kaydedilenler asla `os.environ`'a yazılmaz; yazılsa kendilerini kilitlerlerdi. "Otomatik" kalite bir değişken yazmaz: Funnel açıksa (`.env`'den gelse de) 5500/4500, değilse 0/5000. Ayarlar ve paylaşım API'si sadece `is_local`.
+- **Yeniden başlatma:** `main.launcher`'ı `run.py` koyar (testlerde ve düz uvicorn'da `None`; API o zaman `restart: false` döner). `restart()` uvicorn'a `should_exit` verir; döngü `server.*` modüllerini `sys.modules`'tan silip yeniden içe aktarır, çünkü `cfg` ve `ctl` içe aktarılırken kurulur. Torrent yardımcısı ve Serve/Funnel kendi ayarları değişmediyse çalışmaya devam eder; çökmüş bir Serve her yeniden başlatmada yeniden denenir (sayfadaki "Yeniden dene"). Port ya da anahtar değişince sayfa eski sunucunun gidip yenisinin gelmesini bekleyip yeni adrese geçer (`goWhenUp`).
+- **Serve/Funnel çıktısı** artık konsola doğrudan değil, `Share._read` üzerinden gider (satırlar yine konsola yazılır). `https://login.tailscale.com/…` görülürse durum `consent`, ardından `Available…` satırı gelince `ok`. Bu metinler Tailscale'in CLI'ından; bu bilgisayarda Tailscale kurulu olmadığı için gerçek çıktıyla denenmedi.
 - **Tarayıcı testindeki sahte mikrofon** ffmpeg'in `flite` filtresiyle sentezlenmiş konuşma çalar. Chrome'un kendi sahte mikrofonu kısa bipler çıkarıyor, düz bir tonu da gürültü bastırma yarım saniyede siliyor; ikisiyle de konuşan göstergesi güvenilir denenemiyor.
 
-## Durum (28 Ekim 2026)
+## Durum (30 Ekim 2026)
 
 - Faz 1 Windows'ta denendi: yerel dosya, iki pencerede senkron, kişiye özel altyazı (TR + EN).
 - İmleç topu, dürtme sesi ve çizim eklendi; iki tarayıcı penceresiyle denendi.
 - Henüz denenmedi: Windows'ta torrent (README'deki Sintel magnet'i) ve Tailscale üzerinden arkadaşla izleme. Tailscale bu bilgisayarda kurulu ve açık (MagicDNS, HTTPS sertifikası hazır); `run.py` onu PATH'te yoksa `C:\Program Files\Tailscale`'de de arar.
 - Funnel (`TAILSCALE_FUNNEL=1`) bu bilgisayarda açık (tailnet'te Funnel izni verildi; ilk seferde onay linki çıkıyor ve onaydan sonra `run.py`'yi yeniden başlatmak gerekebiliyor). `https://….ts.net` linki internetten erişiliyor (anahtarsız 401). Linkle açılan sayfa güvenli sayılıyor, WebSocket Tailscale'in HTTPS vekilinden geçiyor, misafir host sayılmıyor, mikrofon açılıyor (Playwright ile, 28 Ekim). 28 Ekim: telefondan mobil veriyle linke girildi, oda açıldı. 29 Ekim ölçüm: Funnel aktarıcısı üzerinden 64 MB indirme ≈ 7–8 Mbps (iki deneme); aynı anda evin upload'u ≈ 28–31 Mbps, download'u ≈ 68–71 Mbps. Yani darboğaz Funnel. İki izleyicinin bu sınırı paylaşıp paylaşmadığı bilinmiyor. Denenmedi: gerçek bir filmle baştan sona, ses ve kamera STUN ile dışarıdaki bir cihazla.
+- 30 Ekim: proje yeni bir bilgisayara klonlandı (Python 3.11, Node 22, ffmpeg winget'ten; **Tailscale kurulu değil**). Bu bilgisayarda `two_viewers.py`'nin "a pointer lands on the same spot" denetimi değişikliklerden önce de düşüyor (top, farenin ilk adımında kalıyor); diğerleri geçiyor.
 - Bilgisayar yeniden başlayınca Tailscale tepsi uygulaması açılmazsa servis "starting" durumunda kalıyor ve `run.py` HTTPS linki veremiyor; `tailscale-ipn.exe`'yi açmak yetiyor.
 - Masaüstü uygulamasının yerleşik tarayıcısı bu sitenin betiklerini engelliyor (`ERR_BLOCKED_BY_CLIENT`); denemeler Playwright'la ya da gerçek bir tarayıcıyla yapılmalı.
 - Kamera-ses 1. adımının kodu bitti: `is_local`, `run.py`'de Tailscale Serve, ses ve kamera tarayıcı testi (Playwright kuruldu, iki test de geçiyor). Tailscale olmadan eski http davranışı denendi. Serve'ün kendisi (WebSocket'in geçmesi dahil) Tailscale kurulunca denenecek.
@@ -102,7 +109,9 @@ Plan: [docs/kamera-ses-plani.md](docs/kamera-ses-plani.md). Plandaki beş karar 
 - 4. adım (cila) kodlandı: girişte önizleme, kutuları sürükleme ve küçültme, kendiliğinden onarım. Tarayıcı testi üçüncü bir izleyiciyle 3 kişilik bağlantıyı da deniyor. Kişi başına %100 üstü ses yapılmadı (yankı denemesinden sonra gerekirse).
 - Kalan: plandaki ölçüt, Tailscale üzerinden arkadaşlarla gerçek cihazlarda başından sonuna bir film (elle).
 
-Sonraki işler (önce genel program tamamlanacak): [docs/future-plans.md](docs/future-plans.md). Dağıtım ve paketleme (kurulum dosyası, tepsi başlatıcısı, ayarlar sayfası; ilk açılışta Funnel, daha yüksek kalite için Serve), Faz 2 ve 3.
+Sonraki işler (önce genel program tamamlanacak): [docs/future-plans.md](docs/future-plans.md). Dağıtım ve paketleme (kurulum dosyası, tepsi başlatıcısı; ilk açılışta Funnel, daha yüksek kalite için Serve), Faz 2 ve 3.
+
+- Dağıtımın 1. adımı (30 Ekim) kodlandı: Paylaş kartı (arkadaş linki, kopyala, QR, Tailscale'in durumu ve ne yapılacağı), ayarlar sayfası (bağlantı, kalite, film klasörleri, film kontrolü, OpenSubtitles, port, torrent upload sınırı, STUN, yeni oda anahtarı), kaydedince `run.py` içinde yeniden başlatma. Playwright'la denendi: kaydetme, yeniden başlayıp bağlanma, port ve anahtar değişince yeni adrese geçme, telefon genişliği. Kalan: Tailscale'li bir bilgisayarda Serve/Funnel durumları (izin linki, kapalı, oturum açılmamış) gerçek çıktıyla. Varsayılan bağlantı hâlâ Serve; planın "ilk açılışta Funnel" kararı kurulum dosyasıyla birlikte verilecek.
 
 - Eklentiler (29 Ekim) kodlandı: "Göz at" kartı (katalog, arama, sezon ve bölüm, kaynaklar), eklenti listesi, eklentilerden altyazı, film kimliğiyle OpenSubtitles araması. Gerçek Cinemeta ve Public Domain Movies ile denendi: arama, Breaking Bad'in sezonları, "The Kid" torrent'i açılıp oynadı. Kalan: ayarlar sayfası (dağıtım planıyla birlikte).
 

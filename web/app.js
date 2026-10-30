@@ -1,5 +1,5 @@
 'use strict';
-/* global Hls, I18N, UI_LANGS, detectUiLang */
+/* global Hls, I18N, UI_LANGS, detectUiLang, qrcode */
 // Co-Watch client. The server owns playback state; this page only sends requests
 // (play/pause/seek/buffering) and keeps its own <video> aligned with the broadcast state.
 // Film time = video.currentTime + media.streamStart. Subtitles are drawn locally.
@@ -40,6 +40,15 @@
     titleMeta: $('#titleMeta'), titleDesc: $('#titleDesc'), episodes: $('#episodes'), seasonSel: $('#seasonSel'),
     episodeList: $('#episodeList'), streamList: $('#streamList'),
     addonSubs: $('#addonSubs'), addonSubsBtn: $('#addonSubsBtn'), addonSubsList: $('#addonSubsList'),
+    shareCard: $('#shareCard'), settingsBtn: $('#settingsBtn'), tsLight: $('#tsLight'), tsText: $('#tsText'),
+    tsLink: $('#tsLink'), tsOpen: $('#tsOpen'), shareRetry: $('#shareRetry'), tsHint: $('#tsHint'),
+    friendRow: $('#friendRow'), friendLink: $('#friendLink'), copyLink: $('#copyLink'), shareHint: $('#shareHint'),
+    qrCanvas: $('#qrCanvas'), settingsOverlay: $('#settingsOverlay'), settingsForm: $('#settingsForm'),
+    settingsClose: $('#settingsClose'), settingsCancel: $('#settingsCancel'), settingsSave: $('#settingsSave'),
+    settingsWarn: $('#settingsWarn'), qualityMbps: $('#qualityMbps'), dirList: $('#dirList'), dirInput: $('#dirInput'),
+    dirPick: $('#dirPick'), dirAdd: $('#dirAdd'), osApiKey: $('#osApiKey'), osUsername: $('#osUsername'),
+    osPassword: $('#osPassword'), port: $('#port'), torrentUploadLimit: $('#torrentUploadLimit'),
+    iceServers: $('#iceServers'), newKeyBtn: $('#newKeyBtn'),
   };
   const video = el.video;
   // Screen sharing (see "screen sharing" below): who shares, who waits for an answer, and my
@@ -445,6 +454,7 @@
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return; // browser shortcuts, not ours
+    if (!el.settingsOverlay.hidden) return; // its own keys: Escape closes it
     const tag = (e.target && e.target.tagName) || '';
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
     if (e.code === 'Space' || e.key === 'k') { e.preventDefault(); togglePlay(); }
@@ -1898,8 +1908,258 @@
       S.downloadThrottled = !!status.downloadThrottled;
       if (status.progress) S.progress = status.progress;
       renderMediaPanel();
+      if (S.isHost) startShare();
     } catch { /* offline: the websocket indicator already shows it */ }
   }
+
+  // ---------------------------------------------------------------- share card and settings (host only)
+  // The friends' link with its QR code, Tailscale's state and what to do about it, and the
+  // settings page that stands in for .env. Saving restarts the server (run.py); pages reconnect
+  // by themselves, and this one moves to the new address when the port or the key changed.
+  const SH = { data: null, timer: null, settings: null, dirs: [], qrFor: null, key: null };
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function loadShare () {
+    try { SH.data = await api('/api/share'); } catch { return; }
+    renderShare();
+  }
+  function startShare () {
+    if (SH.timer) return;
+    el.shareCard.hidden = false;
+    loadShare();
+    SH.timer = setInterval(loadShare, 5000);
+  }
+
+  // The light, the text, and what the host can do about it.
+  function shareView (d) {
+    const ts = d.tailscale || {};
+    const share = d.share || {};
+    const funnel = d.connection === 'funnel';
+    if (d.connection === 'http') return { light: '', text: t('share_http') };
+    if (ts.state === 'missing') return { light: 'bad', text: t('ts_missing'), link: [t('ts_download'), ts.downloadUrl] };
+    if (ts.state === 'stopped') return { light: 'bad', text: t('ts_stopped'), open: ts.canOpen, retry: true, hint: t('ts_stopped_hint') };
+    if (ts.state === 'login') {
+      return { light: 'warn', text: t('ts_login'), link: ts.authUrl ? [t('ts_login_link'), ts.authUrl] : null, open: !ts.authUrl && ts.canOpen, retry: true };
+    }
+    if (share.state === 'consent') {
+      return { light: 'warn', text: t(funnel ? 'share_consent_funnel' : 'share_consent_serve'), link: [t('share_consent_link'), share.url], retry: true, hint: t('share_consent_hint') };
+    }
+    if (share.state === 'failed') return { light: 'bad', text: t('share_failed'), retry: true, hint: (share.lines || []).join(' · ') };
+    if (share.state === 'ok') return { light: 'ok', text: t(funnel ? 'share_ok_funnel' : 'share_ok_serve') };
+    if (share.state === 'unknown') return { light: '', text: t('share_unknown') };
+    return { light: 'warn', text: t('share_not_started'), retry: true }; // Tailscale came up after the start
+  }
+
+  function renderShare () {
+    const d = SH.data;
+    if (!d) return;
+    const v = shareView(d);
+    el.tsLight.className = `light ${v.light}`;
+    el.tsText.textContent = v.text;
+    el.tsLink.hidden = !v.link;
+    if (v.link) { el.tsLink.textContent = v.link[0]; el.tsLink.href = v.link[1]; }
+    el.tsOpen.hidden = !v.open;
+    el.shareRetry.hidden = !(v.retry && d.canRestart);
+    el.tsHint.textContent = v.hint || '';
+    el.tsHint.hidden = !v.hint;
+    const link = d.friendLink || '';
+    el.friendRow.hidden = !link;
+    if (el.friendLink.value !== link) el.friendLink.value = link;
+    el.shareHint.textContent = link ? t(`share_hint_${d.connection}`) : t('share_no_link');
+    renderQr(link);
+  }
+
+  function renderQr (text) {
+    el.qrCanvas.hidden = !text || typeof qrcode !== 'function';
+    if (el.qrCanvas.hidden || SH.qrFor === text) return;
+    SH.qrFor = text;
+    const qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    const quiet = 2; // the white border scanners need
+    const n = qr.getModuleCount();
+    const scale = Math.ceil(264 / (n + quiet * 2));
+    const size = (n + quiet * 2) * scale;
+    el.qrCanvas.width = size; el.qrCanvas.height = size;
+    const ctx = el.qrCanvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, size, size);
+    ctx.fillStyle = '#000';
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) if (qr.isDark(r, c)) ctx.fillRect((c + quiet) * scale, (r + quiet) * scale, scale, scale);
+    }
+  }
+
+  el.copyLink.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(el.friendLink.value);
+    } catch {
+      el.friendLink.select();
+      document.execCommand('copy');
+    }
+    toast(t('share_copied'));
+  });
+  el.tsOpen.addEventListener('click', async () => {
+    try {
+      await api('/api/tailscale/open', { method: 'POST' });
+      toast(t('ts_opening'));
+      setTimeout(loadShare, 4000);
+    } catch (err) { toast(errorText(err), 'error'); }
+  });
+  el.shareRetry.addEventListener('click', async () => {
+    try {
+      await api('/api/share/retry', { method: 'POST' });
+      toast(t('restarting'));
+    } catch (err) { toast(errorText(err), 'error'); }
+  });
+
+  // After a restart with a new port or key, this page's address no longer works: wait for the
+  // old server to go and the new one to come, then open the new address.
+  async function goWhenUp (url) {
+    const up = () => fetch(url, { mode: 'no-cors', cache: 'no-store' }).then(() => true, () => false);
+    for (let i = 0; i < 20 && await up(); i++) await sleep(500);
+    for (let i = 0; i < 60 && !await up(); i++) await sleep(1000);
+    location.href = url;
+  }
+  function afterSave (res) {
+    if (!res.restart) { toast(t('settings_saved_manual'), 'info', 9000); return; }
+    toast(t('restarting'));
+    const target = new URL(res.localLink);
+    const key = new URLSearchParams(target.search).get('k');
+    if (target.port !== location.port || key !== SH.key) goWhenUp(res.localLink);
+  }
+
+  const radio = (name) => (el.settingsForm.querySelector(`input[name=${name}]:checked`) || {}).value;
+  function setRadio (name, value) {
+    for (const input of el.settingsForm.querySelectorAll(`input[name=${name}]`)) input.checked = input.value === value;
+  }
+
+  async function openSettings () {
+    let data;
+    try { data = await api('/api/settings'); } catch (err) { toast(errorText(err), 'error'); return; }
+    SH.settings = data;
+    SH.key = new URLSearchParams(new URL(SH.data ? SH.data.localLink : location.href).search).get('k');
+    const v = data.values;
+    const cur = data.current;
+    const locked = new Set(data.locked);
+    // A choice set in .env shows what runs now, read-only.
+    const pick = (key, current) => (locked.has(key) ? current : v[key]);
+    setRadio('connection', pick('connection', cur.connection));
+    setRadio('quality', pick('quality', cur.maxCopyKbps ? 'manual' : 'original'));
+    el.qualityMbps.value = locked.has('quality') && cur.maxCopyKbps ? cur.maxCopyKbps / 1000 : v.qualityMbps;
+    SH.dirs = [...pick('libraryDirs', cur.libraryDirs)];
+    setRadio('mediaControl', pick('mediaControl', cur.mediaControl));
+    el.osApiKey.value = pick('osApiKey', cur.osApiKey);
+    el.osUsername.value = pick('osUsername', cur.osUsername);
+    el.osPassword.value = '';
+    el.osPassword.placeholder = v.hasPassword ? t('os_password_saved') : '';
+    el.port.value = pick('port', cur.port);
+    el.torrentUploadLimit.value = pick('torrentUploadLimit', cur.torrentUploadLimit);
+    el.iceServers.value = pick('iceServers', cur.iceServers);
+    for (const node of el.settingsForm.querySelectorAll('[data-key]')) {
+      const isLocked = locked.has(node.dataset.key);
+      for (const input of node.querySelectorAll('input, button')) input.disabled = isLocked;
+      let note = node.querySelector(':scope > .lock-note');
+      if (isLocked && !note) {
+        note = document.createElement('p');
+        note.className = 'hint lock-note';
+        node.appendChild(note);
+      }
+      if (note) { note.hidden = !isLocked; note.textContent = t('set_locked'); }
+    }
+    el.newKeyBtn.disabled = data.keyLocked;
+    el.settingsWarn.textContent = t(!data.canRestart ? 'settings_no_restart' : data.mediaOpen ? 'settings_restart_media' : 'settings_restart');
+    el.settingsWarn.hidden = false;
+    renderDirs();
+    renderQuality();
+    el.settingsOverlay.hidden = false;
+  }
+  function closeSettings () { el.settingsOverlay.hidden = true; }
+
+  function renderQuality () {
+    el.qualityMbps.closest('.field').hidden = radio('quality') !== 'manual';
+  }
+  function renderDirs () {
+    const locked = !!SH.settings && SH.settings.locked.includes('libraryDirs');
+    el.dirList.replaceChildren();
+    if (!SH.dirs.length) {
+      const li = document.createElement('li');
+      li.className = 'hint';
+      li.textContent = t('library_dirs_empty');
+      el.dirList.appendChild(li);
+    }
+    for (const dir of SH.dirs) {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.textContent = dir;
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'ghost'; del.textContent = t('delete'); del.disabled = locked;
+      del.addEventListener('click', () => { SH.dirs = SH.dirs.filter((d) => d !== dir); renderDirs(); });
+      li.append(name, del);
+      el.dirList.appendChild(li);
+    }
+  }
+  function addDir (path) {
+    const dir = (path || '').trim().replace(/^["']+|["']+$/g, '');
+    if (dir && !SH.dirs.includes(dir)) SH.dirs.push(dir);
+    renderDirs();
+  }
+
+  function settingsBody () {
+    const body = {
+      connection: radio('connection'), quality: radio('quality'), qualityMbps: Number(el.qualityMbps.value) || 8,
+      libraryDirs: SH.dirs, mediaControl: radio('mediaControl'), port: Number(el.port.value) || 0,
+      torrentUploadLimit: Math.max(0, Number(el.torrentUploadLimit.value) || 0), iceServers: el.iceServers.value,
+      osApiKey: el.osApiKey.value.trim(), osUsername: el.osUsername.value.trim(),
+    };
+    if (el.osPassword.value) body.osPassword = el.osPassword.value;
+    else if (!body.osUsername) body.osPassword = ''; // no account: forget its password too
+    return body;
+  }
+  function settingsError (err) {
+    const raw = String(err && err.message ? err.message : err);
+    if (raw.startsWith('library_dir_missing:')) return t('err_library_dir_missing', { path: raw.slice(20).trim() });
+    if (raw.startsWith('[')) return t('err_settings_invalid'); // a value out of range
+    return errorText(err);
+  }
+
+  el.settingsBtn.addEventListener('click', openSettings);
+  el.settingsClose.addEventListener('click', closeSettings);
+  el.settingsCancel.addEventListener('click', closeSettings);
+  el.settingsOverlay.addEventListener('mousedown', (e) => { if (e.target === el.settingsOverlay) closeSettings(); });
+  el.settingsOverlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSettings(); });
+  el.settingsForm.addEventListener('change', (e) => { if (e.target.name === 'quality') renderQuality(); });
+  el.dirAdd.addEventListener('click', () => { addDir(el.dirInput.value); el.dirInput.value = ''; });
+  el.dirInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addDir(el.dirInput.value); el.dirInput.value = ''; }
+  });
+  el.dirPick.addEventListener('click', async () => {
+    try {
+      const res = await api('/api/settings/pick-folder', { json: { title: t('pick_folder_title') } });
+      if (res.path) addDir(res.path);
+    } catch (err) { toast(errorText(err), 'error'); }
+  });
+  el.settingsForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    el.settingsSave.disabled = true;
+    try {
+      const res = await api('/api/settings', { json: settingsBody() });
+      closeSettings();
+      afterSave(res);
+    } catch (err) {
+      toast(settingsError(err), 'error');
+    } finally {
+      el.settingsSave.disabled = false;
+    }
+  });
+  el.newKeyBtn.addEventListener('click', async () => {
+    if (!confirm(t('set_new_key_confirm'))) return;
+    try {
+      const res = await api('/api/settings/key', { method: 'POST' });
+      closeSettings();
+      afterSave(res);
+    } catch (err) { toast(errorText(err), 'error'); }
+  });
 
   // ---------------------------------------------------------------- browse: add-on catalogs
   // Catalogs, details and sources come from Stremio add-ons, through the server. A source is
@@ -2263,7 +2523,7 @@
   // ---------------------------------------------------------------- rendering
   function renderAll () {
     renderControls(); renderMembers(); renderMediaPanel(); renderTracks(); renderSubStyle(); renderCenter();
-    renderToolbar(); renderVoice(); renderCams(); renderCatalogs(); renderAddons();
+    renderToolbar(); renderVoice(); renderCams(); renderCatalogs(); renderAddons(); renderShare();
     el.uiLang.value = prefs.uiLang;
     el.joinLang.value = prefs.uiLang;
     if (document.activeElement !== el.searchLangs) {

@@ -110,6 +110,29 @@
     </div>
 
     <div class="cards">
+      <section class="card wide share-card" id="shareCard" hidden>
+        <div class="share-text">
+          <div class="share-head">
+            <h2 data-i18n="panel_share"></h2>
+            <button type="button" id="settingsBtn" class="ghost" data-i18n="settings_open"></button>
+          </div>
+          <div class="ts-status" id="tsStatus">
+            <span class="light" id="tsLight"></span>
+            <span id="tsText"></span>
+            <a id="tsLink" class="ts-action" target="_blank" rel="noopener" hidden></a>
+            <button type="button" id="tsOpen" class="ghost" data-i18n="ts_open" hidden></button>
+            <button type="button" id="shareRetry" class="ghost" data-i18n="share_retry" hidden></button>
+          </div>
+          <p class="hint" id="tsHint" hidden></p>
+          <div class="inline-form" id="friendRow">
+            <input id="friendLink" readonly aria-label="link" spellcheck="false">
+            <button type="button" id="copyLink" class="primary" data-i18n="share_copy"></button>
+          </div>
+          <p class="hint" id="shareHint"></p>
+        </div>
+        <canvas class="qr" id="qrCanvas" hidden></canvas>
+      </section>
+
       <section class="card wide" id="browseCard">
         <div class="browse-head">
           <h2 data-i18n="panel_browse"></h2>
@@ -253,6 +276,90 @@
     </form>
   </div>
 
+  <div class="overlay settings-overlay" id="settingsOverlay" hidden>
+    <form class="settings-card" id="settingsForm" novalidate>
+      <div class="share-head">
+        <h2 data-i18n="settings_title"></h2>
+        <button type="button" id="settingsClose" class="ghost" data-i18n-title="settings_close">✕</button>
+      </div>
+
+      <fieldset data-key="connection">
+        <legend data-i18n="set_connection"></legend>
+        <label class="choice"><input type="radio" name="connection" value="funnel">
+          <span><b data-i18n="conn_funnel"></b><small data-i18n="conn_funnel_hint"></small></span></label>
+        <label class="choice"><input type="radio" name="connection" value="serve">
+          <span><b data-i18n="conn_serve"></b><small data-i18n="conn_serve_hint"></small></span></label>
+        <label class="choice"><input type="radio" name="connection" value="http">
+          <span><b data-i18n="conn_http"></b><small data-i18n="conn_http_hint"></small></span></label>
+      </fieldset>
+
+      <fieldset data-key="quality">
+        <legend data-i18n="set_quality"></legend>
+        <label class="choice"><input type="radio" name="quality" value="auto">
+          <span><b data-i18n="quality_auto"></b><small data-i18n="quality_auto_hint"></small></span></label>
+        <label class="choice"><input type="radio" name="quality" value="original">
+          <span><b data-i18n="quality_original"></b><small data-i18n="quality_original_hint"></small></span></label>
+        <label class="choice"><input type="radio" name="quality" value="manual">
+          <span><b data-i18n="quality_manual"></b><small data-i18n="quality_manual_hint"></small></span></label>
+        <label class="field mbps"><span data-i18n="quality_mbps"></span>
+          <input type="number" id="qualityMbps" min="1" max="200" step="0.5"></label>
+      </fieldset>
+
+      <fieldset data-key="libraryDirs">
+        <legend data-i18n="set_library"></legend>
+        <ul class="dir-list" id="dirList"></ul>
+        <div class="inline-form">
+          <input id="dirInput" data-i18n-placeholder="library_dir_placeholder" autocomplete="off" spellcheck="false">
+          <button type="button" id="dirPick" data-i18n="pick_file"></button>
+          <button type="button" id="dirAdd" data-i18n="library_dir_add"></button>
+        </div>
+      </fieldset>
+
+      <fieldset data-key="mediaControl">
+        <legend data-i18n="set_media_control"></legend>
+        <label class="choice"><input type="radio" name="mediaControl" value="everyone">
+          <span><b data-i18n="media_everyone"></b></span></label>
+        <label class="choice"><input type="radio" name="mediaControl" value="trusted">
+          <span><b data-i18n="media_trusted"></b><small data-i18n="media_trusted_hint"></small></span></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>OpenSubtitles</legend>
+        <ol class="hint os-steps">
+          <li><span data-i18n="os_step1"></span> <a href="https://www.opensubtitles.com" target="_blank" rel="noopener">opensubtitles.com</a></li>
+          <li><span data-i18n="os_step2"></span> <a href="https://www.opensubtitles.com/consumers" target="_blank" rel="noopener">opensubtitles.com/consumers</a></li>
+          <li data-i18n="os_step3"></li>
+        </ol>
+        <label class="field" data-key="osApiKey"><span data-i18n="os_api_key"></span><input id="osApiKey" autocomplete="off" spellcheck="false"></label>
+        <div class="grid2">
+          <label class="field" data-key="osUsername"><span data-i18n="os_username"></span><input id="osUsername" autocomplete="off" spellcheck="false"></label>
+          <label class="field" data-key="osPassword"><span data-i18n="os_password"></span><input id="osPassword" type="password" autocomplete="new-password"></label>
+        </div>
+      </fieldset>
+
+      <details class="advanced">
+        <summary data-i18n="set_advanced"></summary>
+        <div class="grid2">
+          <label class="field" data-key="port"><span data-i18n="set_port"></span><input id="port" type="number" min="1024" max="65535"></label>
+          <label class="field" data-key="torrentUploadLimit"><span data-i18n="set_torrent_up"></span><input id="torrentUploadLimit" type="number" min="0"></label>
+        </div>
+        <label class="field" data-key="iceServers"><span data-i18n="set_ice"></span>
+          <input id="iceServers" placeholder="stun:stun.l.google.com:19302" autocomplete="off" spellcheck="false"></label>
+        <div class="field">
+          <span data-i18n="set_room_key"></span>
+          <div><button type="button" id="newKeyBtn" data-i18n="set_new_key"></button></div>
+          <p class="hint" data-i18n="set_new_key_hint"></p>
+        </div>
+      </details>
+
+      <p class="hint warn" id="settingsWarn" hidden></p>
+      <div class="settings-actions">
+        <button type="button" id="settingsCancel" class="ghost" data-i18n="settings_cancel"></button>
+        <button type="submit" id="settingsSave" class="primary" data-i18n="settings_save"></button>
+      </div>
+    </form>
+  </div>
+
   <div class="peer-pop" id="peerPop" hidden>
     <span id="peerPopName"></span>
     <input type="range" id="peerVol" min="0" max="1" step="0.05">
@@ -265,6 +372,7 @@
   <div class="toasts" id="toasts"></div>
 
   <script src="/static/vendor/hls.light.min.js"></script>
+  <script src="/static/vendor/qrcode.js"></script>
   <script src="/static/i18n.js"></script>
   <script src="/static/app.js"></script>
 </body>

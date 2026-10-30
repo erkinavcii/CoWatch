@@ -42,6 +42,8 @@ Amaç: teknik bilgisi olmayan biri `run.py`, `.env` ve Tailscale komutlarıyla u
 
 ### Adımlar
 
+> **Durum (30 Ekim 2026):** 1. adım kodlandı (`server/tailscale.py`, `run.py`'deki `Launcher`, Paylaş kartı ve ayarlar sayfası). Ekran kartı seçimi 2. adımda. Varsayılan bağlantı şimdilik Serve; Funnel'a geçiş kurulum dosyasıyla.
+
 1. **Ayarlar sayfası, paylaşım kartı ve Tailscale durumu.** Exe olmadan da işe yarar; `run.py` kullananlar da faydalanır.
    - Ayarlar `settings.json`'da; `.env` ve ortam değişkenleri varsa onlar kazanır (geliştiriciler için).
    - Ayarlar API'si sadece `is_local` isteklere açık.
