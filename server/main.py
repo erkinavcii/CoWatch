@@ -32,7 +32,8 @@ from starlette.websockets import WebSocketState
 
 from .addons import AddonError, AddonStore, episode_label, magnet
 from .config import CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
-from . import filepicker, library, tailscale
+from . import filepicker, library, stremio, tailscale
+from .stremio import StremioError
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
 from .presence import PALETTE, POKE_INTERVAL_S, pick_color, point, stroke_message
@@ -685,6 +686,11 @@ def _setup_logging() -> None:
 async def lifespan(_app: FastAPI):
     _setup_logging()
     clear_hls_dir(cfg)
+    if cfg.addons_stremio and not ctl.addons.user_urls():
+        try:
+            await ctl.addons.import_urls(await asyncio.to_thread(stremio.addon_urls))
+        except StremioError as exc:
+            log.info("Stremio add-ons were not imported: %s", exc)
     ctl.tasks = [
         asyncio.create_task(ctl.progress_loop()),
         asyncio.create_task(ctl.watchdog_loop()),
@@ -1038,6 +1044,19 @@ async def api_addon_add(body: AddonBody, request: Request):
         return await ctl.addons.add(body.url)
     except AddonError as exc:
         raise _addon_error(exc) from None
+
+
+@app.post("/api/addons/stremio")
+async def api_addon_stremio(request: Request):
+    if not is_local(request):
+        raise HTTPException(403, detail="addons_host_only")
+    try:
+        urls = await asyncio.to_thread(stremio.addon_urls)
+    except StremioError as exc:
+        status = 404 if exc.code == "stremio_not_found" else 400
+        raise HTTPException(status, detail=exc.code) from None
+    result = await ctl.addons.import_urls(urls)
+    return {**result, "found": len(urls)}
 
 
 @app.delete("/api/addons")

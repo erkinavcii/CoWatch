@@ -182,6 +182,7 @@ class Settings:
     media_control: str  # "everyone" changes the film; "trusted" = only the host and co-hosts
     # add-ons
     addons_builtin: bool  # Cinemeta and Public Domain Movies; 0 = only the ones added by hand
+    addons_stremio: bool  # import the add-ons installed in Stremio when the list is empty
     # voice and camera
     ice_servers: str  # comma-separated stun:/turn: URLs, empty = direct addresses only (FUNNEL_STUN with Funnel)
     # OpenSubtitles
@@ -274,6 +275,7 @@ def get_settings() -> Settings:
         library_dirs=_paths(v, "LIBRARY_DIRS"),
         media_control="trusted" if _str(v, "MEDIA_CONTROL").lower() == "trusted" else "everyone",
         addons_builtin=_int(v, "ADDONS_BUILTIN", 1) != 0,
+        addons_stremio=_int(v, "ADDONS_STREMIO", 0) != 0,
         ice_servers=_str(v, "ICE_SERVERS") or (FUNNEL_STUN if funnel else ""),
         os_api_key=_str(v, "OPENSUBTITLES_API_KEY"),
         os_username=_str(v, "OPENSUBTITLES_USERNAME"),

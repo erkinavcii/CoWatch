@@ -34,7 +34,8 @@
     camsBox: $('#camsBox'), camsSizeBtn: $('#camsSizeBtn'), sideLeft: $('#sideLeft'), sideRight: $('#sideRight'),
     catalogSel: $('#catalogSel'), browseSearch: $('#browseSearch'), browseQuery: $('#browseQuery'),
     addonsBtn: $('#addonsBtn'), addonsPanel: $('#addonsPanel'), addonList: $('#addonList'), addonForm: $('#addonForm'),
-    addonUrl: $('#addonUrl'), addonsNote: $('#addonsNote'), addonsHostOnly: $('#addonsHostOnly'),
+    addonUrl: $('#addonUrl'), addonsStremio: $('#addonsStremio'), addonsNote: $('#addonsNote'),
+    addonsHostOnly: $('#addonsHostOnly'),
     browseList: $('#browseList'), browseGrid: $('#browseGrid'), browseStatus: $('#browseStatus'), browseMore: $('#browseMore'),
     titleView: $('#titleView'), titleBack: $('#titleBack'), titlePoster: $('#titlePoster'), titleName: $('#titleName'),
     titleMeta: $('#titleMeta'), titleDesc: $('#titleDesc'), episodes: $('#episodes'), seasonSel: $('#seasonSel'),
@@ -2433,7 +2434,7 @@
     e.preventDefault();
     const url = el.addonUrl.value.trim();
     if (!url) return;
-    const btn = el.addonForm.querySelector('button');
+    const btn = el.addonForm.querySelector('button[type="submit"]');
     btn.disabled = true;
     try {
       const added = await api('/api/addons', { json: { url } });
@@ -2444,6 +2445,21 @@
       toast(errorText(err), 'error');
     } finally {
       btn.disabled = false;
+    }
+  });
+  el.addonsStremio.addEventListener('click', async () => {
+    if (!B.canEdit || !confirm(t('addons_stremio_confirm'))) return;
+    el.addonsStremio.disabled = true;
+    try {
+      const { added, found } = await api('/api/addons/stremio', { method: 'POST' });
+      if (added.length) toast(t('addons_stremio_added', { n: added.length }));
+      else toast(t(found ? 'addons_stremio_none' : 'addons_stremio_empty'));
+      await loadAddons();
+      loadCatalog(true);
+    } catch (err) {
+      toast(errorText(err), 'error');
+    } finally {
+      el.addonsStremio.disabled = false;
     }
   });
 

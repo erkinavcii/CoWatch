@@ -210,6 +210,34 @@ class AddonStore:
         self._save(self.user_urls() + [url])
         return Addon(url, manifest, False).public()
 
+    async def import_urls(self, urls: list[str]) -> dict:
+        """Add every address that answers, skipping the ones already known. One bad or
+        unreachable add-on does not stop the rest; the caller gets what was added and why
+        the others were left out."""
+        known = dict(self.urls())
+        added, skipped, fresh = [], [], []
+        for text in list(urls)[:100]:
+            try:
+                url = manifest_url(text)
+            except AddonError as exc:
+                skipped.append({"url": str(text)[:2000], "error": exc.code})
+                continue
+            if url in known:
+                skipped.append({"url": url, "error": "addon_exists"})
+                continue
+            self._manifests.pop(url, None)
+            manifest, _error = await self._manifest(url)
+            if manifest is None:
+                skipped.append({"url": url, "error": "addon_unreachable"})
+                continue
+            known[url] = False
+            fresh.append(url)
+            added.append(Addon(url, manifest, False).public())
+        if fresh:
+            saved = self.user_urls()
+            self._save(saved + [url for url in fresh if url not in saved])
+        return {"added": added, "skipped": skipped}
+
     def remove(self, url: str) -> bool:
         urls = self.user_urls()
         if url not in urls:
