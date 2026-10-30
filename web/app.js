@@ -40,7 +40,10 @@
     titleView: $('#titleView'), titleBack: $('#titleBack'), titlePoster: $('#titlePoster'), titleName: $('#titleName'),
     titleMeta: $('#titleMeta'), titleDesc: $('#titleDesc'), episodes: $('#episodes'), seasonSel: $('#seasonSel'),
     episodeList: $('#episodeList'), streamList: $('#streamList'),
+    streamTools: $('#streamTools'), streamFilter: $('#streamFilter'), streamAddon: $('#streamAddon'),
+    streamQuality: $('#streamQuality'), streamCount: $('#streamCount'), streamMore: $('#streamMore'),
     addonSubs: $('#addonSubs'), addonSubsBtn: $('#addonSubsBtn'), addonSubsList: $('#addonSubsList'),
+    addonSubsLang: $('#addonSubsLang'), addonSubsMore: $('#addonSubsMore'),
     shareCard: $('#shareCard'), settingsBtn: $('#settingsBtn'), tsLight: $('#tsLight'), tsText: $('#tsText'),
     tsLink: $('#tsLink'), tsOpen: $('#tsOpen'), shareRetry: $('#shareRetry'), tsHint: $('#tsHint'),
     friendRow: $('#friendRow'), friendLink: $('#friendLink'), copyLink: $('#copyLink'), shareHint: $('#shareHint'),
@@ -50,6 +53,8 @@
     dirPick: $('#dirPick'), dirAdd: $('#dirAdd'), osApiKey: $('#osApiKey'), osUsername: $('#osUsername'),
     osPassword: $('#osPassword'), port: $('#port'), torrentUploadLimit: $('#torrentUploadLimit'),
     iceServers: $('#iceServers'), newKeyBtn: $('#newKeyBtn'),
+    stageWrap: $('#stageWrap'), miniBack: $('#miniBack'), miniClose: $('#miniClose'), pipBtn: $('#pipBtn'),
+    awayMsg: $('#awayMsg'), pipReturn: $('#pipReturn'),
   };
   const video = el.video;
   // Screen sharing (see "screen sharing" below): who shares, who waits for an answer, and my
@@ -275,7 +280,7 @@
   function applyMedia (media) {
     const changedFilm = (S.media && S.media.mediaKey) !== (media && media.mediaKey);
     S.media = media;
-    if (changedFilm) { S.cues.clear(); el.addonSubsList.replaceChildren(); }
+    if (changedFilm) { S.cues.clear(); resetAddonSubs(); }
     if (!media) {
       destroyPlayer();
     } else if (media.streamId !== S.streamId) {
@@ -430,6 +435,7 @@
   });
 
   function toggleFullscreen () {
+    if (PIP.win) return; // a picture-in-picture window cannot go fullscreen
     const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
     if (fsEl) {
       (document.exitFullscreen || document.webkitExitFullscreen).call(document);
@@ -439,6 +445,80 @@
     }
   }
   el.fsBtn.addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', () => renderMini());
+
+  // ---- the player follows the viewer
+  // Scrolled down to the source lists, the stage moves to a corner box (its place on the page
+  // is held, so nothing jumps); a click on it scrolls back. The window button puts it in its
+  // own always-on-top window (Chrome's Document Picture-in-Picture), which stays in front of
+  // every app and monitor. Unlike the video-only picture-in-picture it takes the subtitles,
+  // pointers and drawings along, since they are part of the stage.
+  const MINI = { visible: true, off: false };
+  const PIP = { win: null };
+  new IntersectionObserver((entries) => {
+    MINI.visible = entries[0].isIntersecting;
+    if (MINI.visible) MINI.off = false; // closed for this trip down the page only
+    renderMini();
+  }, { threshold: 0.2 }).observe(el.stageWrap);
+
+  function renderMini () {
+    const fs = (document.fullscreenElement || document.webkitFullscreenElement) === el.stage;
+    const want = !MINI.visible && !MINI.off && !PIP.win && !fs && !!(S.media || screen.owner);
+    if (want === el.stage.classList.contains('mini')) return;
+    el.stageWrap.style.height = want ? `${el.stageWrap.offsetHeight}px` : '';
+    el.stage.classList.toggle('mini', want);
+    document.body.classList.toggle('has-mini', want); // notices move up, off the box
+  }
+  el.miniBack.addEventListener('click', () => el.stageWrap.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  el.miniClose.addEventListener('click', () => { MINI.off = true; renderMini(); });
+
+  el.pipBtn.hidden = !('documentPictureInPicture' in window);
+  async function togglePip () {
+    if (PIP.win) { PIP.win.close(); return; }
+    const height = Math.round(Math.min(360, el.stage.clientHeight || 360));
+    let win;
+    try {
+      win = await window.documentPictureInPicture.requestWindow({ width: Math.round(height * 16 / 9), height });
+    } catch (err) {
+      toast(errorText(err), 'error');
+      return;
+    }
+    PIP.win = win;
+    for (const node of document.querySelectorAll('link[rel="stylesheet"], style')) win.document.head.appendChild(node.cloneNode(true));
+    win.document.documentElement.style.cssText = document.documentElement.style.cssText; // subtitle size and height
+    win.document.title = document.title;
+    win.document.body.className = 'pip-body';
+    el.stageWrap.style.height = `${el.stageWrap.offsetHeight}px`;
+    el.stage.classList.remove('mini');
+    el.stage.classList.add('pip');
+    win.document.body.appendChild(el.stage);
+    resumeAfterMove();
+    el.stageWrap.classList.add('away');
+    el.awayMsg.hidden = false;
+    // Keys pressed in the small window work as on the page (space, arrows, m...).
+    win.document.addEventListener('keydown', (e) => {
+      const copy = new KeyboardEvent('keydown', { key: e.key, code: e.code, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, shiftKey: e.shiftKey });
+      if (!document.dispatchEvent(copy) || copy.defaultPrevented) e.preventDefault();
+    });
+    win.addEventListener('pagehide', () => {
+      el.stage.classList.remove('pip');
+      el.stageWrap.appendChild(el.stage);
+      resumeAfterMove();
+      el.stageWrap.classList.remove('away');
+      el.awayMsg.hidden = true;
+      el.stageWrap.style.height = '';
+      PIP.win = null;
+      renderMini();
+    });
+    win.requestAnimationFrame(pipFrame);
+  }
+  // The browser pauses a video moved to another document; a running room carries on at once.
+  function resumeAfterMove () {
+    if (roomRunning() && S.media && !screen.owner) video.play().catch(() => {});
+    if (screen.owner && el.screenVideo.srcObject) el.screenVideo.play().catch(() => {});
+  }
+  el.pipBtn.addEventListener('click', togglePip);
+  el.pipReturn.addEventListener('click', () => { if (PIP.win) PIP.win.close(); });
   el.stage.addEventListener('dblclick', (e) => { if (!isUi(e.target) && !S.penMode) toggleFullscreen(); });
   // A click on the picture pokes the others (see presence below); pausing for everyone
   // takes the button or the space key, so nobody stops the film by accident.
@@ -492,7 +572,7 @@
   const MAX_STROKES = 300;
   const MAX_STROKE_POINTS = 4000;
 
-  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable, .share-asks'));
+  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable, .share-asks, .mini-back, .mini-close'));
   const hovers = (e) => e.pointerType === 'mouse' || e.pointerType === 'pen';
   const memberById = (id) => S.members.find((m) => m.id === id);
   const colorOf = (id) => { const m = memberById(id); return (m && m.color) || '#ffffff'; };
@@ -2335,8 +2415,21 @@
     el.streamList.replaceChildren(li);
   }
 
+  // A title can have dozens of sources from several add-ons: they come in one list that can be
+  // narrowed by text, add-on and picture quality, and shown a page at a time.
+  const STREAM_PAGE = 15;
+  const QUALITIES = [ // read from the source's name and description, whatever the add-on
+    ['4k', /\b(2160p|4k|uhd)\b/i], ['1080p', /\b1080[pi]\b/i], ['720p', /\b720p\b/i], ['sd', /\b(576p|480p|360p|sd)\b/i],
+  ];
+  const ST = { list: [], name: '', shown: STREAM_PAGE, quality: '', addon: '' };
+  const streamText = (s) => `${s.addon} ${s.name} ${s.detail}`;
+  const streamQuality = (s) => (QUALITIES.find(([, re]) => re.test(streamText(s))) || ['other'])[0];
+
   async function loadStreams (type, id, name) {
     const seq = ++B.streamSeq;
+    el.streamTools.hidden = true;
+    el.streamMore.hidden = true;
+    el.streamCount.textContent = '';
     streamMessage(t('browse_loading'));
     let streams;
     try {
@@ -2347,34 +2440,82 @@
     }
     if (seq !== B.streamSeq) return;
     if (!streams.length) { streamMessage(t('streams_none')); return; }
-    el.streamList.replaceChildren();
-    for (const s of streams) {
-      const li = document.createElement('li');
-      const what = document.createElement('span'); what.className = 'what';
-      const head = document.createElement('b'); head.textContent = [s.addon, s.name].filter(Boolean).join(' · ');
-      const detail = document.createElement('span'); detail.textContent = s.detail;
-      what.append(head, detail);
-      const kind = document.createElement('span'); kind.className = 'kind';
-      kind.textContent = t(s.kind === 'torrent' ? 'stream_torrent' : 'stream_url');
-      const open = document.createElement('button'); open.type = 'button'; open.className = 'primary';
-      open.textContent = t('stream_open');
-      if (!S.canChangeMedia) { open.disabled = true; open.title = t('media_trusted_only'); }
-      open.addEventListener('click', async () => {
-        open.disabled = true;
-        try {
-          await api('/api/media/open', { json: { stream: s.ref } });
-          toast(t('stream_opening', { name }));
-          el.stage.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        } catch (err) {
-          toast(errorText(err), 'error');
-        } finally {
-          open.disabled = false;
-        }
-      });
-      li.append(what, kind, open);
-      el.streamList.appendChild(li);
-    }
+    Object.assign(ST, { list: streams.map((s) => ({ ...s, quality: streamQuality(s) })), name, shown: STREAM_PAGE, quality: '', addon: '' });
+    el.streamFilter.value = '';
+    renderStreamTools();
+    renderStreams();
   }
+
+  function renderStreamTools () {
+    const addons = [...new Set(ST.list.map((s) => s.addon))];
+    el.streamAddon.replaceChildren();
+    for (const [value, label] of [['', t('streams_all_addons')], ...addons.map((a) => [a, a])]) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value ? `${label} (${ST.list.filter((s) => s.addon === value).length})` : label;
+      el.streamAddon.appendChild(option);
+    }
+    el.streamAddon.value = ST.addon;
+    el.streamAddon.hidden = addons.length < 2;
+    el.streamQuality.replaceChildren();
+    const present = [...QUALITIES.map(([q]) => q), 'other'].filter((q) => ST.list.some((s) => s.quality === q));
+    for (const q of present.length > 1 ? ['', ...present] : []) {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = `chip${ST.quality === q ? ' on' : ''}`;
+      chip.textContent = q ? `${t(`quality_${q}`)} (${ST.list.filter((s) => s.quality === q).length})` : t('quality_all');
+      chip.addEventListener('click', () => { ST.quality = q; ST.shown = STREAM_PAGE; renderStreamTools(); renderStreams(); });
+      el.streamQuality.appendChild(chip);
+    }
+    el.streamTools.hidden = ST.list.length <= 5;
+  }
+
+  function filteredStreams () {
+    const words = el.streamFilter.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    return ST.list.filter((s) => (!ST.addon || s.addon === ST.addon) && (!ST.quality || s.quality === ST.quality) &&
+      words.every((w) => streamText(s).toLocaleLowerCase().includes(w)));
+  }
+
+  function renderStreams () {
+    const items = filteredStreams();
+    if (!items.length) streamMessage(t('streams_no_match'));
+    else el.streamList.replaceChildren(...items.slice(0, ST.shown).map(streamItem));
+    const shown = Math.min(ST.shown, items.length);
+    el.streamCount.textContent = t('streams_count', { shown, total: items.length });
+    el.streamMore.hidden = items.length <= ST.shown;
+    el.streamMore.textContent = t('streams_more', { n: Math.min(STREAM_PAGE, items.length - ST.shown) });
+  }
+
+  function streamItem (s) {
+    const li = document.createElement('li');
+    const what = document.createElement('span'); what.className = 'what';
+    const head = document.createElement('b'); head.textContent = [s.addon, s.name].filter(Boolean).join(' · ');
+    const detail = document.createElement('span'); detail.textContent = s.detail;
+    what.append(head, detail);
+    const kind = document.createElement('span'); kind.className = 'kind';
+    kind.textContent = t(s.kind === 'torrent' ? 'stream_torrent' : 'stream_url');
+    const open = document.createElement('button'); open.type = 'button'; open.className = 'primary';
+    open.textContent = t('stream_open');
+    if (!S.canChangeMedia) { open.disabled = true; open.title = t('media_trusted_only'); }
+    open.addEventListener('click', async () => {
+      open.disabled = true;
+      try {
+        await api('/api/media/open', { json: { stream: s.ref } });
+        toast(t('stream_opening', { name: ST.name }));
+        el.stageWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (err) {
+        toast(errorText(err), 'error');
+      } finally {
+        open.disabled = false;
+      }
+    });
+    li.append(what, kind, open);
+    return li;
+  }
+
+  el.streamFilter.addEventListener('input', () => { ST.shown = STREAM_PAGE; renderStreams(); });
+  el.streamAddon.addEventListener('change', () => { ST.addon = el.streamAddon.value; ST.shown = STREAM_PAGE; renderStreams(); });
+  el.streamMore.addEventListener('click', () => { ST.shown += STREAM_PAGE; renderStreams(); });
 
   el.titleBack.addEventListener('click', () => { showList(); B.streamSeq++; });
   el.catalogSel.addEventListener('change', () => {
@@ -2464,22 +2605,61 @@
   });
 
   // ---- subtitles the add-ons offer for the open film (found by its id and file hash)
+  // There can be hundreds, in every language: the viewer's own languages come first, and a
+  // page at a time.
+  const SUB_PAGE = 8;
+  const AS = { list: [], shown: SUB_PAGE, lang: '' };
+  const myLangs = () => new Set([prefs.primaryLang, prefs.secondaryLang, ...String(prefs.searchLangs || '').split(',')]
+    .map((l) => String(l || '').trim().toLowerCase()).filter(Boolean));
+
   el.addonSubsBtn.addEventListener('click', async () => {
     el.addonSubsBtn.disabled = true;
-    el.addonSubsList.replaceChildren();
+    resetAddonSubs();
     try {
       const { subtitles } = await api('/api/addons/subtitles');
-      if (!subtitles.length) {
-        const li = document.createElement('li'); li.textContent = t('subs_addons_none');
-        el.addonSubsList.appendChild(li);
-      }
-      for (const sub of subtitles) el.addonSubsList.appendChild(addonSubItem(sub));
+      AS.list = subtitles;
+      const mine = myLangs();
+      AS.lang = subtitles.some((s) => mine.has(s.lang)) ? 'mine' : '';
+      renderAddonSubs();
     } catch (err) {
       toast(errorText(err), 'error');
     } finally {
       el.addonSubsBtn.disabled = false;
     }
   });
+  function resetAddonSubs () {
+    Object.assign(AS, { list: [], shown: SUB_PAGE, lang: '' });
+    el.addonSubsList.replaceChildren();
+    el.addonSubsLang.hidden = true;
+    el.addonSubsMore.hidden = true;
+  }
+  function renderAddonSubs () {
+    const mine = myLangs();
+    const counts = new Map();
+    for (const s of AS.list) counts.set(s.lang, (counts.get(s.lang) || 0) + 1);
+    el.addonSubsLang.replaceChildren();
+    const options = [['', `${t('subs_langs_all')} (${AS.list.length})`]];
+    if ([...counts.keys()].some((l) => mine.has(l))) options.unshift(['mine', t('subs_langs_mine')]);
+    for (const [lang, n] of [...counts].sort((a, b) => b[1] - a[1])) options.push([lang, `${langName(lang)} (${n})`]);
+    for (const [value, label] of options) {
+      const option = document.createElement('option');
+      option.value = value; option.textContent = label;
+      el.addonSubsLang.appendChild(option);
+    }
+    el.addonSubsLang.value = AS.lang;
+    el.addonSubsLang.hidden = counts.size < 2;
+    const items = AS.list.filter((s) => !AS.lang || (AS.lang === 'mine' ? mine.has(s.lang) : s.lang === AS.lang));
+    if (!items.length) {
+      const li = document.createElement('li'); li.textContent = t('subs_addons_none');
+      el.addonSubsList.replaceChildren(li);
+    } else {
+      el.addonSubsList.replaceChildren(...items.slice(0, AS.shown).map(addonSubItem));
+    }
+    el.addonSubsMore.hidden = items.length <= AS.shown;
+    el.addonSubsMore.textContent = t('streams_more', { n: Math.min(SUB_PAGE, items.length - AS.shown) });
+  }
+  el.addonSubsLang.addEventListener('change', () => { AS.lang = el.addonSubsLang.value; AS.shown = SUB_PAGE; renderAddonSubs(); });
+  el.addonSubsMore.addEventListener('click', () => { AS.shown += SUB_PAGE; renderAddonSubs(); });
   function addonSubItem (sub) {
     const li = document.createElement('li');
     const lang = document.createElement('span'); lang.className = 'lang'; lang.textContent = sub.lang.toUpperCase();
@@ -2494,6 +2674,7 @@
       try {
         const track = await api('/api/addons/subtitles', { json: { ref: sub.ref } });
         toast(t('uploaded', { label: track.label }));
+        sub.added = true; // stays marked when the list is filtered or paged again
         add.textContent = t('subs_addons_added');
         if (!S.primary) selectTrack('primary', track.id);
       } catch (err) {
@@ -2540,6 +2721,8 @@
   function renderAll () {
     renderControls(); renderMembers(); renderMediaPanel(); renderTracks(); renderSubStyle(); renderCenter();
     renderToolbar(); renderVoice(); renderCams(); renderCatalogs(); renderAddons(); renderShare();
+    if (ST.list.length) { renderStreamTools(); renderStreams(); }
+    if (AS.list.length) renderAddonSubs();
     el.uiLang.value = prefs.uiLang;
     el.joinLang.value = prefs.uiLang;
     if (document.activeElement !== el.searchLangs) {
@@ -2611,6 +2794,7 @@
     el.pathForm.hidden = !S.isHost;
     el.hostHint.hidden = S.isHost;
     renderLibraryBox();
+    renderMini(); // a film opened or closed while scrolled down
     el.magnetForm.hidden = !S.canChangeMedia;
     el.mediaLockHint.hidden = S.canChangeMedia;
     el.closeMedia.hidden = !S.media || !S.canChangeMedia;
@@ -2704,8 +2888,10 @@
   }
 
   function renderSubStyle () {
-    document.documentElement.style.setProperty('--sub-scale', String(prefs.fontSize / 100));
-    document.documentElement.style.setProperty('--sub-bottom', `${prefs.bottom}%`);
+    for (const doc of [document, PIP.win && PIP.win.document].filter(Boolean)) {
+      doc.documentElement.style.setProperty('--sub-scale', String(prefs.fontSize / 100));
+      doc.documentElement.style.setProperty('--sub-bottom', `${prefs.bottom}%`);
+    }
     el.sizeRange.value = prefs.fontSize;
     el.bottomRange.value = prefs.bottom;
     const sec = prefs.offsetMs / 1000;
@@ -2713,7 +2899,18 @@
   }
 
   let lastUi = 0;
+  // A page's own frames stop while its window is minimized or covered. With the stage in the
+  // always-on-top window, that window's frames draw instead, so the subtitles keep up there.
   function frame (now) {
+    if (!PIP.win) drawFrame(now);
+    requestAnimationFrame(frame);
+  }
+  function pipFrame (now) {
+    if (!PIP.win) return;
+    drawFrame(now);
+    PIP.win.requestAnimationFrame(pipFrame);
+  }
+  function drawFrame (now) {
     const g = geom();
     animateBalls(now, g);
     renderStrokes(now, g);
@@ -2745,7 +2942,6 @@
         el.produced.style.width = '0';
       }
     }
-    requestAnimationFrame(frame);
   }
 
   // For the browser console: cowatchDebug() shows the sync numbers.

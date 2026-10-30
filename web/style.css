@@ -396,6 +396,44 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .source-link a { color: var(--muted); }
 .source-link a:hover { color: var(--accent); }
 
+/* ---- source and add-on subtitle lists: filters, a box of their own, a page at a time ---- */
+.stream-tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.stream-tools input { flex: 1; min-width: 180px; }
+.stream-tools select { max-width: 240px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { padding: 4px 10px; border-radius: 999px; font-size: 12.5px; }
+.chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.title-view .stream-list { max-height: min(60vh, 640px); overflow: auto; padding-right: 2px; }
+.list-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.list-foot .hint { margin: 0; }
+#addonSubsMore { justify-self: start; }
+
+/* ---- the player follows: a corner box when scrolled away, or its own always-on-top window ---- */
+.stage-wrap { position: relative; scroll-margin-top: 64px; } /* clear of the sticky header */
+.mini-back, .mini-close { display: none; }
+.stage.mini {
+  position: fixed; z-index: 45; right: 16px; bottom: 16px; width: min(380px, 46vw); max-height: none;
+  border: 1px solid var(--line); box-shadow: 0 12px 32px rgba(0, 0, 0, .6);
+}
+.has-mini .toasts { bottom: calc(32px + min(380px, 46vw) * 9 / 16); }
+.has-mini { padding-bottom: calc(32px + min(380px, 46vw) * 9 / 16); } /* the page's end can scroll clear of the box */
+.stage.mini .controls, .stage.mini .side, .stage.mini .share-asks, .stage.mini .screen-tag { display: none; }
+.stage.mini .sub.primary { font-size: calc(13px * var(--sub-scale)); }
+.stage.mini .sub.secondary { font-size: calc(11px * var(--sub-scale)); }
+.stage.mini:not(.idle) .subs { bottom: var(--sub-bottom); }
+.stage.mini .mini-back { display: block; position: absolute; inset: 0; z-index: 7; background: transparent; border: 0; border-radius: 0; cursor: pointer; }
+.stage.mini .mini-close {
+  display: grid; place-items: center; position: absolute; z-index: 8; top: 6px; right: 6px; width: 26px; height: 26px;
+  padding: 0; border-radius: 50%; background: rgba(0, 0, 0, .65); border-color: transparent; font-size: 13px;
+}
+.stage-wrap.away .away-msg {
+  display: grid; place-items: center; align-content: center; gap: 10px; height: 100%; min-height: 160px;
+  border: 1px dashed var(--line); border-radius: var(--radius); color: var(--muted); text-align: center; padding: 16px;
+}
+.pip-body { margin: 0; background: #000; overflow: hidden; }
+.stage.pip { position: fixed; inset: 0; width: 100vw; height: 100vh; max-height: none; aspect-ratio: auto; border-radius: 0; }
+.stage.pip #fsBtn, .stage.pip .toolbar { display: none; }
+
 /* ---- share card (host only): the friends' link, its QR code, Tailscale's state ---- */
 .share-card { display: flex; gap: 16px; align-items: flex-start; }
 .share-text { flex: 1; min-width: 0; }
@@ -447,6 +485,7 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
   .bar .volume { display: none; }
   .grid2 { grid-template-columns: 1fr; }
   .qr { display: none; } /* the phone is the one that would scan it */
+  .stage.mini { width: 58vw; right: 10px; bottom: 10px; }
   .settings-card { margin: 0; padding: 14px; }
   .field.mbps { margin-left: 0; }
   .poster-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }

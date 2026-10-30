@@ -169,6 +169,10 @@ def run(headed: bool) -> None:
             # ---- subtitles: Turkish from one window, Russian from the other; Masha adds Turkish as her second line
             for page, file, lang in ((a, "test.tr.srt", "tr"), (b, "test.ru.srt", "ru")):
                 page.click(".add-subs summary")
+                # Scrolled down to the subtitle card, the film follows in the corner box; on the
+                # smaller window it covers the upload button, so close it as a viewer would.
+                if page.is_visible("#miniClose"):
+                    page.click("#miniClose")
                 page.set_input_files("#subFile", str(ROOT / "samples" / file))
                 page.fill("#subLang", lang)
                 page.click("#uploadForm button")
@@ -180,6 +184,7 @@ def run(headed: bool) -> None:
             # The host's page is longer (share card): after the subtitle cards it is scrolled far
             # enough that the button would end up under the sticky header.
             a.evaluate("() => window.scrollTo(0, 0)")
+            a.wait_for_function("() => !document.querySelector('#stage').classList.contains('mini')")  # back in place
             a.click("#playBtn", force=True)
             time.sleep(4)
             ta, tb = film_time(a), film_time(b)
