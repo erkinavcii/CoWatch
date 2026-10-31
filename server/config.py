@@ -1,5 +1,7 @@
 """Settings: the settings page's choices (data/settings.json), overridden by environment
-variables and an optional .env file in the project root."""
+variables and an optional .env file in the project root. The Windows build (CoWatch.exe, see
+tray.py) keeps them in %APPDATA%/CoWatch instead, so a new version installs over the old one
+without touching them."""
 
 from __future__ import annotations
 
@@ -7,12 +9,20 @@ import json
 import os
 import re
 import secrets
+import sys
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Mapping
 
 ROOT = Path(__file__).resolve().parent.parent
+FROZEN = bool(getattr(sys, "frozen", False))  # running as the packaged CoWatch.exe
+
+
+def default_data_dir() -> Path:
+    if FROZEN:
+        return Path(os.environ.get("APPDATA") or Path.home()) / "CoWatch"
+    return ROOT / "data"
 
 
 def load_dotenv(path: Path) -> None:
@@ -61,7 +71,9 @@ CHOICES = {
     "mediaControl": ("everyone", "trusted"),
 }
 DEFAULTS = {
-    "connection": "serve",  # funnel: link open to the internet · serve: friends with Tailscale · http: plain links
+    # funnel: link open to the internet · serve: friends with Tailscale · http: plain links.
+    # The installed app starts with Funnel, so a friend needs nothing but the link.
+    "connection": "funnel" if FROZEN else "serve",
     "quality": "auto",  # auto: Funnel converts heavier files, Serve sends the original · original · manual
     "qualityMbps": 8,  # manual: files above this are converted to 80% of it
     "libraryDirs": [],
@@ -243,10 +255,10 @@ FUNNEL_STUN = "stun:stun.cloudflare.com:3478"
 def get_settings() -> Settings:
     # COWATCH_DOTENV: another settings file, or empty for none (the tests use that, so this
     # computer's own .env does not change what they see).
-    dotenv = os.environ.get("COWATCH_DOTENV", str(ROOT / ".env"))
+    dotenv = os.environ.get("COWATCH_DOTENV", str(default_data_dir() / ".env" if FROZEN else ROOT / ".env"))
     if dotenv:
         load_dotenv(Path(dotenv))
-    data_dir = Path(_str(os.environ, "DATA_DIR") or ROOT / "data").expanduser().resolve()
+    data_dir = Path(_str(os.environ, "DATA_DIR") or default_data_dir()).expanduser().resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     saved = load_saved(data_dir)
     v = {**saved_env(saved), **os.environ}

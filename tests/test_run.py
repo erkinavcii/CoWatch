@@ -133,3 +133,31 @@ def test_tailscale_found_in_the_default_windows_folder(monkeypatch, tmp_path):
     assert tailscale.tray_app(str(exe)) == exe.parent / "tailscale-ipn.exe"
     exe.unlink()
     assert tailscale.exe() is None
+
+
+def test_the_installed_app_keeps_its_data_in_appdata(monkeypatch, tmp_path):
+    from server import config
+
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(config, "FROZEN", True)
+    assert config.default_data_dir() == tmp_path / "CoWatch"
+    monkeypatch.setattr(config, "FROZEN", False)
+    assert config.default_data_dir() == config.ROOT / "data"
+
+
+def test_stop_ends_the_launcher_without_a_restart():
+    launcher = run.Launcher()
+    launcher.server = type("Server", (), {"should_exit": False})()
+    launcher.restart()
+    assert launcher.restarting and launcher.server.should_exit
+    launcher.server.should_exit = False
+    launcher.stop()
+    assert not launcher.restarting and launcher.server.should_exit
+
+
+def test_the_tray_menu_speaks_the_three_languages():
+    import tray
+
+    keys = {lang: set(texts) for lang, texts in tray.TEXTS.items()}
+    assert set(keys) == {"tr", "en", "ru"} and keys["tr"] == keys["en"] == keys["ru"]
+    assert tray.ui_lang() in keys

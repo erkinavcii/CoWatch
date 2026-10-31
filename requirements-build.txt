@@ -1,0 +1,5 @@
+-r requirements.txt
+# The Windows build (tools/build_windows.ps1): the tray app and its packaging
+pystray>=0.19
+pillow>=10
+pyinstaller>=6.10

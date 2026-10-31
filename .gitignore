@@ -7,3 +7,5 @@ __pycache__/
 samples/*.mkv
 .venv/
 _handoff/
+build/
+dist/

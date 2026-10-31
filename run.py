@@ -52,8 +52,13 @@ def start_helper(cfg) -> subprocess.Popen | None:
         "TORRENT_UPLOAD_LIMIT": str(cfg.torrent_upload_limit),
         "PARENT_PID": str(os.getpid()),
     })
-    # Shares this console, so its log lines show up here and Ctrl+C stops it too.
-    return subprocess.Popen([node, "index.mjs"], cwd=helper_dir, env=env)
+    if sys.stdout is not None and sys.stdout.isatty():
+        # Shares this console, so its log lines show up here and Ctrl+C stops it too.
+        return subprocess.Popen([node, "index.mjs"], cwd=helper_dir, env=env)
+    # No console (the tray app, CoWatch.exe): no window of its own, its lines go to a log file.
+    log = open(cfg.data_dir / "torrent-helper.log", "w", encoding="utf-8")  # noqa: SIM115 (lives with the process)
+    return subprocess.Popen([node, "index.mjs"], cwd=helper_dir, env=env, stdout=log, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, creationflags=tailscale.NO_WINDOW)
 
 
 def fresh_settings():
@@ -78,9 +83,16 @@ class Launcher:
         self.share_key = None
         self.share_note = "off"  # why there is no Share: off (plain http), missing, stopped
         self.friend_link: str | None = None
+        self.local_link: str | None = None  # the room on this computer, for the tray to open
 
     def restart(self) -> None:
         self.restarting = True
+        if self.server is not None:
+            self.server.should_exit = True
+
+    def stop(self) -> None:
+        """Ends run(): the server stops, then the HTTPS link and the torrent helper."""
+        self.restarting = False
         if self.server is not None:
             self.server.should_exit = True
 
@@ -125,8 +137,9 @@ class Launcher:
     def links(self, cfg, host: str) -> None:
         key = cfg.access_key
         self.friend_link = None
+        self.local_link = f"http://localhost:{cfg.port}/?k={key}"
         print("\nCo-Watch hazır.")
-        print(f"  Bu bilgisayardan:  http://localhost:{cfg.port}/?k={key}")
+        print(f"  Bu bilgisayardan:  {self.local_link}")
         if self.share is not None and self.share.running:
             self.friend_link = f"{self.share.link}/?k={key}"
             print(f"  Arkadaşlar için:   {self.friend_link}   <- arkadaşına bunu gönder")

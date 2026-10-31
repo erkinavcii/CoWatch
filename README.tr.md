@@ -51,7 +51,11 @@ winget install Tailscale.Tailscale
 
 ## Kurulum
 
-Windows (PowerShell, proje klasöründe):
+**Windows kurulum dosyası:** `CoWatch-Setup-<sürüm>.exe` Co-Watch'u sadece senin kullanıcın için kurar (yönetici izni gerekmez); içinde ffmpeg ve Node var, Başlat menüsüne kısayol ve bir kaldırıcı ekler. Açınca saatin yanındaki tepsiye bir simge yerleşir ve oda tarayıcıda açılır. Simgenin menüsü odayı açar, arkadaş linkini kopyalar, Ayarlar'ı açar ya da çıkar; çıkış HTTPS linkini ve torrent yardımcısını da kapatır. "Linki olan herkes (Funnel)" ile başlar, yani sadece Tailscale'i kurmak gerekir; ne yapılacağını Paylaş kartı söyler. Ayarlar ve oda anahtarı `%APPDATA%\CoWatch`'ta durur; uygulamayı güncellesen ya da kaldırsan da kalır. İmzasız uygulama olduğu için Windows SmartScreen ilk açılışta uyarır: "Ek bilgi → Yine de çalıştır".
+
+Kurulum dosyasını derlemek için: `.\tools\build_windows.ps1` (aşağıdaki `.venv`'i, Inno Setup 6'yı ve torrent yardımcısının npm paketlerini ister; ffmpeg ve Node'u bir kez indirir). `python tray.py` aynı tepsi uygulamasını kaynak koddan çalıştırır.
+
+Kaynak koddan (geliştiriciler için ve diğer sistemlerde), Windows (PowerShell, proje klasöründe):
 
 ```powershell
 py -m venv .venv

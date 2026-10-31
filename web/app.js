@@ -2038,6 +2038,11 @@
     el.shareCard.hidden = false;
     loadShare();
     SH.timer = setInterval(loadShare, 5000);
+    // The tray menu's "Settings" opens the room with #settings.
+    if (location.hash === '#settings') {
+      history.replaceState(null, '', location.pathname + location.search);
+      openSettings();
+    }
   }
 
   // The light, the text, and what the host can do about it.

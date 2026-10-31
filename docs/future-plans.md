@@ -42,7 +42,7 @@ Amaç: teknik bilgisi olmayan biri `run.py`, `.env` ve Tailscale komutlarıyla u
 
 ### Adımlar
 
-> **Durum (30 Ekim 2026):** 1. adım kodlandı (`server/tailscale.py`, `run.py`'deki `Launcher`, Paylaş kartı ve ayarlar sayfası). Ekran kartı seçimi 2. adımda. Varsayılan bağlantı şimdilik Serve; Funnel'a geçiş kurulum dosyasıyla.
+> **Durum (31 Ekim 2026):** 1. adım (30 Ekim) kodlandı: `server/tailscale.py`, `run.py`'deki `Launcher`, Paylaş kartı ve ayarlar sayfası. 2. ve 3. adım (31 Ekim) kodlandı: `tray.py` (tepsi, `Launcher` alt süreç yerine aynı süreçte bir iş parçacığında) ve `tools/build_windows.ps1` (PyInstaller klasör modu, BtbN'nin GPL shared ffmpeg'i, Node, Inno Setup; yöneticisiz kullanıcı kurulumu). Kurulu uygulamada bağlantı varsayılanı Funnel; kaynak koddan çalışırken Serve. Ekran kartı seçimi ve GitHub Actions'ta otomatik sürüm henüz yok.
 
 1. **Ayarlar sayfası, paylaşım kartı ve Tailscale durumu.** Exe olmadan da işe yarar; `run.py` kullananlar da faydalanır.
    - Ayarlar `settings.json`'da; `.env` ve ortam değişkenleri varsa onlar kazanır (geliştiriciler için).

@@ -14,6 +14,9 @@ import threading
 from pathlib import Path
 from typing import Optional
 
+# The installed app has no console: without this every call would flash a black window.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
 CONSENT_URL = re.compile(r"https://login\.tailscale\.com/\S+")
 DOWNLOAD_URL = "https://tailscale.com/download"
 
@@ -44,7 +47,7 @@ def status(exe_path: Optional[str] = None) -> dict:
     can_open = tray_app(exe_path) is not None
     try:
         out = subprocess.run([exe_path, "status", "--json"], capture_output=True, text=True,
-                             encoding="utf-8", timeout=10).stdout
+                             encoding="utf-8", timeout=10, creationflags=NO_WINDOW).stdout
         data = json.loads(out)
     except (OSError, subprocess.SubprocessError, ValueError):
         return {"state": "stopped", "canOpen": can_open}
@@ -66,7 +69,8 @@ def ip(exe_path: Optional[str]) -> Optional[str]:
     if not exe_path:
         return None
     try:
-        out = subprocess.run([exe_path, "ip", "-4"], capture_output=True, text=True, timeout=5).stdout.strip()
+        out = subprocess.run([exe_path, "ip", "-4"], capture_output=True, text=True, timeout=5,
+                             creationflags=NO_WINDOW).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
     return out.splitlines()[0] if out else None
@@ -107,6 +111,7 @@ class Share:
         self.proc = subprocess.Popen(
             [self.exe, self.mode, f"http://127.0.0.1:{self.port}"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL, creationflags=NO_WINDOW,
         )
         threading.Thread(target=self._read, daemon=True).start()
         try:

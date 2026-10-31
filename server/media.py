@@ -53,7 +53,7 @@ def _float(value) -> Optional[float]:
 def _run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess:
     return subprocess.run(
         cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-        timeout=timeout, stdin=subprocess.DEVNULL,
+        timeout=timeout, stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
 
 
