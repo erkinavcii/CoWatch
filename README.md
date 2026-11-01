@@ -137,7 +137,7 @@ Required upload ≈ the file's bitrate × 1.3. If you don't know the bitrate: fo
 | Phone recording (1080p) | ~15-20 Mbps | convert |
 | Converted stream (`TRANSCODE_KBPS=5000`) | 5 Mbps | 8 Mbps |
 
-Multiply by two for two viewers. With a slow upload, choose "Limit by hand" under Settings → Picture quality (e.g. 6 Mbps; `MAX_COPY_KBPS=6000` in `.env`): heavier files are then converted automatically. Videos that are not H.264 (HEVC/x265, 10-bit) are always converted. With a graphics card, `VIDEO_ENCODER=h264_nvenc` (NVIDIA), `h264_qsv` (Intel) or `h264_amf` (AMD) takes the load off the CPU.
+Multiply by two for two viewers. With a slow upload, choose "Limit by hand" under Settings → Picture quality (e.g. 6 Mbps; `MAX_COPY_KBPS=6000` in `.env`): heavier files are then converted automatically. Videos that are not H.264 (HEVC/x265, 10-bit) are always converted. Converting uses the graphics card when one works (NVIDIA, Intel or AMD; tried for a moment at start, the CPU otherwise); the media card says which. In one measurement NVENC used a third of the CPU time of `libx264` and took half as long. `VIDEO_ENCODER` names one by hand.
 
 ## Settings (.env)
 
@@ -157,7 +157,7 @@ Most of these are on the settings page. `.env` is for developers and for the res
 | `TORRENT_UPLOAD_LIMIT` | 64 | Torrent upload limit (KB/s), 0 = unlimited |
 | `MAX_COPY_KBPS` | 0 (5500 on Funnel) | H.264 files above this are converted, 0 = always original |
 | `TRANSCODE_KBPS` | 5000 (4500 on Funnel) | Target bitrate of a converted stream |
-| `VIDEO_ENCODER` | libx264 | Encoder used for conversion |
+| `VIDEO_ENCODER` | auto | Encoder used for conversion: `auto` = the graphics card's if one works (`h264_nvenc`, `h264_qsv`, `h264_amf`), else `libx264` |
 | `MAX_HEIGHT` | 1080 | Maximum height when converting |
 | `AUDIO_FILTER` | dynaudnorm | Evens out loud and quiet parts; leave empty to turn off |
 | `OPENSUBTITLES_API_KEY` | – | Get one at [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) |

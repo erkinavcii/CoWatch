@@ -34,7 +34,7 @@ from .addons import AddonError, AddonStore, episode_label, magnet, subtitle_key
 from .config import CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
 from . import filepicker, library, stremio, tailscale
 from .stremio import StremioError
-from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, probe
+from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, pick_encoder, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
 from .presence import PALETTE, POKE_INTERVAL_S, chat_text, pick_color, point, stroke_message
 from .room import Client, Room, now_ms
@@ -701,6 +701,8 @@ def _setup_logging() -> None:
 async def lifespan(_app: FastAPI):
     _setup_logging()
     clear_hls_dir(cfg)
+    # Which graphics card encoder works takes a few seconds to find out: ready before a film needs it.
+    encoder_check = asyncio.create_task(asyncio.to_thread(pick_encoder, cfg))
     if cfg.addons_stremio and not ctl.addons.user_urls():
         try:
             await ctl.addons.import_urls(await asyncio.to_thread(stremio.addon_urls))
@@ -712,6 +714,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(ctl.throttle_loop()),
     ]
     yield
+    encoder_check.cancel()
     for task in ctl.tasks:
         task.cancel()
     if ctl.session is not None:

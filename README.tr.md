@@ -137,7 +137,7 @@ Gereken upload ≈ dosyanın bitrate'i × 1,3. Dosyanın bitrate'ini bilmiyorsan
 | Telefonla çekilmiş video (1080p) | ~15-20 Mbps | dönüştürmek şart |
 | Dönüştürülmüş akış (`TRANSCODE_KBPS=5000`) | 5 Mbps | 8 Mbps |
 
-İki izleyici varsa ikiyle çarp. Upload'un düşükse Ayarlar → Görüntü kalitesi'nde "Elle sınır"ı seç (ör. 6 Mbps; `.env`'de `MAX_COPY_KBPS=6000`): bundan ağır dosyalar otomatik dönüştürülür. H.264 olmayan (HEVC/x265, 10-bit) videolar zaten her zaman dönüştürülür. Ekran kartın varsa `VIDEO_ENCODER=h264_nvenc` (NVIDIA), `h264_qsv` (Intel) ya da `h264_amf` (AMD) işlemciyi rahatlatır.
+İki izleyici varsa ikiyle çarp. Upload'un düşükse Ayarlar → Görüntü kalitesi'nde "Elle sınır"ı seç (ör. 6 Mbps; `.env`'de `MAX_COPY_KBPS=6000`): bundan ağır dosyalar otomatik dönüştürülür. H.264 olmayan (HEVC/x265, 10-bit) videolar zaten her zaman dönüştürülür. Dönüştürme, çalışan bir ekran kartı varsa onunla yapılır (NVIDIA, Intel ya da AMD; açılışta bir an denenir, yoksa işlemci); hangisinin kullanıldığını film kartı söyler. Bir ölçümde NVENC, `libx264`'ün üçte biri kadar işlemci zamanı harcadı ve yarı sürede bitirdi. `VIDEO_ENCODER` elle seçtirir.
 
 ## Ayarlar (.env)
 
@@ -157,7 +157,7 @@ Bunların çoğu ayarlar sayfasında. `.env` geliştiriciler ve geri kalanlar i�
 | `TORRENT_UPLOAD_LIMIT` | 64 | Torrent'in upload sınırı (KB/s), 0 = sınırsız |
 | `MAX_COPY_KBPS` | 0 (Funnel'da 5500) | Bunun üstündeki H.264 dosyalar dönüştürülür, 0 = hep orijinal |
 | `TRANSCODE_KBPS` | 5000 (Funnel'da 4500) | Dönüştürülen akışın hedef bitrate'i |
-| `VIDEO_ENCODER` | libx264 | Dönüştürme encoder'ı |
+| `VIDEO_ENCODER` | auto | Dönüştürme encoder'ı: `auto` = çalışıyorsa ekran kartınınki (`h264_nvenc`, `h264_qsv`, `h264_amf`), yoksa `libx264` |
 | `MAX_HEIGHT` | 1080 | Dönüştürmede en fazla yükseklik |
 | `AUDIO_FILTER` | dynaudnorm | Ses dengeleme; boş bırakırsan kapanır |
 | `OPENSUBTITLES_API_KEY` | – | [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) adresinden alınır |

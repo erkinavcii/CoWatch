@@ -16,6 +16,8 @@ import os
 import re
 import shutil
 import subprocess
+import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -36,6 +38,11 @@ ENCODER_PRESETS: dict[str, tuple[list[str], str]] = {
     "h264_amf": (["-quality", "balanced", "-profile:v", "high"], "nv12"),
     "h264_videotoolbox": (["-profile:v", "high", "-allow_sw", "1"], "nv12"),
 }
+SOFTWARE_ENCODER = "libx264"
+# Tried in this order with VIDEO_ENCODER=auto: NVIDIA, Intel, AMD (Apple's on a Mac).
+HARDWARE_ENCODERS = ("h264_videotoolbox",) if sys.platform == "darwin" else ("h264_nvenc", "h264_qsv", "h264_amf")
+_encoders: dict[str, str] = {}  # ffmpeg -> the encoder chosen for it
+_encoders_lock = threading.Lock()
 
 
 class MediaError(Exception):
@@ -122,6 +129,38 @@ def choose_audio(info: ProbeInfo, preferred: Optional[int] = None) -> Optional[d
     return info.audio[0]
 
 
+def encoder_works(ffmpeg: str, encoder: str, timeout: float = 20) -> bool:
+    """A dozen frames through the encoder: ffmpeg lists the graphics card encoders it was built
+    with even when this computer has no such card, or its driver is too old."""
+    extra, pix_fmt = ENCODER_PRESETS.get(encoder, ([], "yuv420p"))
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=24",
+           "-frames:v", "12", "-vf", f"format={pix_fmt}", "-c:v", encoder, *extra, "-b:v", "2000k", "-f", "null", "-"]
+    try:
+        return _run(cmd, timeout).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def pick_encoder(cfg: Settings) -> str:
+    """The encoder for converting: VIDEO_ENCODER if it names one; with "auto" (the default) the
+    first graphics card encoder that works here, else libx264 on the CPU. Tried once per ffmpeg
+    (the server does it in the background at start); slow, so not on the event loop."""
+    if cfg.video_encoder != "auto":
+        return cfg.video_encoder
+    with _encoders_lock:
+        if cfg.ffmpeg not in _encoders:
+            _encoders[cfg.ffmpeg] = next((e for e in HARDWARE_ENCODERS if encoder_works(cfg.ffmpeg, e)), SOFTWARE_ENCODER)
+            log.info("video encoder: %s", _encoders[cfg.ffmpeg])
+        return _encoders[cfg.ffmpeg]
+
+
+def give_up_on(cfg: Settings, encoder: str) -> None:
+    """A graphics card encoder that passed the test but failed on a real film: libx264 from now on."""
+    with _encoders_lock:
+        if cfg.video_encoder == "auto" and _encoders.get(cfg.ffmpeg) == encoder:
+            _encoders[cfg.ffmpeg] = SOFTWARE_ENCODER
+
+
 def decide_mode(info: ProbeInfo, cfg: Settings) -> tuple[str, str]:
     codec = info.video_codec
     if codec != "h264":
@@ -134,10 +173,9 @@ def decide_mode(info: ProbeInfo, cfg: Settings) -> tuple[str, str]:
     return "copy", "H.264 source, sent without re-encoding"
 
 
-def _video_args(cfg: Settings, mode: str) -> list[str]:
+def _video_args(cfg: Settings, mode: str, encoder: str = SOFTWARE_ENCODER) -> list[str]:
     if mode == "copy":
         return ["-c:v", "copy"]
-    encoder = cfg.video_encoder
     extra, pix_fmt = ENCODER_PRESETS.get(encoder, ([], "yuv420p"))
     kbps = max(500, cfg.transcode_kbps)
     return [
@@ -166,7 +204,7 @@ def _ffmpeg_out(path: PurePath) -> str:
 
 def build_command(
     cfg: Settings, source: str, out_dir: PurePath, start: float, mode: str,
-    info: ProbeInfo, audio: Optional[dict],
+    info: ProbeInfo, audio: Optional[dict], encoder: str = SOFTWARE_ENCODER,
 ) -> list[str]:
     cmd = [cfg.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning", "-y"]
     if source.startswith(("http://", "https://")):
@@ -177,7 +215,7 @@ def build_command(
     if audio is not None:
         cmd += ["-map", f"0:{audio['index']}"]
     cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"]
-    cmd += _video_args(cfg, mode)
+    cmd += _video_args(cfg, mode, encoder)
     if audio is not None:
         cmd += _audio_args(cfg)
     cmd += [
@@ -200,8 +238,9 @@ class HlsStream:
     """One ffmpeg run that writes an EVENT playlist starting at `start` seconds."""
 
     def __init__(self, cfg: Settings, source: str, out_dir: Path, start: float, mode: str,
-                 info: ProbeInfo, audio: Optional[dict]):
+                 info: ProbeInfo, audio: Optional[dict], encoder: str = SOFTWARE_ENCODER):
         self.cfg = cfg
+        self.encoder = encoder
         self.source = source
         self.out_dir = out_dir
         self.id = out_dir.name
@@ -219,8 +258,10 @@ class HlsStream:
 
     def start_process(self) -> None:
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        cmd = build_command(self.cfg, self.source, self.out_dir, self.start, self.mode, self.info, self.audio)
-        log.info("ffmpeg start=%.1f mode=%s -> %s", self.start, self.mode, self.out_dir.name)
+        cmd = build_command(self.cfg, self.source, self.out_dir, self.start, self.mode, self.info, self.audio,
+                            self.encoder)
+        log.info("ffmpeg start=%.1f mode=%s%s -> %s", self.start, self.mode,
+                 f" ({self.encoder})" if self.mode == "transcode" else "", self.out_dir.name)
         self._log_file = open(self.out_dir / "ffmpeg.log", "w", encoding="utf-8", errors="replace")
         self._log_file.write(" ".join(cmd) + "\n\n")
         self._log_file.flush()
@@ -369,6 +410,7 @@ class MediaSession:
         self.stream_start = 0.0
         self.lock = asyncio.Lock()
         self.auto_restarts = 0
+        self.encoder: Optional[str] = None  # converting: the encoder in use, picked at the first start
 
     @property
     def duration(self) -> float:
@@ -381,16 +423,28 @@ class MediaSession:
             # Stop reading the old position right away: for a torrent, both ffmpeg runs
             # would otherwise compete for the same download bandwidth.
             self.stream.stop()
-        out_dir = self.cfg.hls_dir / uuid.uuid4().hex[:12]
-        stream = HlsStream(self.cfg, self.source.url, out_dir, target, self.mode, self.info, self.audio)
-        stream.start_process()
-        try:
-            await stream.wait_ready(timeout=240)
-            first_pts = await stream.measure_first_pts()
-        except Exception:
-            stream.stop()
-            shutil.rmtree(out_dir, ignore_errors=True)
-            raise
+        if self.mode == "transcode" and self.encoder is None:
+            self.encoder = await asyncio.to_thread(pick_encoder, self.cfg)
+        while True:
+            out_dir = self.cfg.hls_dir / uuid.uuid4().hex[:12]
+            stream = HlsStream(self.cfg, self.source.url, out_dir, target, self.mode, self.info, self.audio,
+                               self.encoder or SOFTWARE_ENCODER)
+            stream.start_process()
+            try:
+                await stream.wait_ready(timeout=240)
+                first_pts = await stream.measure_first_pts()
+                break
+            except Exception:
+                stream.stop()
+                tail = stream.log_tail(3)
+                shutil.rmtree(out_dir, ignore_errors=True)
+                # A graphics card encoder can still fail on a real film (a size or format it
+                # does not take): once more on the CPU.
+                if self.mode != "transcode" or self.encoder in (None, SOFTWARE_ENCODER):
+                    raise
+                log.warning("%s failed, converting with %s instead: %s", self.encoder, SOFTWARE_ENCODER, tail)
+                give_up_on(self.cfg, self.encoder)
+                self.encoder = SOFTWARE_ENCODER
         old = self.stream
         self.stream = stream
         self.stream_start = max(0.0, first_pts - self.info.start_time)
@@ -435,6 +489,7 @@ class MediaSession:
             if self.source.content_id else None,
             "mode": self.mode,
             "modeReason": self.mode_reason,
+            "encoder": self.encoder if self.mode == "transcode" else None,
             "videoCodec": self.info.video_codec,
             "width": self.info.video.get("width"),
             "height": self.info.video.get("height"),

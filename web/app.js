@@ -2993,12 +2993,18 @@
     renderTorrentInfo();
   }
 
+  // Converting: on the graphics card (which one) or on the CPU.
+  const GPU_ENCODERS = { h264_nvenc: 'NVIDIA', h264_qsv: 'Intel', h264_amf: 'AMD', h264_videotoolbox: 'Apple' };
+  function encoderText (encoder) {
+    if (!encoder) return '';
+    return GPU_ENCODERS[encoder] ? t('encoder_gpu', { name: GPU_ENCODERS[encoder] }) : t('encoder_cpu');
+  }
   function renderMediaInfo () {
     const m = S.media;
     el.mediaInfo.replaceChildren();
     if (!m) return;
     const parts = [
-      m.mode === 'copy' ? t('mode_copy') : t('mode_transcode'),
+      m.mode === 'copy' ? t('mode_copy') : [t('mode_transcode'), encoderText(m.encoder)].filter(Boolean).join(' '),
       `${(m.videoCodec || '').toUpperCase()} ${m.width || '?'}×${m.height || '?'}`,
       m.bitrateKbps ? `${(m.bitrateKbps / 1000).toFixed(1)} Mbps` : '',
       m.audio ? `${(m.audio.codec || '').toUpperCase()} ${m.audio.channels || ''}ch → AAC 2.0` : '',

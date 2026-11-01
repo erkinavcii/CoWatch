@@ -60,3 +60,48 @@ def test_local_path_strips_pasted_quotes():
     assert local_path(' "C:\\Films\\My Film.mkv" ') == Path("C:\\Films\\My Film.mkv")
     assert local_path("'/films/a b.mkv'") == Path("/films/a b.mkv")
     assert local_path("samples/test-video.mkv") == Path("samples/test-video.mkv")
+
+
+def _encoder_cfg(name="auto", ffmpeg="fake-ffmpeg"):
+    import dataclasses
+
+    return dataclasses.replace(get_settings(), video_encoder=name, ffmpeg=ffmpeg)
+
+
+def test_auto_picks_the_first_graphics_card_encoder_that_works_once(monkeypatch):
+    from server import media
+
+    tried = []
+    monkeypatch.setattr(media, "_encoders", {})
+    monkeypatch.setattr(media, "HARDWARE_ENCODERS", ("h264_nvenc", "h264_qsv", "h264_amf"))
+    monkeypatch.setattr(media, "encoder_works", lambda ffmpeg, enc: tried.append(enc) or enc == "h264_qsv")
+    cfg = _encoder_cfg()
+    assert media.pick_encoder(cfg) == "h264_qsv"
+    assert media.pick_encoder(cfg) == "h264_qsv"
+    assert tried == ["h264_nvenc", "h264_qsv"]  # in order, and only once
+
+
+def test_without_a_working_card_it_is_the_cpu_and_a_named_encoder_wins(monkeypatch):
+    from server import media
+
+    monkeypatch.setattr(media, "_encoders", {})
+    monkeypatch.setattr(media, "encoder_works", lambda ffmpeg, enc: False)
+    assert media.pick_encoder(_encoder_cfg()) == "libx264"
+    monkeypatch.setattr(media, "encoder_works", lambda ffmpeg, enc: 1 / 0)  # must not be tried
+    assert media.pick_encoder(_encoder_cfg("h264_amf", "other-ffmpeg")) == "h264_amf"
+
+
+def test_a_card_that_fails_on_a_film_is_given_up(monkeypatch):
+    from server import media
+
+    monkeypatch.setattr(media, "_encoders", {"fake-ffmpeg": "h264_nvenc"})
+    media.give_up_on(_encoder_cfg(), "h264_nvenc")
+    assert media.pick_encoder(_encoder_cfg()) == "libx264"
+
+
+def test_the_encoder_goes_into_the_command():
+    cfg = _encoder_cfg("libx264", "ffmpeg")
+    info = ProbeInfo(duration=10, size=1, start_time=0, format_name="mp4", bitrate_kbps=1000,
+                     video={"index": 0, "codec_name": "hevc"}, audio=[])
+    cmd = build_command(cfg, "in.mkv", PureWindowsPath("C:/x"), 0, "transcode", info, None, "h264_nvenc")
+    assert cmd[cmd.index("-c:v") + 1] == "h264_nvenc" and "-preset" in cmd

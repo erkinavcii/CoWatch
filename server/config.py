@@ -277,7 +277,7 @@ def get_settings() -> Settings:
         torrent_upload_limit=_int(v, "TORRENT_UPLOAD_LIMIT", 64),
         ffmpeg=_str(v, "FFMPEG", "ffmpeg"),
         ffprobe=_str(v, "FFPROBE", "ffprobe"),
-        video_encoder=_str(v, "VIDEO_ENCODER", "libx264"),
+        video_encoder=_str(v, "VIDEO_ENCODER", "auto"),  # auto: the graphics card's if one works (media.pick_encoder)
         transcode_kbps=_int(v, "TRANSCODE_KBPS", FUNNEL_TRANSCODE_KBPS if auto else 5000),
         max_copy_kbps=_int(v, "MAX_COPY_KBPS", FUNNEL_COPY_KBPS if auto else 0),
         max_height=_int(v, "MAX_HEIGHT", 1080),

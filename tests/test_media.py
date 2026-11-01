@@ -88,3 +88,22 @@ def test_transcode_lands_on_target(sample, monkeypatch):
 def test_clean_title():
     assert clean_title("The.Matrix.1999.1080p.BluRay.x264-GRP.mkv") == "The Matrix 1999"
     assert clean_title("Some_Show_S01E02_720p_WEB-DL.mkv") == "Some Show S01E02"
+
+
+def test_a_graphics_card_encoder_that_fails_falls_back_to_the_cpu(sample, monkeypatch):
+    from server import media
+
+    cfg = get_settings()
+    monkeypatch.setattr(media, "pick_encoder", lambda _cfg: "h264_no_such_card")
+
+    async def run():
+        info = await probe(cfg, str(sample))
+        source = MediaSource(kind="file", url=str(sample), title=sample.name, size=info.size, media_key="k")
+        session = MediaSession(cfg, source, info)
+        session.mode = "transcode"
+        await session.start_at(0)
+        assert session.encoder == "libx264" and session.public()["encoder"] == "libx264"
+        assert session.stream.encoder == "libx264"
+        session.stop()
+
+    asyncio.run(run())
