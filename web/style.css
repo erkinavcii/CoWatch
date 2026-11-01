@@ -53,6 +53,9 @@ button, input, select { font: inherit; color: inherit; }
 }
 .stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
 .stage:fullscreen, .stage:-webkit-full-screen { max-height: none; border-radius: 0; aspect-ratio: auto; width: 100vw; height: 100vh; }
+/* Where only a <video> may go fullscreen (the iPhone), the stage fills the window instead. */
+.stage.fill { position: fixed; z-index: 50; inset: 0; max-height: none; border-radius: 0; aspect-ratio: auto; width: 100vw; height: 100vh; height: 100dvh; }
+html.stage-fill, html.stage-fill body { overflow: hidden; }
 
 .subs {
   position: absolute; z-index: 2; left: 4%; right: 4%; bottom: var(--sub-bottom);
@@ -68,8 +71,8 @@ button, input, select { font: inherit; color: inherit; }
 }
 .sub.primary { font-size: calc(clamp(15px, 2.6vw, 34px) * var(--sub-scale)); color: #fff; font-weight: 600; }
 .sub.secondary { font-size: calc(clamp(12px, 1.9vw, 25px) * var(--sub-scale)); color: #ffe39a; }
-.stage:fullscreen .sub.primary { font-size: calc(clamp(20px, 3vw, 54px) * var(--sub-scale)); }
-.stage:fullscreen .sub.secondary { font-size: calc(clamp(16px, 2.2vw, 40px) * var(--sub-scale)); }
+.stage:fullscreen .sub.primary, .stage.fill .sub.primary { font-size: calc(clamp(20px, 3vw, 54px) * var(--sub-scale)); }
+.stage:fullscreen .sub.secondary, .stage.fill .sub.secondary { font-size: calc(clamp(16px, 2.2vw, 40px) * var(--sub-scale)); }
 
 .empty { position: absolute; z-index: 1; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--muted); pointer-events: none; }
 .center-msg {
@@ -215,7 +218,10 @@ button, input, select { font: inherit; color: inherit; }
 .cams-size .i-big, .cams-box.small .cams-size .i-small { display: none; }
 .cams-box.small .cams-size .i-big { display: block; }
 .cams-box:hover .cams-size, .cams-size:focus-visible { opacity: 1; }
-@media (hover: none) { .cams-size { opacity: .9; } }
+@media (hover: none) {
+  .cams-size { opacity: .9; }
+  .stage.idle .toolbar { opacity: 0; pointer-events: none; } /* a tap brings it back with the controls */
+}
 .cam {
   position: relative; flex: none; width: var(--cam-w); aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden;
   background: rgba(22, 24, 29, .9); border: 2px solid rgba(255, 255, 255, .12); box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
@@ -528,6 +534,13 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .toast { background: var(--panel-2); border: 1px solid var(--line); border-left: 4px solid var(--accent); padding: 9px 12px; border-radius: 8px; font-size: 14px; box-shadow: 0 6px 20px rgba(0, 0, 0, .4); }
 .toast.error { border-left-color: var(--danger); }
 
+/* A phone on its side: the film takes the screen's height, the header only a thin line. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .top { padding: 4px 12px; }
+  .layout { padding: 6px 12px 16px; gap: 12px; }
+  .stage { max-height: calc(100vh - 54px); max-height: calc(100dvh - 54px); }
+}
+
 @media (max-width: 640px) {
   .layout { padding: 0 0 16px; }
   .stage { border-radius: 0; }
@@ -561,8 +574,22 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
   .cam-name { font-size: 10px; left: 3px; bottom: 3px; padding: 0 5px; }
   .toolbar { padding: 3px; gap: 2px; }
   .toolbar .tool { width: 32px; height: 32px; }
-  /* The picture is short: the open panel takes all of it above the controls. */
+  /* The picture is short: the panel over it (fullscreen) takes all of it above the controls. */
   .chat { left: 6px; right: 6px; top: 6px; bottom: 70px; width: auto; max-height: none; }
+  .stage.fill .chat { top: auto; height: 38%; } /* upright and filling the window: the bar under the picture */
+  /* Held upright, the chat is a box under the film, as on video sites' live chats. */
+  .chat-dock { height: max(240px, 42vh); margin: 0 12px; }
+  .chat-dock .chat-head { padding: 6px 6px 6px 12px; }
+  .chat-dock .chat-log { padding: 6px 12px; }
+  .chat-dock .chat-form input { font-size: 16px; } /* smaller text makes the iPhone zoom in on it */
+  /* The header stays one line: the people scroll sideways. */
+  .members { flex: 1; min-width: 0; flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; scrollbar-width: none; }
+  .members::-webkit-scrollbar { display: none; }
+  .lang-select { max-width: 92px; }
+  /* Notices across the bottom; above the corner box when the film is in it. */
+  .toasts { left: 12px; right: 12px; bottom: 12px; max-width: none; }
+  .has-mini .toasts { bottom: calc(20px + 58vw * 9 / 16); }
+  .toast { padding: 7px 10px; font-size: 13.5px; }
   .chat-peek { left: 6px; bottom: 70px; width: 70%; }
   .chat-peek .chat-msg:not(:last-child) { display: none; }
 }

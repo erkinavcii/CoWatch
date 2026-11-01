@@ -126,7 +126,9 @@
     node.className = `toast ${level}`;
     node.textContent = text;
     el.toasts.appendChild(node);
+    while (el.toasts.children.length > 3) el.toasts.firstChild.remove(); // a phone has no room for more
     setTimeout(() => node.remove(), level === 'error' ? ms * 2 : ms);
+    return node;
   }
   function errorText (err) {
     const raw = String(err && err.message ? err.message : err);
@@ -278,8 +280,23 @@
     if (msg.key === 'opening') S.opening = true;
     if (msg.key === 'stream_ready' || msg.key === 'open_failed') S.opening = false;
     if (msg.key === 'restarting') return; // the player shows its own loading message
-    toast(t(`status_${msg.key}`, params), msg.level === 'error' ? 'error' : 'info');
+    const text = t(`status_${msg.key}`, params);
+    // Opening a film takes a few steps: one notice follows them instead of a new one each.
+    if (OPEN_STEPS.has(msg.key) || (opening && (msg.key === 'stream_ready' || msg.key === 'open_failed'))) {
+      if (!opening || !opening.isConnected) opening = toast(text, 'info', 60000);
+      opening.textContent = text;
+      if (msg.key === 'stream_ready' || msg.key === 'open_failed') {
+        opening.className = `toast ${msg.level === 'error' ? 'error' : 'info'}`;
+        const done = opening;
+        opening = null;
+        setTimeout(() => done.remove(), msg.level === 'error' ? 9000 : 3000);
+      }
+      return;
+    }
+    toast(text, msg.level === 'error' ? 'error' : 'info');
   }
+  const OPEN_STEPS = new Set(['opening', 'torrent_adding', 'reading_hash', 'probing', 'stream_starting']);
+  let opening = null; // the notice following the steps of opening a film
 
   // ---------------------------------------------------------------- player
   function applyMedia (media) {
@@ -439,15 +456,28 @@
     prefs.muted = video.muted; savePrefs(); applyFilmVolume(); renderControls();
   });
 
+  // The iPhone's Safari lets only a <video> go fullscreen, not the stage with its subtitles,
+  // pointers and chat: there the stage fills the window instead (.fill).
+  const stageFull = () => (document.fullscreenElement || document.webkitFullscreenElement) === el.stage
+    || el.stage.classList.contains('fill');
+  function setFill (on) {
+    el.stage.classList.toggle('fill', on);
+    document.documentElement.classList.toggle('stage-fill', on);
+    renderMini();
+    placeChat();
+  }
   function toggleFullscreen () {
     if (PIP.win) return; // a picture-in-picture window cannot go fullscreen
+    if (el.stage.classList.contains('fill')) { setFill(false); return; }
     const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
     if (fsEl) {
       (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-    } else {
-      const request = el.stage.requestFullscreen || el.stage.webkitRequestFullscreen;
-      if (request) request.call(el.stage);
+      return;
     }
+    const request = el.stage.requestFullscreen || el.stage.webkitRequestFullscreen;
+    const asked = request ? request.call(el.stage) : null;
+    if (!request) setFill(true);
+    else if (asked && asked.catch) asked.catch(() => setFill(true));
   }
   el.fsBtn.addEventListener('click', toggleFullscreen);
   document.addEventListener('fullscreenchange', () => renderMini());
@@ -468,8 +498,7 @@
   }, { threshold: 0.2 }).observe(el.stageWrap);
 
   function renderMini () {
-    const fs = (document.fullscreenElement || document.webkitFullscreenElement) === el.stage;
-    const want = !MINI.visible && !MINI.off && !PIP.win && !fs && !!(S.media || screen.owner);
+    const want = !MINI.visible && !MINI.off && !PIP.win && !stageFull() && !!(S.media || screen.owner);
     if (want === el.stage.classList.contains('mini')) return;
     el.stageWrap.style.height = want ? `${el.stageWrap.offsetHeight}px` : '';
     el.stage.classList.toggle('mini', want);
@@ -573,6 +602,7 @@
     else if (e.key === 'Escape') {
       el.palette.hidden = true; el.micMenu.hidden = true; el.camMenu.hidden = true; el.peerPop.hidden = true;
       if (S.penMode) setPen(false);
+      else if (el.stage.classList.contains('fill')) setFill(false);
     }
   });
 
@@ -1574,7 +1604,7 @@
     if (!m || (popFor === m.id && !el.peerPop.hidden)) { el.peerPop.hidden = true; return; }
     popFor = m.id;
     // In fullscreen only the stage is drawn, so the box has to live inside it then.
-    const parent = document.fullscreenElement === el.stage ? el.stage : document.body;
+    const parent = stageFull() ? el.stage : document.body;
     if (el.peerPop.parentNode !== parent) parent.appendChild(el.peerPop);
     el.peerPopName.textContent = t('peer_volume', { name: m.name });
     const vol = prefs.peerVolume[m.name];
@@ -2735,8 +2765,9 @@
   }
 
   // ---------------------------------------------------------------- text chat
-  // On a wide screen the chat is a column right of the film, open unless closed (kept in
-  // prefs). In fullscreen, in the always-on-top window and on narrow screens the same panel
+  // On a wide screen the chat is a column right of the film, on a phone held upright a box
+  // under it; open unless closed (kept in prefs). In fullscreen, in the always-on-top window
+  // and in between (a tablet, a phone on its side) the same panel
   // moves over the bottom left of the picture instead, closed until asked for. The server
   // keeps the last messages for those who join later and sends each one back to its sender
   // too, so everyone sees them in the same order. Messages nobody sees (the panel is closed,
@@ -2746,7 +2777,8 @@
   const CHAT_KEEP = 100; // as many as the server keeps
   const CHAT_PEEK_MS = 7000;
   const CHAT_PEEK_MAX = 3;
-  const wideScreen = window.matchMedia('(min-width: 1100px)');
+  // Where the column fits: beside the film on a wide screen, under it on a phone held upright.
+  const dockScreen = window.matchMedia('(min-width: 1100px), (max-width: 640px)');
 
   function chatLine (msg) {
     const li = document.createElement('li');
@@ -2772,8 +2804,7 @@
   const chatSeen = () => chatOpen() && (chatDocked() ? MINI.visible : !el.stage.classList.contains('mini'));
 
   function placeChat () {
-    const fs = (document.fullscreenElement || document.webkitFullscreenElement) === el.stage;
-    const parent = wideScreen.matches && !fs && !PIP.win ? el.chatDock : el.stage;
+    const parent = dockScreen.matches && !stageFull() && !PIP.win ? el.chatDock : el.stage;
     if (el.chatBox.parentNode !== parent) parent.appendChild(el.chatBox);
     renderChat();
   }
@@ -2836,7 +2867,7 @@
     send({ type: 'chat', text });
     el.chatInput.value = '';
   });
-  wideScreen.addEventListener('change', placeChat);
+  dockScreen.addEventListener('change', placeChat);
   document.addEventListener('fullscreenchange', placeChat);
   // Back from the corner box: what came meanwhile is now in sight.
   new MutationObserver(() => { if (chatSeen() && CHAT.unread) renderChat(); })

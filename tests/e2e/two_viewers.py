@@ -1,5 +1,5 @@
 """Two viewers in two browser windows of different sizes, end to end: sync, per-viewer
-subtitles, shared cursors, pokes and the pen.
+subtitles, shared cursors, pokes, the pen and the chat; then a phone joins.
 
 Not part of `pytest`: it needs a browser and takes about a minute. One-time setup:
 
@@ -332,6 +332,40 @@ def run(headed: bool) -> None:
             b.click("#chatInput")
             b.keyboard.press("Escape")
             check("Escape closes the panel", b.evaluate("() => document.querySelector('#chatBox').hidden"))
+
+            # ---- a phone held upright: the chat in a box under the film, the header on one line,
+            # and where only a <video> may go fullscreen (the iPhone) the stage fills the window
+            phone_ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True,
+                                            locale="tr-TR")
+            # The iPhone's Safari has no fullscreen for anything but a <video>.
+            phone_ctx.add_init_script("delete Element.prototype.requestFullscreen; delete Element.prototype.webkitRequestFullscreen;")
+            phone = phone_ctx.new_page()
+            phone.on("pageerror", lambda exc: errors.append(f"phone pageerror: {exc}"))
+            phone.on("console", lambda msg: on_console(msg, "phone"))
+            phone.goto(f"{base}/?k={KEY}")
+            phone.fill("#nameInput", "Telefon")
+            phone.tap("#joinForm button[type=submit]")
+            phone.wait_for_function("() => document.querySelector('#video').readyState >= 2", timeout=30000)
+            layout = phone.evaluate("""() => { const box = document.querySelector('#chatBox'), s = document.querySelector('#stage');
+              const c = box.getBoundingClientRect(), r = s.getBoundingClientRect();
+              return {docked: box.parentNode.id === 'chatDock', open: !box.hidden, under: c.top >= r.bottom && c.height >= 200,
+                      log: document.querySelector('#chatLog').textContent.includes('Merhaba'),
+                      header: document.querySelector('.top').offsetHeight, wide: document.documentElement.scrollWidth}; }""")
+            check("on a phone the chat is an open box under the film, with what was said before",
+                  layout["docked"] and layout["open"] and layout["under"] and layout["log"], str(layout))
+            check("on a phone the header stays one line and nothing is wider than the screen",
+                  layout["header"] < 60 and layout["wide"] <= 390, str(layout))
+            phone.tap("#fsBtn")
+            fill = phone.evaluate("""() => { const s = document.querySelector('#stage').getBoundingClientRect();
+              return {fill: document.querySelector('#stage').classList.contains('fill'), w: s.width, h: s.height,
+                      chatIn: document.querySelector('#chatBox').parentNode.id === 'stage'}; }""")
+            check("without fullscreen the button makes the stage fill the window, the chat goes over it",
+                  fill["fill"] and fill["w"] == 390 and fill["h"] == 844 and fill["chatIn"], str(fill))
+            phone.tap("#fsBtn")
+            check("and the button brings it back",
+                  phone.evaluate("() => !document.querySelector('#stage').classList.contains('fill')"
+                                 " && document.querySelector('#chatBox').parentNode.id === 'chatDock'"))
+            phone_ctx.close()
 
             check("no errors in either window", not errors, " || ".join(errors))
             browser.close()
