@@ -1,6 +1,6 @@
 # Yapay zekâyla altyazı çevirisi planı
 
-> 3 Kasım 2026. Henüz kod yok. Eski planlarda bu iş tek satırdı (README "Sonraki fazlar" ve `future-plans.md` Faz 2: "dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi"); bu dosya onun ayrıntısı. Sondaki kararlar proje sahibinde.
+> 3 Kasım 2026, kararlar aynı gün verildi. Henüz kod yok. Eski planlarda bu iş tek satırdı (README "Sonraki fazlar" ve `future-plans.md` Faz 2: "dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi"); bu dosya onun ayrıntısı. Kararlar en sonda.
 
 İstenen dilde altyazı yoksa, odadaki bir altyazı (çoğunlukla İngilizcesi; hemen her film ve dizide vardır) yapay zekâya çevirtilir. Zaman damgaları gönderilmez: modele sadece numaralı düz metin satırları gider, dönen satırlar aynı numarayla orijinal zamanlara oturtulur. Çeviri odadaki herkesin altyazı listesine yeni bir altyazı olarak düşer; diğer altyazılar gibi diske kaydedilir, aynı film için ikinci kez para harcanmaz.
 
@@ -13,40 +13,49 @@
 > Birkaç dakika sürebilir. Ücreti, Ayarlar'da API anahtarını giren öder (bir film ≈ 2 sent – 1 dolar, modele göre).
 
 - **Hedef dil:** varsayılan, izleyicinin ana altyazı dili (`prefs.primaryLang`), yoksa arayüz dili.
-- **Kaynak:** odadaki altyazılardan biri. Varsayılan sırası: dosya hash'iyle eşleşen İngilizce, başka İngilizce, hash'le eşleşen başka bir dil, ilk altyazı. Odada hiç altyazı yoksa önce "OpenSubtitles'ta ya da eklentilerde İngilizce ara" denir; ileride bunu düğme kendisi yapar.
-- **İlerleme:** sunucu herkese tek bir güncellenen bildirim yollar: "Türkçe çeviri hazırlanıyor: 3/9" (açılış bildirimleriyle aynı yöntem). Bitince "Türkçe · Yapay zekâ (Claude)" adlı altyazı herkesin listesine gelir, başlatan kişide ana altyazı olur.
+- **Kaynak:** odadaki altyazılardan biri. Varsayılan sırası: dosya hash'iyle eşleşen İngilizce, başka İngilizce, hash'le eşleşen başka bir dil, ilk altyazı. Odada hiç altyazı yoksa "Önce OpenSubtitles'ta ya da eklentilerde İngilizce bir altyazı ekle" denir. İngilizceyi düğmenin kendisinin araması sonraya kaldı.
+- **İlerleme:** sunucu herkese tek bir güncellenen bildirim yollar: "Türkçe çeviri hazırlanıyor: 3/9" (açılış bildirimleriyle aynı yöntem). Bitince "Türkçe · Yapay zekâ (DeepSeek)" gibi, kullanılan sağlayıcının adını taşıyan bir altyazı herkesin listesine gelir, başlatan kişide ana altyazı olur.
 - **Anahtar yoksa:** host'a "Ayarlar'da bir yapay zekâ sağlayıcısı seç" linki; misafire "Host yapay zekâ çevirisini açmamış".
 
-**Ayarlar → yeni bölüm "Yapay zekâ çevirisi"** (sadece host görür, `.env` ile kilitlenebilir):
+**Ayarlar → yeni bölüm "Yapay zekâ çevirisi"** (sadece host görür, `.env` ile kilitlenebilir). Bir anahtar girilene (ya da yerel bir sunucu seçilene) kadar çeviri kapalıdır.
 
 | Alan | Değerler |
 | --- | --- |
-| Sağlayıcı | Kapalı (varsayılan) · Claude (Anthropic) · OpenAI · DeepSeek · OpenAI uyumlu başka bir adres (OpenRouter, bilgisayardaki LM Studio ya da Ollama) |
-| API anahtarı | Şifre alanı. Yerel sunucuda (LM Studio, Ollama) boş kalabilir |
-| Model | Sağlayıcıya göre önerilen ad hazır gelir, değiştirilebilir |
-| Adres | Sadece "OpenAI uyumlu başka" seçilince: `https://openrouter.ai/api/v1`, `http://localhost:1234/v1` gibi |
+| Sağlayıcı | Hazır seçimler (aşağıdaki tablo); ilk seçili olan **DeepSeek** (ucuz). Sonuncusu "Özel" |
+| Protokol | Hazır seçimde kendiliğinden gelir; "Özel"de seçilir: Anthropic ya da OpenAI uyumlu |
+| Adres | Hazır seçimde dolu gelir, değiştirilebilir (bir vekil ya da başka bölge için) |
+| API anahtarı | Şifre alanı. Yerel sunucuda (Ollama, LM Studio) boş kalır |
+| Model | Açılır liste: "Modelleri getir" sağlayıcının kendi listesini (`/models`) çeker; elle de yazılabilir. Hazır seçimin önerdiği model önceden seçilidir |
 | Kim başlatabilir | Host ve yetkili arkadaşlar (varsayılan) · Herkes |
-| "Dene" düğmesi | Tek satırlık bir çeviriyle anahtarı ve modeli sınar |
+| "Dene" düğmesi | Tek satırlık bir çeviriyle adresi, anahtarı ve modeli sınar |
 
-`.env` karşılıkları: `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_BASE_URL`, `AI_TRANSLATE=trusted|everyone`.
+`.env` karşılıkları: `AI_PROVIDER` (hazır seçimin adı ya da `custom`), `AI_PROTOCOL` (`anthropic` ya da `openai`), `AI_BASE_URL`, `AI_API_KEY`, `AI_MODEL`, `AI_TRANSLATE=trusted|everyone`.
 
-## Sağlayıcılar
+## Protokoller ve hazır sağlayıcılar
 
-İki bağlayıcı yeter:
+Uygulama sağlayıcıları değil, **protokolleri** bilir. Bir sağlayıcı, bir protokol, bir adres ve önerilen bir modelden ibarettir. Böylece yeni bir sağlayıcı kod değil, listeye bir satır olur; "Özel" ile listede olmayan her şey eklenebilir.
 
-1. **Claude:** Anthropic'in resmi Python SDK'sı (`anthropic` paketi), `messages.create`. Claude'u OpenAI uyumlu bir aracıdan çağırmayız; düşünme, efor ve ret durumu gibi özellikler o yolda kaybolur.
-2. **OpenAI uyumlu:** `POST {base_url}/chat/completions`, `Authorization: Bearer`. OpenAI, DeepSeek (`https://api.deepseek.com`), OpenRouter, LM Studio ve Ollama aynı biçimi konuşur. Projede zaten `httpx` var; ek paket gerekmez.
+1. **Anthropic protokolü:** Anthropic'in resmi Python SDK'sı (`anthropic` paketi), `messages.create`. Claude bu yoldan çağrılır; düşünme, efor ve ret durumu gibi özellikler OpenAI uyumlu bir aracıda kaybolur.
+2. **OpenAI uyumlu protokol:** `POST {adres}/chat/completions`, `Authorization: Bearer`, model listesi `GET {adres}/models`. DeepSeek, Kimi, OpenAI, OpenRouter, Ollama, LM Studio ve Google Gemini (Gemini'nin OpenAI uyumlu adresiyle) bu yoldan konuşur. Projede zaten `httpx` var; ek paket gerekmez.
 
-| Sağlayıcı | Önerilen model (değiştirilebilir) | Bir film (≈1.400 satır) için tahmini maliyet |
-| --- | --- | --- |
-| Claude | `claude-opus-5-5` (efor `low`) | ≈ 0,80 $ |
-| | `claude-sonnet-5-5` | ≈ 0,40 $ |
-| | `claude-haiku-5-5` | ≈ 0,02 $ |
-| DeepSeek | sağlayıcının güncel sohbet modeli | birkaç sent (fiyatı DeepSeek'in sayfasından) |
-| OpenAI | kullanıcı seçer | fiyatı OpenAI'ın sayfasından |
-| LM Studio / Ollama | bilgisayarda yüklü model | ücretsiz; altyazı bilgisayardan çıkmaz, ama küçük modellerde kalite düşük ve yavaş |
+Google'ın kendi protokolü (`generateContent`) ayrı bir bağlayıcı ister. Gemini aynı modelleri OpenAI uyumlu adresinden de verdiği için önce o kullanılır; yerli protokol, uyumlu adreste bir eksik çıkarsa eklenir.
 
-Claude fiyatları 6 Ekim 2026 listesinden (girdi / çıktı, milyon token başına): Opus 5.5 4 $ / 20 $, Sonnet 5.5 2 $ / 10 $, Haiku 5.5 0,10 $ / 0,50 $. Hesap: iki geçişte toplam ≈ 45 bin girdi, ≈ 30 bin çıktı token'ı (Türkçe ve Rusça, İngilizceden daha çok token tutar). Hangi model varsayılan olsun, aşağıdaki kararlarda.
+| Hazır seçim | Protokol | Adres | Önerilen model | Bir film (≈1.400 satır) için |
+| --- | --- | --- | --- | --- |
+| **DeepSeek** (ilk seçili) | OpenAI uyumlu | `https://api.deepseek.com` | DeepSeek'in güncel sohbet modeli (V4 gibi yeni sürümler listeden gelir) | birkaç sent |
+| Claude (Anthropic) | Anthropic | `https://api.anthropic.com` | `claude-opus-5-5`, efor `low`; listede `claude-sonnet-5-5`, `claude-haiku-5-5` | ≈ 0,80 $ · 0,40 $ · 0,02 $ |
+| Google Gemini | OpenAI uyumlu | `https://generativelanguage.googleapis.com/v1beta/openai/` | listeden | sağlayıcının sayfasından |
+| Kimi (Moonshot) | OpenAI uyumlu | `https://api.moonshot.ai/v1` | listeden | sağlayıcının sayfasından |
+| OpenAI | OpenAI uyumlu | `https://api.openai.com/v1` | listeden | sağlayıcının sayfasından |
+| OpenRouter | OpenAI uyumlu | `https://openrouter.ai/api/v1` | listeden (tek anahtarla birçok sağlayıcı) | modele göre |
+| Ollama (bu bilgisayar) | OpenAI uyumlu | `http://localhost:11434/v1` | yüklü modeller | ücretsiz |
+| LM Studio (bu bilgisayar) | OpenAI uyumlu | `http://localhost:1234/v1` | yüklü model | ücretsiz |
+| Özel | Anthropic ya da OpenAI uyumlu | kullanıcı yazar | kullanıcı yazar | — |
+
+- **Model adları koda gömülmez:** sadece önerilen ad hazır gelir; asıl liste "Modelleri getir"le sağlayıcıdan çekilir. Sağlayıcı yeni bir model çıkarınca (DeepSeek V4 gibi) uygulamayı güncellemek gerekmez. Önerilen adlar ve adresler kodlamaya başlarken sağlayıcıların belgelerinden bir kez daha doğrulanır.
+- **Yerel modeller:** Ollama ve LM Studio'da altyazı bilgisayardan çıkmaz ve ücret yoktur, ama küçük modellerde kalite düşer ve çeviri yavaşlar.
+- **Fiyatlar:** Claude'unkiler 6 Ekim 2026 listesinden (girdi / çıktı, milyon token başına): Opus 5.5 4 $ / 20 $, Sonnet 5.5 2 $ / 10 $, Haiku 5.5 0,10 $ / 0,50 $. Diğerlerinin fiyatı burada uydurulmadı; her biri kendi fiyat sayfasında. Hesap: iki geçişte toplam ≈ 45 bin girdi, ≈ 30 bin çıktı token'ı (Türkçe ve Rusça, İngilizceden daha çok token tutar).
+- **Adres güvenliği:** adresi sadece host ayarlar sayfasından girebilir (`is_local`); misafir sunucuya hiçbir adres yollatamaz. Bu, eklentilerdeki kuralın aynısı.
 
 Claude'a özel notlar: Opus 5.5'te düşünme kapatılamaz, derinliği `output_config.effort` ayarlar (çeviri için `low` yeter). `temperature` gönderilmez (yeni modeller reddediyor). Şiddet ya da cinsellik içeren diyaloglarda nadiren `stop_reason: "refusal"` gelebilir; o parça hata sayılır, başka parçalar devam eder. Opus 5.5 için sunucu tarafı yedek model (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`) açık gelir; reddedilen istek aynı çağrıda başka modelle tamamlanır.
 
@@ -154,23 +163,27 @@ es: - Use neutral Spanish that reads well in both Spain and Latin America; "tú"
 
 ## Uygulama adımları
 
-1. **Sunucu, `server/translate.py`:** satırları numaralama ve geri okuma, parçalama, iki aşama, doğrulama ve bir kez tekrar, Claude ve OpenAI uyumlu bağlayıcılar. pytest'te sahte bir sağlayıcıyla: satır sayısı, `<br>`, eksik satırda tekrar, ret, iptal.
+1. **Sunucu, `server/translate.py`:** satırları numaralama ve geri okuma, parçalama, iki aşama, doğrulama ve bir kez tekrar, Anthropic ve OpenAI uyumlu bağlayıcılar, hazır sağlayıcı listesi, model listesini çekme. pytest'te sahte bir sağlayıcıyla: satır sayısı, `<br>`, eksik satırda tekrar, ret, iptal.
 2. **Ayarlar:** yeni bölüm (`config.py`'de seçimler ve `.env` adları), "Dene" düğmesi, arayüz metinleri üç dilde.
 3. **API ve oda:** `POST /api/subtitles/translate {source, lang}`, ilerleme bildirimi (`status: translating`, `{done}/{total}`), bitince `broadcast_tracks`. Yetki: `AI_TRANSLATE`.
 4. **Arayüz:** "Bulamadın mı?" bölümü, kaynak seçimi, ilerleme, hata metinleri. Tarayıcı testi: sahte sağlayıcıyla çevir, altyazı herkesin listesine düşsün, başlatanda ana altyazı olsun.
-5. **Gerçek deneme:** Claude ve DeepSeek'le birer film; İngilizceden Türkçe ve Rusçaya. Bakılacaklar: satır sayısı tutuyor mu, "sen/siz" ve Rusçada cinsiyet tutarlı mı, süre, maliyet.
+5. **Gerçek deneme:** DeepSeek ve Claude'la birer film, bir de LM Studio'yla kısa bir parça; İngilizceden Türkçe ve Rusçaya. Bakılacaklar: satır sayısı tutuyor mu, "sen/siz" ve Rusçada cinsiyet tutarlı mı, süre, maliyet.
 6. **Belgeler:** iki README, CLAUDE.md, `.env.example`.
 
 ## Bağlantılı iş: kaymış altyazıyı hizalama (alass)
 
 Kaynak altyazı filmle tam oturmuyorsa çevirisi de kayar. Faz 2'nin diğer parçası olan `alass`, altyazıyı filmin sesine göre kendisi hizalar: tek bir çalıştırılabilir dosya, ffmpeg'le çalışır. Çeviriden önce kaynak bir kez hizalanırsa iki sorun birden çözülür; ayrı bir adım olarak sonra eklenebilir. Kullanıcının altyazı ekleyip "kaymış" bulduğu sorun da bu.
 
-## Kararlar (proje sahibinde)
+## Kararlar (3 Kasım 2026)
 
-| Konu | Seçenekler | Önerilen |
-| --- | --- | --- |
-| Claude'da varsayılan model | Opus 5.5 (en iyi, ≈ 0,80 $/film) · Sonnet 5.5 (≈ 0,40 $) · Haiku 5.5 (≈ 0,02 $) | Opus 5.5, efor `low`; ayarlardan değiştirilir |
-| Kim başlatabilir | Sadece host · Host ve yetkililer · Herkes | Host ve yetkililer |
-| Çeviri ne zaman | Sadece düğmeyle · İstenen dil yoksa sorup otomatik | Önce düğmeyle; otomatiği gerçek denemeden sonra |
-| İspanyolca | Nötr · İspanya · Latin Amerika | Nötr |
-| Kaynak yoksa | Kullanıcı önce İngilizce arar · Düğme kendisi OpenSubtitles'ta ve eklentilerde arar | Önce kullanıcı; ikincisi 4. adımdan sonra |
+| Konu | Karar |
+| --- | --- |
+| Sağlayıcı seçimi | Protokol üzerinden: Anthropic ve OpenAI uyumlu. Hazır seçimler DeepSeek, Claude, Google Gemini, Kimi, OpenAI, OpenRouter, Ollama, LM Studio; listede olmayan "Özel" ile eklenir |
+| İlk seçili sağlayıcı | DeepSeek (ucuz) |
+| Claude seçilirse | `claude-opus-5-5`, efor `low`; Sonnet 5.5 ve Haiku 5.5 model listesinden seçilir |
+| Google | Önce Gemini'nin OpenAI uyumlu adresi; kendi protokolü sadece gerekirse |
+| Model adları | Koda gömülmez; sağlayıcının `/models` listesinden gelir, önerilen ad sadece ön seçim |
+| Kim başlatabilir | Host ve yetkili arkadaşlar (ayarlardan "Herkes" yapılabilir) |
+| Çeviri ne zaman | Sadece düğmeyle; otomatik ya da sorarak çeviri gerçek denemeden sonra konuşulacak |
+| Kaynak altyazı yoksa | Önce kullanıcı İngilizce bir altyazı ekler; düğmenin kendisinin araması sonraya |
+| İspanyolca | Sorulmadı; şimdilik nötr İspanyolca |
