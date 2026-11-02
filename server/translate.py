@@ -148,32 +148,9 @@ class OpenAIModel:
         self.api_key = api_key
         self.model = model
 
-    def _client(self) -> httpx.AsyncClient:
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        # A model on this computer can take minutes for a chunk; a far one should not.
-        return httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10), headers=headers, transport=TRANSPORT)
-
     async def _send(self, method: str, path: str, **kwargs) -> dict:
-        for attempt in range(3):
-            try:
-                async with self._client() as http:
-                    resp = await http.request(method, self.base_url + path, **kwargs)
-            except httpx.TimeoutException:
-                error = TranslateError("the provider did not answer in time", "ai_timeout")
-            except httpx.HTTPError as exc:
-                raise TranslateError(f"cannot reach {self.base_url}: {exc.__class__.__name__}", "ai_unreachable") from None
-            else:
-                if resp.status_code < 400:
-                    try:
-                        return resp.json()
-                    except ValueError:
-                        raise TranslateError("the provider's answer is not JSON", "ai_bad_output") from None
-                error = _status_error(resp.status_code, resp.text)
-                if resp.status_code != 429 and resp.status_code < 500:
-                    raise error
-            if attempt < 2:
-                await asyncio.sleep(2 * 2 ** attempt)
-        raise error
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        return await _call_json(method, self.base_url + path, headers=headers, **kwargs)
 
     async def complete(self, system: str, prompt: str) -> str:
         data = await self._send("POST", "/chat/completions", json={
@@ -189,6 +166,33 @@ class OpenAIModel:
         data = await self._send("GET", "/models")
         items = data.get("data") if isinstance(data, dict) else None
         return sorted({str(m["id"]) for m in items or [] if isinstance(m, dict) and m.get("id")})
+
+
+async def _call_json(method: str, url: str, errors: Optional[dict[int, str]] = None, **kwargs):
+    """One HTTP call with JSON back; rate limits and server errors are tried twice more."""
+    for attempt in range(3):
+        try:
+            # A model on this computer can take minutes for a chunk; a far one should not.
+            async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10), transport=TRANSPORT) as http:
+                resp = await http.request(method, url, **kwargs)
+        except httpx.TimeoutException:
+            error = TranslateError("the provider did not answer in time", "ai_timeout")
+        except httpx.HTTPError as exc:
+            raise TranslateError(f"cannot reach {url.split('?')[0]}: {exc.__class__.__name__}", "ai_unreachable") from None
+        else:
+            if resp.status_code < 400:
+                try:
+                    return resp.json()
+                except ValueError:
+                    raise TranslateError("the provider's answer is not JSON", "ai_bad_output") from None
+            error = _status_error(resp.status_code, resp.text)
+            if errors and resp.status_code in errors:
+                error = TranslateError(f"{error} ({resp.status_code})", errors[resp.status_code])
+            if resp.status_code != 429 and resp.status_code < 500:
+                raise error
+        if attempt < 2:
+            await asyncio.sleep(2 * 2 ** attempt)
+    raise error
 
 
 def _status_error(status: int, body: str) -> TranslateError:
@@ -264,7 +268,139 @@ class AnthropicModel:
         return await self._call(listing)
 
 
+# ---- machine translation services --------------------------------------------------------------------
+# DeepL, Microsoft Translator, Google Cloud Translation, LibreTranslate and MyMemory translate
+# a list of lines and give them back in the same order. No brief and no context: every line
+# is translated on its own, so a sentence split over two subtitles may come out awkward, and
+# "sen/siz" or a Russian speaker's gender is the service's guess. But they are fast, and most
+# have a free monthly allowance.
+MT_PROTOCOLS = ("deepl", "microsoft", "google", "libretranslate", "mymemory")
+
+
+def _code(lang: str, table: dict[str, str]) -> str:
+    return table.get(lang.lower(), lang.lower())
+
+
+class MTService:
+    batch = 50  # lines per request
+    parallel = 3
+
+    def __init__(self, base_url: str, api_key: str, extra: str = ""):
+        self.base_url = (base_url or "").rstrip("/")
+        self.api_key = api_key
+        self.extra = extra  # Microsoft: the Azure resource's region
+
+    async def models(self) -> list[str]:
+        return []  # a service, not a choice of models
+
+    async def translate_lines(self, lines: list[str], source: str, target: str) -> list[str]:
+        raise NotImplementedError
+
+
+def _pick(items, field: str, count: int) -> list[str]:
+    if not isinstance(items, list) or len(items) != count:
+        raise TranslateError("the service gave back a different number of lines", "ai_bad_output")
+    return [str((item or {}).get(field) or "") if isinstance(item, dict) else "" for item in items]
+
+
+class DeepL(MTService):
+    """A free key ends in ":fx" and has its own address."""
+    TARGET = {"en": "EN-US", "pt": "PT-PT", "pt-br": "PT-BR", "zh": "ZH-HANS", "zh-tw": "ZH-HANT"}
+
+    async def translate_lines(self, lines, source, target):
+        base = self.base_url or ("https://api-free.deepl.com" if self.api_key.endswith(":fx") else "https://api.deepl.com")
+        data = await _call_json("POST", base + "/v2/translate", errors={456: "ai_quota", 403: "ai_auth"},
+                                headers={"Authorization": f"DeepL-Auth-Key {self.api_key}"},
+                                json={"text": lines, "target_lang": _code(target, self.TARGET).upper(),
+                                      "source_lang": source.split("-")[0].upper()})
+        return _pick((data or {}).get("translations"), "text", len(lines))
+
+
+class Microsoft(MTService):
+    """Azure Translator; the free tier (F0) has a monthly allowance."""
+    batch = 100
+    CODES = {"pt-br": "pt", "pt": "pt-pt", "zh": "zh-Hans", "zh-tw": "zh-Hant", "no": "nb"}
+
+    async def translate_lines(self, lines, source, target):
+        headers = {"Ocp-Apim-Subscription-Key": self.api_key}
+        if self.extra:
+            headers["Ocp-Apim-Subscription-Region"] = self.extra
+        base = self.base_url or "https://api.cognitive.microsofttranslator.com"
+        data = await _call_json("POST", base + "/translate", errors={403: "ai_quota"}, headers=headers,
+                                params={"api-version": "3.0", "from": _code(source, self.CODES),
+                                        "to": _code(target, self.CODES)},
+                                json=[{"Text": line} for line in lines])
+        if not isinstance(data, list) or len(data) != len(lines):
+            raise TranslateError("the service gave back a different number of lines", "ai_bad_output")
+        return [((item.get("translations") or [{}])[0].get("text") or "") if isinstance(item, dict) else ""
+                for item in data]
+
+
+class Google(MTService):
+    """Cloud Translation Basic (v2) with an API key; at most 128 lines a request."""
+    batch = 100
+    CODES = {"pt-br": "pt", "pt": "pt-PT", "zh": "zh-CN", "zh-tw": "zh-TW"}
+
+    async def translate_lines(self, lines, source, target):
+        base = self.base_url or "https://translation.googleapis.com"
+        data = await _call_json("POST", base + "/language/translate/v2", params={"key": self.api_key},
+                                json={"q": lines, "source": _code(source, self.CODES),
+                                      "target": _code(target, self.CODES), "format": "text"})
+        return _pick(((data or {}).get("data") or {}).get("translations"), "translatedText", len(lines))
+
+
+class LibreTranslate(MTService):
+    """Open source, runs on this computer (or a server with a key); it uses Argos Translate."""
+    CODES = {"pt-br": "pt", "zh-tw": "zh"}
+
+    async def translate_lines(self, lines, source, target):
+        body = {"q": lines, "source": _code(source, self.CODES), "target": _code(target, self.CODES), "format": "text"}
+        if self.api_key:
+            body["api_key"] = self.api_key
+        data = await _call_json("POST", self.base_url + "/translate", json=body)
+        out = (data or {}).get("translatedText")
+        if not isinstance(out, list) or len(out) != len(lines):
+            raise TranslateError("the service gave back a different number of lines", "ai_bad_output")
+        return [str(text or "") for text in out]
+
+
+class MyMemory(MTService):
+    """No account: 5,000 characters a day, 50,000 with an e-mail address (the "key" field).
+    One line per request (500 bytes at most). Enough for a short clip, not for a film."""
+    batch = 1
+    DAILY = (5_000, 50_000)
+    CODES = {"pt-br": "pt-BR", "zh": "zh-CN", "zh-tw": "zh-TW"}
+
+    def check(self, lines: list[str]) -> None:
+        limit = self.DAILY["@" in self.api_key]
+        chars = sum(len(line) for line in lines)
+        if chars > limit:
+            raise TranslateError(f"{chars} characters; MyMemory allows {limit} a day", "ai_free_limit")
+
+    async def translate_lines(self, lines, source, target):
+        params = {"q": lines[0], "langpair": f"{_code(source, self.CODES)}|{_code(target, self.CODES)}"}
+        if "@" in self.api_key:
+            params["de"] = self.api_key
+        data = await _call_json("GET", (self.base_url or "https://api.mymemory.translated.net") + "/get", params=params)
+        text = str(((data or {}).get("responseData") or {}).get("translatedText") or "")
+        status = str((data or {}).get("responseStatus", "200"))
+        if status == "429" or "MYMEMORY WARNING" in text.upper():
+            raise TranslateError("MyMemory's daily allowance is used up", "ai_quota")
+        if status != "200":
+            raise TranslateError(f"MyMemory said {status}: {text[:120]}", "ai_error")
+        return [text]
+
+
+MT_SERVICES = {"deepl": DeepL, "microsoft": Microsoft, "google": Google, "libretranslate": LibreTranslate,
+               "mymemory": MyMemory}
+
+
 def make_model(protocol: str, base_url: str, api_key: str, model: str):
+    """`model` is the model's name; for Microsoft, the Azure resource's region."""
+    if protocol in MT_SERVICES:
+        if base_url and not re.match(r"https?://", base_url):
+            raise TranslateError("the address must start with http:// or https://", "ai_base_invalid")
+        return MT_SERVICES[protocol](base_url, api_key, model)
     if protocol == "anthropic":
         return AnthropicModel(base_url, api_key, model)
     if protocol == "openai":
@@ -299,6 +435,8 @@ async def translate(model, cues: list[Cue], source: str, target: str, title: str
         raise TranslateError("the subtitle has no lines", "ai_empty")
     if len(cues) > MAX_LINES:
         raise TranslateError(f"{len(cues)} lines; at most {MAX_LINES}", "ai_too_long")
+    if isinstance(model, MTService):
+        return await _translate_lines(model, cues, source, target, progress)
     lines = [to_line(text) for _, _, text in cues]
     names = {"source": language_name(source), "target": language_name(target)}
     chunks = [range(i, min(i + CHUNK, len(lines))) for i in range(0, len(lines), CHUNK)]
@@ -353,3 +491,39 @@ async def translate(model, cues: list[Cue], source: str, target: str, title: str
     if missing > MAX_MISSING * len(cues):
         raise TranslateError(f"{missing} of {len(cues)} lines did not come back", "ai_bad_output")
     return Result(out, missing, brief)
+
+
+async def _translate_lines(service: MTService, cues: list[Cue], source: str, target: str,
+                           progress: Optional[Progress]) -> Result:
+    """A service: each subtitle as one line (its own line breaks become spaces; the player wraps
+    long lines anyway), in batches, a few at a time."""
+    lines = [" ".join(text.split()) for _, _, text in cues]
+    if isinstance(service, MyMemory):
+        service.check(lines)
+    batches = [range(i, min(i + service.batch, len(lines))) for i in range(0, len(lines), service.batch)]
+    got: list[str] = [""] * len(lines)
+    done = 0
+    gate = asyncio.Semaphore(service.parallel)
+
+    async def run(batch: range) -> None:
+        nonlocal done
+        async with gate:
+            out = await service.translate_lines([lines[i] for i in batch], source, target)
+        for i, text in zip(batch, out):
+            got[i] = text.strip()
+        done += 1
+        if progress is not None:
+            await progress(done, len(batches))
+
+    try:
+        async with asyncio.TaskGroup() as group:
+            for batch in batches:
+                group.create_task(run(batch))
+    except BaseExceptionGroup as group_error:
+        first = group_error.exceptions[0]
+        raise first if isinstance(first, TranslateError) else TranslateError(str(first)) from None
+    out = [(start, end, got[i] or text) for i, (start, end, text) in enumerate(cues)]
+    missing = sum(1 for text in got if not text)
+    if missing > MAX_MISSING * len(cues):
+        raise TranslateError(f"{missing} of {len(cues)} lines did not come back", "ai_bad_output")
+    return Result(out, missing, "")

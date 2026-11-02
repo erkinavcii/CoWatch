@@ -561,10 +561,12 @@ class Controller:
             result = await translate.translate(
                 model, cues, source["lang"], lang, title=session.source.title,
                 brief=self.briefs.get((key, source["id"])), progress=progress)
-            self.briefs[(key, source["id"])] = result.brief
+            if result.brief:
+                self.briefs[(key, source["id"])] = result.brief
             if session is not self.session:
                 return  # the film was closed meanwhile
-            track = self.store.add(key, lang, f"AI · {cfg.ai_label}", "ai", result.cues,
+            kind = "MT" if cfg.ai_service else "AI"  # machine translation or a language model
+            track = self.store.add(key, lang, f"{kind} · {cfg.ai_label}", "ai", result.cues,
                                    extra={"fromTrack": source["id"], "model": cfg.ai_model})
             await self.broadcast_tracks()
             await self.status("translated", lang=lang, track=track["id"], label=track["label"], missing=result.missing)

@@ -62,6 +62,7 @@
     aiHint: $('#aiHint'), aiSettings: $('#aiSettings'), aiProvider: $('#aiProvider'), aiProtocol: $('#aiProtocol'),
     aiBaseUrl: $('#aiBaseUrl'), aiApiKey: $('#aiApiKey'), aiModel: $('#aiModel'), aiModels: $('#aiModels'),
     aiModelsBtn: $('#aiModelsBtn'), aiTestBtn: $('#aiTestBtn'), aiTestOut: $('#aiTestOut'),
+    aiNote: $('#aiNote'), aiKeyLabel: $('#aiKeyLabel'), aiModelLabel: $('#aiModelLabel'),
   };
   const video = el.video;
   // Screen sharing (see "screen sharing" below): who shares, who waits for an answer, and my
@@ -2208,9 +2209,21 @@
     el.port.value = pick('port', cur.port);
     el.torrentUploadLimit.value = pick('torrentUploadLimit', cur.torrentUploadLimit);
     el.iceServers.value = pick('iceServers', cur.iceServers);
+    // Two groups: language models, and machine translation services (no model, line by line).
     const presets = data.aiPresets || {};
-    el.aiProvider.replaceChildren(...Object.entries(presets).map(([id, p]) => Object.assign(
-      document.createElement('option'), { value: id, textContent: id === 'custom' ? t('ai_custom') : p.label })));
+    const group = (label, ids) => {
+      const node = document.createElement('optgroup');
+      node.label = label;
+      node.append(...ids.map((id) => Object.assign(document.createElement('option'), {
+        value: id,
+        textContent: id === 'custom' ? t('ai_custom') : presets[id].label + (presets[id].account ? ` · ${t('ai_needs_account')}` : ''),
+      })));
+      return node;
+    };
+    const ids = Object.keys(presets);
+    el.aiProvider.replaceChildren(
+      group(t('ai_group_llm'), ids.filter((id) => !AI_SERVICES.includes(presets[id].protocol))),
+      group(t('ai_group_mt'), ids.filter((id) => AI_SERVICES.includes(presets[id].protocol))));
     el.aiProvider.value = pick('aiProvider', cur.aiProvider);
     fillAiPreset();
     if (locked.has('aiProtocol') || v.aiProtocol) el.aiProtocol.value = pick('aiProtocol', cur.aiProtocol) || el.aiProtocol.value;
@@ -2283,6 +2296,7 @@
   // ---- the AI fields: a provider is a protocol, an address and a suggested model; choosing
   // one fills them in. The key is never sent back to the page: an empty field keeps the saved
   // one, unless the provider changed (a key belongs to its provider).
+  const AI_SERVICES = ['deepl', 'microsoft', 'google', 'libretranslate', 'mymemory'];
   const aiPreset = () => (SH.settings.aiPresets || {})[el.aiProvider.value] || { protocol: 'openai', baseUrl: '', model: '' };
   function fillAiPreset () {
     const preset = aiPreset();
@@ -2294,11 +2308,26 @@
     el.aiTestOut.hidden = true;
     renderAiKey();
   }
+  // The fields follow the protocol: a service has no model (Microsoft takes its Azure region
+  // there), MyMemory takes an e-mail address instead of a key.
   function renderAiKey () {
     const v = SH.settings.values;
+    const protocol = el.aiProtocol.value;
+    const service = AI_SERVICES.includes(protocol);
     const same = el.aiProvider.value === v.aiProvider;
     const local = /^https?:\/\/(localhost|127\.0\.0\.1)[:/]/.test(el.aiBaseUrl.value);
-    el.aiApiKey.placeholder = same && v.hasAiKey ? t('ai_key_saved') : local ? t('ai_key_local') : '';
+    const email = protocol === 'mymemory';
+    el.aiKeyLabel.textContent = t(email ? 'ai_email' : 'ai_api_key');
+    el.aiApiKey.type = email ? 'email' : 'password';
+    el.aiApiKey.placeholder = same && v.hasAiKey ? t('ai_key_saved') : local ? t('ai_key_local')
+      : email || protocol === 'libretranslate' ? t('ai_key_optional') : '';
+    el.aiModelLabel.textContent = t(protocol === 'microsoft' ? 'ai_region' : service ? 'ai_try_label' : 'ai_model');
+    el.aiModel.hidden = service && protocol !== 'microsoft';
+    el.aiModel.placeholder = protocol === 'microsoft' ? 'westeurope' : '';
+    el.aiModelsBtn.hidden = service;
+    const note = `ai_note_${el.aiProvider.value}`;
+    el.aiNote.hidden = !(I18N.en[note]);
+    el.aiNote.textContent = el.aiNote.hidden ? '' : t(note);
     const locked = SH.settings.locked.includes('aiProtocol');
     el.aiProtocol.disabled = locked || el.aiProvider.value !== 'custom';
   }

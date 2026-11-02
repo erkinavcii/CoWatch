@@ -256,3 +256,89 @@ def test_the_settings_page_keeps_the_key_and_tries_the_model(monkeypatch, tmp_pa
         assert seen[-1].headers["authorization"] == "Bearer secret-1"  # the saved key, never sent to the page
     with TestClient(app, **FRIEND) as friend:
         assert friend.post("/api/settings/ai-models", json={"aiProvider": "deepseek"}).status_code == 403
+
+
+def test_machine_translation_services_send_their_own_requests(monkeypatch):
+    """Each service's request and answer, as in its documentation (checked 3 Nov 2026)."""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        url, body = request.url, json.loads(request.content or b"null")
+        if url.host.endswith("deepl.com"):
+            if request.headers["authorization"] == "DeepL-Auth-Key used:fx":
+                return httpx.Response(456, json={"message": "Quota exceeded"})
+            return httpx.Response(200, json={"translations": [{"text": f"tr:{t}"} for t in body["text"]]})
+        if url.host == "api.cognitive.microsofttranslator.com":
+            return httpx.Response(200, json=[{"translations": [{"text": f"tr:{x['Text']}", "to": "tr"}]} for x in body])
+        if url.host == "translation.googleapis.com":
+            return httpx.Response(200, json={"data": {"translations": [{"translatedText": f"tr:{q}"} for q in body["q"]]}})
+        if url.port == 5000:
+            return httpx.Response(200, json={"translatedText": [f"tr:{q}" for q in body["q"]]})
+        if url.host == "api.mymemory.translated.net":
+            if url.params["q"] == "too much":
+                return httpx.Response(200, json={"responseData": {"translatedText": "MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS FOR TODAY"}, "responseStatus": 429})
+            return httpx.Response(200, json={"responseData": {"translatedText": "tr:" + url.params["q"]}, "responseStatus": 200})
+        return httpx.Response(404)
+
+    monkeypatch.setattr(translate, "TRANSPORT", httpx.MockTransport(handler))
+    lines = ["Home.\nIt's late.", "Go."]
+
+    def run(protocol, key="k", base="", extra="", target="tr"):
+        model = translate.make_model(protocol, base, key, extra)
+        cues = [(float(i), i + 0.5, text) for i, text in enumerate(lines)]
+        return [text for _, _, text in asyncio.run(translate.translate(model, cues, "en", target)).cues]
+
+    # DeepL: a free key (":fx") goes to the free address; English becomes EN-US as a target
+    assert run("deepl", key="abc:fx") == ["tr:Home. It's late.", "tr:Go."]  # one line per subtitle
+    req = seen[-1]
+    assert str(req.url) == "https://api-free.deepl.com/v2/translate" and req.headers["authorization"] == "DeepL-Auth-Key abc:fx"
+    assert json.loads(req.content)["target_lang"] == "TR" and json.loads(req.content)["source_lang"] == "EN"
+    run("deepl", key="pro-key", target="en")
+    assert seen[-1].url.host == "api.deepl.com" and json.loads(seen[-1].content)["target_lang"] == "EN-US"
+    with pytest.raises(TranslateError) as info:
+        run("deepl", key="used:fx")
+    assert info.value.code == "ai_quota"  # 456: the month's characters are used up
+
+    # Microsoft: key and region headers, languages in the query
+    assert run("microsoft", key="az", extra="westeurope", target="pt-br") == ["tr:Home. It's late.", "tr:Go."]
+    req = seen[-1]
+    assert req.headers["ocp-apim-subscription-key"] == "az" and req.headers["ocp-apim-subscription-region"] == "westeurope"
+    assert req.url.params["api-version"] == "3.0" and req.url.params["to"] == "pt" and req.url.params["from"] == "en"
+
+    # Google Cloud Translation v2: the key in the query, plain text
+    run("google", key="g")
+    req = seen[-1]
+    assert req.url.path == "/language/translate/v2" and req.url.params["key"] == "g"
+    assert json.loads(req.content)["format"] == "text"
+
+    # LibreTranslate on this computer, no key
+    assert run("libretranslate", key="", base="http://localhost:5000")[1] == "tr:Go."
+    assert "api_key" not in json.loads(seen[-1].content)
+
+    # MyMemory: a line per request, the e-mail raises the daily allowance
+    assert run("mymemory", key="me@example.com")[1] == "tr:Go."
+    assert seen[-1].url.params["de"] == "me@example.com" and seen[-1].url.params["langpair"] == "en|tr"
+    lines[:] = ["too much"]
+    with pytest.raises(TranslateError) as info:
+        run("mymemory", key="")
+    assert info.value.code == "ai_quota"
+    lines[:] = ["x" * 6000]
+    with pytest.raises(TranslateError) as info:
+        run("mymemory", key="")
+    assert info.value.code == "ai_free_limit"  # over 5,000 characters: not even tried
+
+
+def test_services_need_no_model_and_say_so_in_the_label(monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    try:
+        for provider, key, enabled in (("deepl", "", False), ("deepl", "k:fx", True), ("mymemory", "", True),
+                                       ("libretranslate", "", True), ("google", "", False)):
+            monkeypatch.setenv("AI_PROVIDER", provider)
+            monkeypatch.setenv("AI_API_KEY", key)
+            get_settings.cache_clear()
+            cfg = get_settings()
+            assert cfg.ai_service and cfg.ai_enabled is enabled, provider
+        assert config.AI_PRESETS["deepl"]["account"] and "account" not in config.AI_PRESETS["mymemory"]
+    finally:
+        get_settings.cache_clear()

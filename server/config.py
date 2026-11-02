@@ -81,14 +81,27 @@ AI_PRESETS: dict[str, dict[str, str]] = {
     "ollama": {"label": "Ollama", "protocol": "openai", "baseUrl": "http://localhost:11434/v1", "model": ""},
     "lmstudio": {"label": "LM Studio", "protocol": "openai", "baseUrl": "http://localhost:1234/v1", "model": ""},
     "custom": {"label": "AI", "protocol": "", "baseUrl": "", "model": ""},
+    # Machine translation services: faster and mostly free within a monthly allowance, but each
+    # line is translated on its own, without the film's context. "model" is unused, except that
+    # Microsoft takes the Azure resource's region there.
+    "deepl": {"label": "DeepL", "protocol": "deepl", "baseUrl": "", "model": "", "account": "1"},
+    "microsoft": {"label": "Microsoft Translator", "protocol": "microsoft",
+                  "baseUrl": "https://api.cognitive.microsofttranslator.com", "model": "", "account": "1"},
+    "google": {"label": "Google Cloud Translation", "protocol": "google",
+               "baseUrl": "https://translation.googleapis.com", "model": "", "account": "1"},
+    "libretranslate": {"label": "LibreTranslate", "protocol": "libretranslate", "baseUrl": "http://localhost:5000", "model": ""},
+    "mymemory": {"label": "MyMemory", "protocol": "mymemory", "baseUrl": "https://api.mymemory.translated.net", "model": ""},
 }
+MT_PROTOCOLS = ("deepl", "microsoft", "google", "libretranslate", "mymemory")
+for _id in ("deepseek", "claude", "gemini", "kimi", "openai", "openrouter"):
+    AI_PRESETS[_id]["account"] = "1"  # the settings page says these need an account
 
 CHOICES = {
     "connection": ("funnel", "serve", "http"),
     "quality": ("auto", "original", "manual"),
     "mediaControl": ("everyone", "trusted"),
     "aiProvider": tuple(AI_PRESETS),
-    "aiProtocol": ("", "openai", "anthropic"),  # "": the provider's own
+    "aiProtocol": ("", "openai", "anthropic", *MT_PROTOCOLS),  # "": the provider's own
     "aiTranslate": ("trusted", "everyone"),
 }
 DEFAULTS = {
@@ -269,7 +282,16 @@ class Settings:
         return re.match(r"https?://(localhost|127\.0\.0\.1|\[::1\])[:/]", self.ai_base_url or "") is not None
 
     @property
+    def ai_service(self) -> bool:
+        """A machine translation service rather than a language model."""
+        return self.ai_protocol in MT_PROTOCOLS
+
+    @property
     def ai_enabled(self) -> bool:
+        if self.ai_service:
+            if self.ai_protocol == "libretranslate":
+                return bool(self.ai_base_url)
+            return self.ai_protocol == "mymemory" or bool(self.ai_api_key)  # MyMemory needs no account
         if not self.ai_model or self.ai_protocol not in ("openai", "anthropic"):
             return False
         if self.ai_protocol == "openai" and not self.ai_base_url:

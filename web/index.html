@@ -395,14 +395,17 @@
         <legend data-i18n="set_ai"></legend>
         <p class="hint" data-i18n="set_ai_hint"></p>
         <label class="field" data-key="aiProvider"><span data-i18n="ai_provider"></span><select id="aiProvider"></select></label>
+        <p class="hint" id="aiNote" hidden></p>
         <div class="grid2">
           <label class="field" data-key="aiProtocol"><span data-i18n="ai_protocol"></span>
-            <select id="aiProtocol"><option value="openai" data-i18n="ai_protocol_openai"></option><option value="anthropic">Anthropic</option></select></label>
+            <select id="aiProtocol"><option value="openai" data-i18n="ai_protocol_openai"></option><option value="anthropic">Anthropic</option>
+            <option value="deepl">DeepL</option><option value="microsoft">Microsoft Translator</option><option value="google">Google Cloud Translation</option>
+            <option value="libretranslate">LibreTranslate</option><option value="mymemory">MyMemory</option></select></label>
           <label class="field" data-key="aiBaseUrl"><span data-i18n="ai_base_url"></span><input id="aiBaseUrl" autocomplete="off" spellcheck="false"></label>
         </div>
-        <label class="field" data-key="aiApiKey"><span data-i18n="ai_api_key"></span><input id="aiApiKey" type="password" autocomplete="new-password"></label>
+        <label class="field" data-key="aiApiKey"><span id="aiKeyLabel"></span><input id="aiApiKey" type="password" autocomplete="new-password"></label>
         <div class="field" data-key="aiModel">
-          <span data-i18n="ai_model"></span>
+          <span id="aiModelLabel"></span>
           <div class="inline-form">
             <input id="aiModel" list="aiModels" autocomplete="off" spellcheck="false">
             <datalist id="aiModels"></datalist>

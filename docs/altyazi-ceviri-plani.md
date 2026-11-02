@@ -59,6 +59,20 @@ Google'ın kendi protokolü (`generateContent`) ayrı bir bağlayıcı ister. Ge
 
 Claude'a özel notlar: Opus 5.5'te düşünme kapatılamaz, derinliği `output_config.effort` ayarlar (çeviri için `low` yeter). `temperature` gönderilmez (yeni modeller reddediyor). Şiddet ya da cinsellik içeren diyaloglarda nadiren `stop_reason: "refusal"` gelebilir; o parça hata sayılır, başka parçalar devam eder. Opus 5.5 için sunucu tarafı yedek model (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`) açık gelir; reddedilen istek aynı çağrıda başka modelle tamamlanır.
 
+## Çeviri servisleri (3 Kasım'da eklendi)
+
+Yapay zekâ modellerinin yanında, satır satır çeviren servisler de listede; "hesap gerekir" olanlar listede böyle yazar. Özet ve bağlam kullanmazlar: hızlı ve çoğu ücretsiz sınırlıdır, ama iki altyazıya bölünmüş bir cümle tuhaf çıkabilir, "sen/siz" ve Rusçada konuşanın cinsiyeti servisin tahminidir.
+
+| Servis | Ücretsiz sınır | Hesap |
+| --- | --- | --- |
+| Microsoft Translator | Azure F0: ayda ≈ 2 milyon karakter (≈ 30–40 film) | Azure hesabı, Translator kaynağı; bölge |
+| DeepL | Ücretsiz plan: ayda 500 bin karakter (≈ 8–10 film) | Hesap ve anahtar (`:fx`) |
+| Google Cloud Translation | Ayda 500 bin karakter | Faturalı Google Cloud hesabı, API anahtarı |
+| LibreTranslate | Sınırsız, bu bilgisayarda (Argos Translate) | Yok |
+| MyMemory | Günde 5 bin karakter, e-postayla 50 bin | Yok |
+
+Bir film ≈ 40–60 bin karakter. Google Çeviri'nin gayriresmî ücretsiz adresi eklenmedi: Google'ın koşullarına aykırı ve kod açık bir depoda.
+
 ## Neden zaman damgası yok, giden metin nasıl
 
 Modele SRT gönderilseydi zaman damgaları token harcardı, model onları bozabilir ya da satırları birleştirebilirdi. Bunun yerine her altyazı satırı (`Cue` = başlangıç, bitiş, metin) bir numarayla gider; satır içindeki alt satırlar `<br>` olur:
