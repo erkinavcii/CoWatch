@@ -1,6 +1,6 @@
 # Yapay zekâyla altyazı çevirisi planı
 
-> 3 Kasım 2026, kararlar aynı gün verildi. Henüz kod yok. Eski planlarda bu iş tek satırdı (README "Sonraki fazlar" ve `future-plans.md` Faz 2: "dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi"); bu dosya onun ayrıntısı. Kararlar en sonda.
+> 3 Kasım 2026, kararlar aynı gün verildi; aynı gün kodlandı (`server/translate.py`). DeepSeek'in model adları kodlarken değişmiş çıktı: `deepseek-flash` (önerilen) ve `deepseek-v4-pro`. Eski planlarda bu iş tek satırdı (README "Sonraki fazlar" ve `future-plans.md` Faz 2: "dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi"); bu dosya onun ayrıntısı. Kararlar en sonda.
 
 İstenen dilde altyazı yoksa, odadaki bir altyazı (çoğunlukla İngilizcesi; hemen her film ve dizide vardır) yapay zekâya çevirtilir. Zaman damgaları gönderilmez: modele sadece numaralı düz metin satırları gider, dönen satırlar aynı numarayla orijinal zamanlara oturtulur. Çeviri odadaki herkesin altyazı listesine yeni bir altyazı olarak düşer; diğer altyazılar gibi diske kaydedilir, aynı film için ikinci kez para harcanmaz.
 

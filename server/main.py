@@ -31,8 +31,8 @@ from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocketState
 
 from .addons import AddonError, AddonStore, episode_label, magnet, subtitle_key
-from .config import CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
-from . import filepicker, library, stremio, tailscale
+from .config import AI_PRESETS, CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
+from . import filepicker, library, stremio, tailscale, translate
 from .stremio import StremioError
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, pick_encoder, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
@@ -115,6 +115,8 @@ class Controller:
         self.tasks: list[asyncio.Task] = []
         self._relays: set[asyncio.Task] = set()
         self.screen_paused = False  # the film was paused for a screen share: it goes on afterwards
+        self.translating: Optional[str] = None  # the language of the translation running now
+        self.briefs: dict[tuple[str, str], str] = {}  # (film, source subtitle) -> its brief, for the next language
 
     # ---- messages -------------------------------------------------------------
     @property
@@ -537,6 +539,44 @@ class Controller:
         # are in the room (and which no longer are, after a delete) without a new search.
         return await self.addons.subtitles(src.content_type, src.content_id, src.moviehash, src.size, src.title)
 
+    def ai_translation(self, source_id: str, lang: str) -> Optional[dict]:
+        """A translation of this subtitle into this language made before: it costs nothing again."""
+        if self.session is None:
+            return None
+        return self.store.find(self.session.source.media_key, source="ai", lang=lang, fromTrack=source_id)
+
+    async def translate_subtitle(self, source: dict, lang: str) -> None:
+        """Runs in the background (see the API). Everyone sees one notice that follows the steps;
+        the translation then joins everyone's subtitle list."""
+        session = self.session
+        key = session.source.media_key
+        try:
+            model = translate.model_for(cfg)
+            cues = self.store.cues(key, source["id"])
+
+            async def progress(done: int, total: int) -> None:
+                await self.status("translating", lang=lang, done=done, total=total)
+
+            await progress(0, 0)
+            result = await translate.translate(
+                model, cues, source["lang"], lang, title=session.source.title,
+                brief=self.briefs.get((key, source["id"])), progress=progress)
+            self.briefs[(key, source["id"])] = result.brief
+            if session is not self.session:
+                return  # the film was closed meanwhile
+            track = self.store.add(key, lang, f"AI · {cfg.ai_label}", "ai", result.cues,
+                                   extra={"fromTrack": source["id"], "model": cfg.ai_model})
+            await self.broadcast_tracks()
+            await self.status("translated", lang=lang, track=track["id"], label=track["label"], missing=result.missing)
+        except translate.TranslateError as exc:
+            log.warning("translation failed: %s", exc)
+            await self.status("translate_failed", "error", lang=lang, code=exc.code, detail=str(exc)[:200])
+        except Exception as exc:  # keep the room usable whatever happened
+            log.exception("translation failed")
+            await self.status("translate_failed", "error", lang=lang, code="ai_error", detail=str(exc)[:200])
+        finally:
+            self.translating = None
+
     async def add_addon_subtitle(self, ref: str) -> dict:
         session = self._require_session()
         item = self.addons.lookup(ref)
@@ -678,6 +718,11 @@ def can_change_media(request: HTTPConnection) -> bool:
 def require_media_control(request: HTTPConnection) -> None:
     if not can_change_media(request):
         raise HTTPException(403, detail="media_trusted_only")
+
+
+def can_translate(request: HTTPConnection) -> bool:
+    """Translating costs the host money: the host and co-hosts by default, AI_TRANSLATE=everyone opens it."""
+    return cfg.ai_translate == "everyone" or is_trusted(request)
 
 
 def with_viewer(request: Request, response: Response) -> Response:
@@ -856,6 +901,12 @@ async def api_status(request: Request):
         "canChangeMedia": can_change_media(request),
         "libraryConfigured": bool(cfg.library_dirs),
         "downloadThrottled": ctl.download_throttled,
+        "ai": {
+            "enabled": cfg.ai_enabled,
+            "allowed": can_translate(request),
+            "provider": cfg.ai_label,
+            "busy": ctl.translating,
+        },
     }
 
 
@@ -930,6 +981,22 @@ class SettingsBody(BaseModel):
     osApiKey: str = Field(max_length=200)
     osUsername: str = Field(max_length=200)
     osPassword: Optional[str] = Field(None, max_length=200)  # None keeps the saved one
+    aiProvider: Literal[CHOICES["aiProvider"]] = "deepseek"
+    aiProtocol: Literal[CHOICES["aiProtocol"]] = ""
+    aiBaseUrl: str = Field("", max_length=300)
+    aiApiKey: Optional[str] = Field(None, max_length=300)  # None keeps the saved one
+    aiModel: str = Field("", max_length=120)
+    aiTranslate: Literal[CHOICES["aiTranslate"]] = "trusted"
+
+
+class AiBody(BaseModel):
+    """The settings page's AI fields before saving: list the models, or try one line."""
+    aiProvider: Literal[CHOICES["aiProvider"]]
+    aiProtocol: Literal[CHOICES["aiProtocol"]] = ""
+    aiBaseUrl: str = Field("", max_length=300)
+    aiApiKey: Optional[str] = Field(None, max_length=300)  # None: the saved one
+    aiModel: str = Field("", max_length=120)
+    lang: str = Field("tr", max_length=10)
 
 
 def require_local(request: HTTPConnection) -> None:
@@ -954,8 +1021,10 @@ async def api_settings(request: Request):
     require_local(request)
     saved = load_saved(cfg.data_dir)
     password = saved.pop("osPassword")
+    ai_key = saved.pop("aiApiKey")
     return {
-        "values": {**saved, "hasPassword": bool(password)},
+        "values": {**saved, "hasPassword": bool(password), "hasAiKey": bool(ai_key)},
+        "aiPresets": AI_PRESETS,
         "locked": locked_settings(),
         # what runs now: for the locked choices, the value from .env
         "current": {
@@ -963,6 +1032,8 @@ async def api_settings(request: Request):
             "libraryDirs": [str(d) for d in cfg.library_dirs], "mediaControl": cfg.media_control,
             "port": cfg.port, "torrentUploadLimit": cfg.torrent_upload_limit, "iceServers": cfg.ice_servers,
             "osApiKey": cfg.os_api_key, "osUsername": cfg.os_username,
+            "aiProvider": cfg.ai_provider, "aiProtocol": cfg.ai_protocol, "aiBaseUrl": cfg.ai_base_url,
+            "aiModel": cfg.ai_model, "aiTranslate": cfg.ai_translate, "aiEnabled": cfg.ai_enabled,
         },
         "keyLocked": "ACCESS_KEY" in os.environ,
         "canRestart": launcher is not None,
@@ -982,14 +1053,46 @@ async def api_settings_save(body: SettingsBody, request: Request):
     values["iceServers"] = ",".join(urls)
     if len(ice_servers(values["iceServers"])) != len(urls):
         raise HTTPException(400, detail="ice_invalid")
+    if values["aiBaseUrl"] and not re.match(r"https?://", values["aiBaseUrl"]):
+        raise HTTPException(400, detail="ai_base_invalid")
     saved = load_saved(cfg.data_dir)
     if values["osPassword"] is None:
         values["osPassword"] = saved["osPassword"]
+    if values["aiApiKey"] is None:
+        values["aiApiKey"] = saved["aiApiKey"]
     for key in locked_settings():  # .env wins anyway; keep what was saved for the day it goes
         values[key] = saved[key]
     save_saved(cfg.data_dir, values)
     port = cfg.port if "port" in locked_settings() else values["port"]
     return {"restart": restart_soon(), "localLink": local_link(port, cfg.access_key)}
+
+
+def ai_model_from(body: AiBody):
+    preset = AI_PRESETS[body.aiProvider]
+    key = body.aiApiKey if body.aiApiKey is not None else (cfg.ai_api_key or load_saved(cfg.data_dir)["aiApiKey"])
+    return translate.make_model(body.aiProtocol or preset["protocol"], body.aiBaseUrl or preset["baseUrl"],
+                                key, body.aiModel or preset["model"])
+
+
+@app.post("/api/settings/ai-models")
+async def api_ai_models(body: AiBody, request: Request):
+    """What the provider offers, for the model list (GET /models)."""
+    require_local(request)
+    try:
+        return {"models": await ai_model_from(body).models()}
+    except translate.TranslateError as exc:
+        raise HTTPException(400, detail=exc.code) from None
+
+
+@app.post("/api/settings/ai-test")
+async def api_ai_test(body: AiBody, request: Request):
+    """Two short lines through the chosen model, before saving."""
+    require_local(request)
+    try:
+        result = await translate.translate(ai_model_from(body), translate.SAMPLE, "en", body.lang, brief="(none)")
+    except translate.TranslateError as exc:
+        raise HTTPException(400, detail=exc.code) from None
+    return {"lines": [text for _, _, text in result.cues], "missing": result.missing}
 
 
 @app.post("/api/settings/key")
@@ -1126,6 +1229,39 @@ async def api_addon_subtitle_add(body: RefBody):
         raise _addon_error(exc) from None
     except SubtitleError as exc:
         raise HTTPException(400, detail=f"bad_subtitle: {exc}") from None
+
+
+class TranslateBody(BaseModel):
+    source: str = Field(max_length=20)  # a subtitle's id
+    lang: str = Field(max_length=10)
+
+
+@app.post("/api/subtitles/translate", status_code=202)
+async def api_translate(body: TranslateBody, request: Request):
+    """Starts translating a subtitle of the open film; the room hears how it goes (status
+    messages) and gets the new subtitle when it is ready."""
+    if not cfg.ai_enabled:
+        raise HTTPException(400, detail="ai_off")
+    if not can_translate(request):
+        raise HTTPException(403, detail="ai_trusted_only")
+    lang = body.lang.strip().lower()
+    if not re.fullmatch(r"[a-z]{2,3}(-[a-z]{2,4})?", lang):
+        raise HTTPException(400, detail="bad_language")
+    if ctl.session is None:
+        raise HTTPException(409, detail="no_media")
+    source = next((t for t in ctl.tracks() if t["id"] == body.source), None)
+    if source is None:
+        raise HTTPException(404, detail="unknown_subtitle")
+    if source["lang"] == lang:
+        raise HTTPException(400, detail="ai_same_language")
+    done = ctl.ai_translation(source["id"], lang)
+    if done is not None:
+        return {"track": done["id"], "cached": True}
+    if ctl.translating:
+        raise HTTPException(409, detail="ai_busy")
+    ctl.translating = lang  # before the task starts: a second click finds it busy
+    asyncio.create_task(ctl.translate_subtitle(source, lang))
+    return {"ok": True}
 
 
 @app.post("/api/media/close")

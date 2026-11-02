@@ -280,6 +280,16 @@
             <ul id="addonSubsList" class="track-list"></ul>
             <button type="button" id="addonSubsMore" class="ghost" hidden></button>
           </div>
+          <div class="ai-box" id="aiBox">
+            <h4 data-i18n="ai_title"></h4>
+            <div class="inline-form" id="aiForm">
+              <select id="aiLang" data-i18n-title="ai_target"></select>
+              <select id="aiSource" data-i18n-title="ai_source"></select>
+              <button type="button" id="aiGo" class="primary" data-i18n="ai_go"></button>
+            </div>
+            <p class="hint" id="aiHint"></p>
+            <button type="button" id="aiSettings" class="ghost" data-i18n="settings_open" hidden></button>
+          </div>
           <form id="uploadForm" class="inline-form">
             <input type="file" id="subFile" accept=".srt,.ass,.ssa,.vtt,.sub,.txt">
             <input id="subLang" class="short" list="langList" data-i18n-placeholder="subs_upload_lang" autocomplete="off">
@@ -378,6 +388,33 @@
         <div class="grid2">
           <label class="field" data-key="osUsername"><span data-i18n="os_username"></span><input id="osUsername" autocomplete="off" spellcheck="false"></label>
           <label class="field" data-key="osPassword"><span data-i18n="os_password"></span><input id="osPassword" type="password" autocomplete="new-password"></label>
+        </div>
+      </fieldset>
+
+      <fieldset id="aiFields">
+        <legend data-i18n="set_ai"></legend>
+        <p class="hint" data-i18n="set_ai_hint"></p>
+        <label class="field" data-key="aiProvider"><span data-i18n="ai_provider"></span><select id="aiProvider"></select></label>
+        <div class="grid2">
+          <label class="field" data-key="aiProtocol"><span data-i18n="ai_protocol"></span>
+            <select id="aiProtocol"><option value="openai" data-i18n="ai_protocol_openai"></option><option value="anthropic">Anthropic</option></select></label>
+          <label class="field" data-key="aiBaseUrl"><span data-i18n="ai_base_url"></span><input id="aiBaseUrl" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <label class="field" data-key="aiApiKey"><span data-i18n="ai_api_key"></span><input id="aiApiKey" type="password" autocomplete="new-password"></label>
+        <div class="field" data-key="aiModel">
+          <span data-i18n="ai_model"></span>
+          <div class="inline-form">
+            <input id="aiModel" list="aiModels" autocomplete="off" spellcheck="false">
+            <datalist id="aiModels"></datalist>
+            <button type="button" id="aiModelsBtn" data-i18n="ai_models_get"></button>
+            <button type="button" id="aiTestBtn" data-i18n="ai_test"></button>
+          </div>
+          <p class="hint" id="aiTestOut" hidden></p>
+        </div>
+        <div data-key="aiTranslate">
+          <span class="field-label" data-i18n="ai_who"></span>
+          <label class="choice"><input type="radio" name="aiTranslate" value="trusted"><span><b data-i18n="ai_who_trusted"></b></span></label>
+          <label class="choice"><input type="radio" name="aiTranslate" value="everyone"><span><b data-i18n="ai_who_everyone"></b></span></label>
         </div>
       </fieldset>
 

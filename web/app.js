@@ -58,6 +58,10 @@
     chatBtn: $('#chatBtn'), chatBadge: $('#chatBadge'), chatBox: $('#chatBox'), chatClose: $('#chatClose'),
     chatLog: $('#chatLog'), chatForm: $('#chatForm'), chatInput: $('#chatInput'), chatPeek: $('#chatPeek'),
     watch: $('#watch'), chatDock: $('#chatDock'),
+    aiBox: $('#aiBox'), aiForm: $('#aiForm'), aiLang: $('#aiLang'), aiSource: $('#aiSource'), aiGo: $('#aiGo'),
+    aiHint: $('#aiHint'), aiSettings: $('#aiSettings'), aiProvider: $('#aiProvider'), aiProtocol: $('#aiProtocol'),
+    aiBaseUrl: $('#aiBaseUrl'), aiApiKey: $('#aiApiKey'), aiModel: $('#aiModel'), aiModels: $('#aiModels'),
+    aiModelsBtn: $('#aiModelsBtn'), aiTestBtn: $('#aiTestBtn'), aiTestOut: $('#aiTestOut'),
   };
   const video = el.video;
   // Screen sharing (see "screen sharing" below): who shares, who waits for an answer, and my
@@ -280,6 +284,7 @@
     if (msg.key === 'opening') S.opening = true;
     if (msg.key === 'stream_ready' || msg.key === 'open_failed') S.opening = false;
     if (msg.key === 'restarting') return; // the player shows its own loading message
+    if (['translating', 'translated', 'translate_failed'].includes(msg.key)) { onAiStatus(msg, params); return; }
     const text = t(`status_${msg.key}`, params);
     // Opening a film takes a few steps: one notice follows them instead of a new one each.
     if (OPEN_STEPS.has(msg.key) || (opening && (msg.key === 'stream_ready' || msg.key === 'open_failed'))) {
@@ -1819,6 +1824,7 @@
     ensureCues(S.secondary);
     renderTracks();
     if (AS.list.length) renderAddonSubs(); // added and deleted ones change their buttons
+    renderAi();
   }
 
   function selectTrack (slot, trackId) {
@@ -2049,6 +2055,7 @@
       if (status.progress) S.progress = status.progress;
       renderMediaPanel();
       if (S.isHost) startShare();
+      if (status.ai) { AI.status = status.ai; renderAi(); }
     } catch { /* offline: the websocket indicator already shows it */ }
   }
 
@@ -2201,9 +2208,19 @@
     el.port.value = pick('port', cur.port);
     el.torrentUploadLimit.value = pick('torrentUploadLimit', cur.torrentUploadLimit);
     el.iceServers.value = pick('iceServers', cur.iceServers);
+    const presets = data.aiPresets || {};
+    el.aiProvider.replaceChildren(...Object.entries(presets).map(([id, p]) => Object.assign(
+      document.createElement('option'), { value: id, textContent: id === 'custom' ? t('ai_custom') : p.label })));
+    el.aiProvider.value = pick('aiProvider', cur.aiProvider);
+    fillAiPreset();
+    if (locked.has('aiProtocol') || v.aiProtocol) el.aiProtocol.value = pick('aiProtocol', cur.aiProtocol) || el.aiProtocol.value;
+    if (locked.has('aiBaseUrl') || v.aiBaseUrl) el.aiBaseUrl.value = pick('aiBaseUrl', cur.aiBaseUrl);
+    if (locked.has('aiModel') || v.aiModel) el.aiModel.value = pick('aiModel', cur.aiModel);
+    el.aiApiKey.value = '';
+    setRadio('aiTranslate', pick('aiTranslate', cur.aiTranslate));
     for (const node of el.settingsForm.querySelectorAll('[data-key]')) {
       const isLocked = locked.has(node.dataset.key);
-      for (const input of node.querySelectorAll('input, button')) input.disabled = isLocked;
+      for (const input of node.querySelectorAll('input, button, select')) input.disabled = isLocked;
       let note = node.querySelector(':scope > .lock-note');
       if (isLocked && !note) {
         note = document.createElement('p');
@@ -2217,6 +2234,7 @@
     el.settingsWarn.hidden = false;
     renderDirs();
     renderQuality();
+    renderAiKey();
     el.settingsOverlay.hidden = false;
   }
   function closeSettings () { el.settingsOverlay.hidden = true; }
@@ -2259,8 +2277,66 @@
     };
     if (el.osPassword.value) body.osPassword = el.osPassword.value;
     else if (!body.osUsername) body.osPassword = ''; // no account: forget its password too
+    return { ...body, ...aiBody(), aiTranslate: radio('aiTranslate') };
+  }
+
+  // ---- the AI fields: a provider is a protocol, an address and a suggested model; choosing
+  // one fills them in. The key is never sent back to the page: an empty field keeps the saved
+  // one, unless the provider changed (a key belongs to its provider).
+  const aiPreset = () => (SH.settings.aiPresets || {})[el.aiProvider.value] || { protocol: 'openai', baseUrl: '', model: '' };
+  function fillAiPreset () {
+    const preset = aiPreset();
+    if (el.aiProvider.value !== 'custom') el.aiProtocol.value = preset.protocol;
+    el.aiBaseUrl.value = preset.baseUrl;
+    el.aiBaseUrl.placeholder = preset.baseUrl || (el.aiProtocol.value === 'anthropic' ? 'https://api.anthropic.com' : 'https://…/v1');
+    el.aiModel.value = preset.model;
+    el.aiModels.replaceChildren();
+    el.aiTestOut.hidden = true;
+    renderAiKey();
+  }
+  function renderAiKey () {
+    const v = SH.settings.values;
+    const same = el.aiProvider.value === v.aiProvider;
+    const local = /^https?:\/\/(localhost|127\.0\.0\.1)[:/]/.test(el.aiBaseUrl.value);
+    el.aiApiKey.placeholder = same && v.hasAiKey ? t('ai_key_saved') : local ? t('ai_key_local') : '';
+    const locked = SH.settings.locked.includes('aiProtocol');
+    el.aiProtocol.disabled = locked || el.aiProvider.value !== 'custom';
+  }
+  function aiBody () {
+    const preset = aiPreset();
+    const body = {
+      aiProvider: el.aiProvider.value,
+      aiProtocol: el.aiProvider.value === 'custom' ? el.aiProtocol.value : '',
+      aiBaseUrl: el.aiBaseUrl.value.trim() === preset.baseUrl ? '' : el.aiBaseUrl.value.trim(),
+      aiModel: el.aiModel.value.trim() === preset.model ? '' : el.aiModel.value.trim(),
+    };
+    if (el.aiApiKey.value) body.aiApiKey = el.aiApiKey.value.trim();
+    else if (el.aiProvider.value !== SH.settings.values.aiProvider) body.aiApiKey = '';
     return body;
   }
+  async function aiCall (path, button, show) {
+    button.disabled = true;
+    el.aiTestOut.hidden = false;
+    el.aiTestOut.textContent = '…';
+    try {
+      show(await api(path, { json: { ...aiBody(), aiModel: el.aiModel.value.trim(), lang: prefs.uiLang } }));
+    } catch (err) {
+      el.aiTestOut.textContent = errorText(err);
+    } finally {
+      button.disabled = false;
+    }
+  }
+  el.aiProvider.addEventListener('change', fillAiPreset);
+  el.aiProtocol.addEventListener('change', renderAiKey);
+  el.aiBaseUrl.addEventListener('input', renderAiKey);
+  el.aiModelsBtn.addEventListener('click', () => aiCall('/api/settings/ai-models', el.aiModelsBtn, (res) => {
+    el.aiModels.replaceChildren(...res.models.map((id) => Object.assign(document.createElement('option'), { value: id })));
+    el.aiTestOut.textContent = t('ai_models_found', { n: res.models.length });
+    if (!el.aiModel.value && res.models.length) el.aiModel.value = res.models[0];
+  }));
+  el.aiTestBtn.addEventListener('click', () => aiCall('/api/settings/ai-test', el.aiTestBtn, (res) => {
+    el.aiTestOut.textContent = t('ai_test_ok', { text: res.lines.join(' / ') });
+  }));
   function settingsError (err) {
     const raw = String(err && err.message ? err.message : err);
     if (raw.startsWith('library_dir_missing:')) return t('err_library_dir_missing', { path: raw.slice(20).trim() });
@@ -2764,6 +2840,96 @@
     return li;
   }
 
+  // ---- translation with a language model (server/translate.py), when no subtitle in the
+  // wanted language exists: a subtitle in the room (usually the English one) goes to the
+  // provider the host set up, and the result joins everyone's list.
+  const AI = { status: { enabled: false, allowed: false, provider: '', busy: null }, asked: null, toast: null };
+  const AI_LANGS = ['tr', 'en', 'ru', 'es', 'de', 'fr', 'it', 'pt-br', 'uk', 'ar', 'fa', 'az', 'ja', 'ko', 'zh', 'nl', 'pl'];
+  // The subtitle to translate from: English matched by the file's hash first, then any English,
+  // then anything matched by hash; translations come last.
+  function aiSources (target) {
+    const score = (tr) => (tr.source === 'ai' ? 4 : 0) + (tr.lang === 'en' ? 0 : 2) + (tr.hashMatch ? 0 : 1);
+    return S.tracks.filter((tr) => tr.lang !== target).sort((a, b) => score(a) - score(b));
+  }
+  function fillSelect (select, options, wanted) {
+    const key = options.map(([value, label]) => `${value}\u0000${label}`).join('\u0001');
+    if (select.dataset.options !== key) {
+      select.dataset.options = key;
+      select.replaceChildren(...options.map(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value; option.textContent = label;
+        return option;
+      }));
+    }
+    if (options.some(([value]) => value === wanted)) select.value = wanted;
+  }
+  function renderAi () {
+    const st = AI.status;
+    el.aiBox.hidden = !S.media;
+    const target = el.aiLang.value || prefs.primaryLang || prefs.uiLang;
+    const langs = [...new Set([...AI_LANGS, ...myLangs()])];
+    fillSelect(el.aiLang, langs.map((code) => [code, langName(code)]), target);
+    const sources = aiSources(el.aiLang.value);
+    fillSelect(el.aiSource, sources.map((tr) => [tr.id, trackLabel(tr)]), el.aiSource.value || (sources[0] || {}).id);
+    let hint;
+    if (!st.enabled) hint = t(S.isHost ? 'ai_off_host' : 'ai_off_guest');
+    else if (!st.allowed) hint = t('ai_not_allowed');
+    else if (!sources.length) hint = t('ai_no_source');
+    else hint = t('ai_hint', { provider: st.provider });
+    el.aiForm.hidden = !st.enabled || !st.allowed || !sources.length;
+    el.aiSettings.hidden = st.enabled || !S.isHost;
+    el.aiHint.textContent = hint;
+    el.aiGo.disabled = !!st.busy;
+  }
+  el.aiLang.addEventListener('change', renderAi);
+  el.aiSettings.addEventListener('click', openSettings);
+  el.aiGo.addEventListener('click', async () => {
+    const lang = el.aiLang.value;
+    el.aiGo.disabled = true;
+    try {
+      const res = await api('/api/subtitles/translate', { json: { source: el.aiSource.value, lang } });
+      if (res.cached) {
+        selectTrack('primary', res.track);
+        toast(t('ai_already'));
+      } else {
+        AI.asked = lang; // made the main subtitle here when it is ready
+        AI.status.busy = lang;
+      }
+    } catch (err) {
+      toast(errorText(err), 'error');
+    }
+    renderAi();
+  });
+  // One notice follows the translation for everyone, like the steps of opening a film.
+  function onAiStatus (msg, params) {
+    const lang = langName(params.lang || '');
+    let text;
+    if (msg.key === 'translating') {
+      text = params.total ? t('status_translating', { lang, done: params.done, total: params.total })
+        : t('status_translating_start', { lang });
+      AI.status.busy = params.lang;
+    } else if (msg.key === 'translated') {
+      text = t('status_translated', { label: `${lang} · ${params.label}` });
+      if (params.missing) text += ` ${t('ai_missing', { n: params.missing })}`;
+    } else {
+      const key = `err_${params.code}`;
+      const known = (I18N[prefs.uiLang] || {})[key] || I18N.en[key];
+      text = t('status_translate_failed', { lang, detail: known ? t(key) : params.detail });
+    }
+    if (!AI.toast || !AI.toast.isConnected) AI.toast = toast(text, 'info', 600000);
+    AI.toast.textContent = text;
+    if (msg.key !== 'translating') {
+      AI.toast.className = `toast ${msg.level === 'error' ? 'error' : 'info'}`;
+      const done = AI.toast;
+      AI.toast = null;
+      setTimeout(() => done.remove(), msg.level === 'error' ? 12000 : 5000);
+      AI.status.busy = null;
+      if (msg.key === 'translated' && AI.asked === params.lang) selectTrack('primary', params.track);
+      if (AI.asked === params.lang) AI.asked = null;
+    }
+    renderAi();
+  }
+
   // ---------------------------------------------------------------- text chat
   // On a wide screen the chat is a column right of the film, on a phone held upright a box
   // under it; open unless closed (kept in prefs). In fullscreen, in the always-on-top window
@@ -2910,6 +3076,7 @@
     renderControls(); renderMembers(); renderMediaPanel(); renderTracks(); renderSubStyle(); renderCenter();
     renderToolbar(); renderVoice(); renderCams(); renderCatalogs(); renderAddons(); renderShare();
     if (ST.list.length) { renderStreamTools(); renderStreams(); }
+    renderAi();
     if (AS.list.length) renderAddonSubs();
     el.uiLang.value = prefs.uiLang;
     el.joinLang.value = prefs.uiLang;
@@ -3153,7 +3320,7 @@
       showing: !el.screenVideo.hidden && el.screenVideo.videoWidth > 0 && !el.screenVideo.paused,
       asks: [...el.shareAsks.querySelectorAll('[data-from]')].map((n) => n.dataset.from),
     },
-    clientId: S.clientId, members: S.members, penMode: S.penMode, strokes: strokes.size, balls: [...balls.keys()],
+    clientId: S.clientId, members: S.members, tracks: S.tracks, penMode: S.penMode, strokes: strokes.size, balls: [...balls.keys()],
     voice: {
       mic: !!voice.mic, cam: !!voice.cam, camLive: !!(voice.cam && voice.cam.readyState === 'live'),
       duck, filmVolume: video.volume, speaking: [...speaking],

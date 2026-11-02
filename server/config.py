@@ -65,10 +65,31 @@ def _paths(values: Mapping[str, str], name: str) -> tuple[Path, ...]:
 # What it saves in data/settings.json. Each choice stands for one or more of the variables
 # below; a variable set in the environment or in .env wins, and the page shows the choice locked.
 SETTINGS_FILE = "settings.json"
+
+# Subtitle translation with a language model (server/translate.py). The app speaks two
+# protocols; a provider is only a protocol, an address and a suggested model, so a new one is
+# a line here, and "custom" takes anything else. Model names are only a first pick: the
+# settings page lists what the provider itself offers (GET /models). Checked 3 Nov 2026.
+AI_PRESETS: dict[str, dict[str, str]] = {
+    "deepseek": {"label": "DeepSeek", "protocol": "openai", "baseUrl": "https://api.deepseek.com", "model": "deepseek-flash"},
+    "claude": {"label": "Claude", "protocol": "anthropic", "baseUrl": "", "model": "claude-opus-5-5"},
+    "gemini": {"label": "Gemini", "protocol": "openai",
+               "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai/", "model": "gemini-3.8-flash"},
+    "kimi": {"label": "Kimi", "protocol": "openai", "baseUrl": "https://api.moonshot.ai/v1", "model": "kimi-k3"},
+    "openai": {"label": "OpenAI", "protocol": "openai", "baseUrl": "https://api.openai.com/v1", "model": ""},
+    "openrouter": {"label": "OpenRouter", "protocol": "openai", "baseUrl": "https://openrouter.ai/api/v1", "model": ""},
+    "ollama": {"label": "Ollama", "protocol": "openai", "baseUrl": "http://localhost:11434/v1", "model": ""},
+    "lmstudio": {"label": "LM Studio", "protocol": "openai", "baseUrl": "http://localhost:1234/v1", "model": ""},
+    "custom": {"label": "AI", "protocol": "", "baseUrl": "", "model": ""},
+}
+
 CHOICES = {
     "connection": ("funnel", "serve", "http"),
     "quality": ("auto", "original", "manual"),
     "mediaControl": ("everyone", "trusted"),
+    "aiProvider": tuple(AI_PRESETS),
+    "aiProtocol": ("", "openai", "anthropic"),  # "": the provider's own
+    "aiTranslate": ("trusted", "everyone"),
 }
 DEFAULTS = {
     # funnel: link open to the internet · serve: friends with Tailscale · http: plain links.
@@ -84,6 +105,12 @@ DEFAULTS = {
     "osApiKey": "",
     "osUsername": "",
     "osPassword": "",
+    "aiProvider": "deepseek",  # cheap; translation stays off until a key is given
+    "aiProtocol": "",
+    "aiBaseUrl": "",  # "": the provider's address
+    "aiApiKey": "",
+    "aiModel": "",  # "": the provider's suggested model
+    "aiTranslate": "trusted",  # who may start a translation: the host and co-hosts, or everyone
 }
 ENV_NAMES = {
     "connection": ("TAILSCALE_SERVE", "TAILSCALE_FUNNEL"),
@@ -97,6 +124,12 @@ ENV_NAMES = {
     "osApiKey": ("OPENSUBTITLES_API_KEY",),
     "osUsername": ("OPENSUBTITLES_USERNAME",),
     "osPassword": ("OPENSUBTITLES_PASSWORD",),
+    "aiProvider": ("AI_PROVIDER",),
+    "aiProtocol": ("AI_PROTOCOL",),
+    "aiBaseUrl": ("AI_BASE_URL",),
+    "aiApiKey": ("AI_API_KEY",),
+    "aiModel": ("AI_MODEL",),
+    "aiTranslate": ("AI_TRANSLATE",),
 }
 # Funnel's relay passed about 7-8 Mbps to a viewer in our measurement: on "auto", heavier
 # files are converted so they play without stalling.
@@ -151,6 +184,12 @@ def saved_env(saved: dict) -> dict[str, str]:
         "OPENSUBTITLES_API_KEY": saved["osApiKey"],
         "OPENSUBTITLES_USERNAME": saved["osUsername"],
         "OPENSUBTITLES_PASSWORD": saved["osPassword"],
+        "AI_PROVIDER": saved["aiProvider"],
+        "AI_PROTOCOL": saved["aiProtocol"],
+        "AI_BASE_URL": saved["aiBaseUrl"],
+        "AI_API_KEY": saved["aiApiKey"],
+        "AI_MODEL": saved["aiModel"],
+        "AI_TRANSLATE": saved["aiTranslate"],
     }
     if saved["quality"] == "original":
         env["MAX_COPY_KBPS"] = "0"
@@ -202,6 +241,13 @@ class Settings:
     os_username: str
     os_password: str
     os_user_agent: str
+    # subtitle translation with a language model
+    ai_provider: str  # a key of AI_PRESETS
+    ai_protocol: str  # "openai" (chat completions) or "anthropic" (messages)
+    ai_base_url: str
+    ai_api_key: str
+    ai_model: str
+    ai_translate: str  # "trusted": the host and co-hosts may start one; "everyone"
 
     @property
     def connection(self) -> str:
@@ -209,6 +255,26 @@ class Settings:
         if self.tailscale_funnel:
             return "funnel"
         return "serve" if self.tailscale_serve else "http"
+
+    @property
+    def ai_label(self) -> str:
+        """The provider's name; for a custom one, the model's."""
+        if self.ai_provider == "custom" or self.ai_provider not in AI_PRESETS:
+            return self.ai_model or "AI"
+        return AI_PRESETS[self.ai_provider]["label"]
+
+    @property
+    def ai_local(self) -> bool:
+        """A model on this computer (Ollama, LM Studio): no key needed, nothing leaves it."""
+        return re.match(r"https?://(localhost|127\.0\.0\.1|\[::1\])[:/]", self.ai_base_url or "") is not None
+
+    @property
+    def ai_enabled(self) -> bool:
+        if not self.ai_model or self.ai_protocol not in ("openai", "anthropic"):
+            return False
+        if self.ai_protocol == "openai" and not self.ai_base_url:
+            return False
+        return bool(self.ai_api_key) or self.ai_local
 
     @property
     def helper_url(self) -> str:
@@ -263,6 +329,9 @@ def get_settings() -> Settings:
     saved = load_saved(data_dir)
     v = {**saved_env(saved), **os.environ}
     funnel = _int(v, "TAILSCALE_FUNNEL", 0) != 0
+    provider = _str(v, "AI_PROVIDER").lower()
+    provider = provider if provider in AI_PRESETS else "custom" if provider else "deepseek"
+    preset = AI_PRESETS[provider]
     auto = funnel and saved["quality"] == "auto"
     return Settings(
         host=_str(v, "HOST"),
@@ -293,4 +362,10 @@ def get_settings() -> Settings:
         os_username=_str(v, "OPENSUBTITLES_USERNAME"),
         os_password=_str(v, "OPENSUBTITLES_PASSWORD"),
         os_user_agent=_str(v, "OPENSUBTITLES_USER_AGENT", "CoWatch v0.1"),
+        ai_provider=provider,
+        ai_protocol=_str(v, "AI_PROTOCOL") or preset["protocol"],
+        ai_base_url=_str(v, "AI_BASE_URL") or preset["baseUrl"],
+        ai_api_key=_str(v, "AI_API_KEY"),
+        ai_model=_str(v, "AI_MODEL") or preset["model"],
+        ai_translate="everyone" if _str(v, "AI_TRANSLATE").lower() == "everyone" else "trusted",
     )

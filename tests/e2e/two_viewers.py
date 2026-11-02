@@ -16,14 +16,17 @@ and starts its own server on a free port):
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -94,8 +97,8 @@ def make_video(path: Path) -> None:
     ], check=True)
 
 
-def start_server(port: int, data_dir: Path) -> subprocess.Popen:
-    env = dict(os.environ, ACCESS_KEY=KEY, DATA_DIR=str(data_dir), COWATCH_DOTENV="", ADDONS_BUILTIN="0")
+def start_server(port: int, data_dir: Path, extra: dict | None = None) -> subprocess.Popen:
+    env = dict(os.environ, ACCESS_KEY=KEY, DATA_DIR=str(data_dir), COWATCH_DOTENV="", ADDONS_BUILTIN="0", **(extra or {}))
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server.main:app", "--host", "127.0.0.1",
          "--port", str(port), "--log-level", "warning"],
@@ -114,6 +117,39 @@ def start_server(port: int, data_dir: Path) -> subprocess.Popen:
     raise RuntimeError("the server did not start within 30 s")
 
 
+def start_fake_ai() -> tuple[ThreadingHTTPServer, int]:
+    """An OpenAI-compatible provider that "translates" by putting [de] in front of each line."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def _send(self, data: dict) -> None:
+            body = json.dumps(data).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._send({"data": [{"id": "fake-model"}]})
+
+        def do_POST(self):
+            prompt = json.loads(self.rfile.read(int(self.headers["Content-Length"])))["messages"][1]["content"]
+            if prompt.startswith("Below are the subtitles"):
+                answer = "Summary: a test film."
+            else:
+                lines = prompt.split("Lines to translate:\n", 1)[1].splitlines()
+                answer = "\n".join(f"{line.split(' ', 1)[0]} [de] {line.split(' ', 1)[1]}" for line in lines)
+            time.sleep(0.3)  # long enough to see the notice follow the steps
+            self._send({"choices": [{"message": {"content": answer}}]})
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, httpd.server_address[1]
+
+
 def blur(page) -> None:
     """Keyboard shortcuts are ignored while a form field has focus."""
     page.evaluate("() => document.activeElement && document.activeElement.blur()")
@@ -128,7 +164,9 @@ def run(headed: bool) -> None:
     video = tmp / "wide.mkv"
     make_video(video)
     port = free_port()
-    server = start_server(port, tmp / "data")
+    fake_ai, ai_port = start_fake_ai()
+    server = start_server(port, tmp / "data", {"AI_PROVIDER": "custom", "AI_PROTOCOL": "openai", "AI_MODEL": "fake-model",
+                                                "AI_BASE_URL": f"http://127.0.0.1:{ai_port}/v1", "AI_API_KEY": "test"})
     base = f"http://127.0.0.1:{port}"
     errors: list[str] = []
 
@@ -205,6 +243,27 @@ def run(headed: bool) -> None:
             check("each window shows its own subtitles",
                   "5. saniye" in a_main and "5-я секунда" in b_main and "5. saniye" in b_second,
                   f"A {a_main!r} | B {b_main!r} / {b_second!r}")
+
+            # ---- AI translation: the host translates the Turkish subtitle into German; it joins
+            # both windows' lists and becomes the host's main subtitle
+            a.select_option("#aiLang", "de")
+            source = a.evaluate("() => document.querySelector('#aiSource').selectedOptions[0].textContent")
+            a.evaluate("() => document.querySelector('#aiGo').click()")
+            notice = ""
+            for _ in range(40):
+                notice = a.evaluate("() => [...document.querySelectorAll('.toast')].map(t => t.textContent).join(' | ')")
+                if "/" in notice:
+                    break
+                time.sleep(0.1)
+            check("the translation shows its progress in one notice", "Almanca" in notice and "/" in notice, notice)
+            for page in (a, b):
+                page.wait_for_function(f"() => {DBG}.tracks.some(t => t.source === 'ai' && t.lang === 'de')", timeout=20000)
+            made = a.evaluate(f"""() => {{ const t = {DBG}.tracks.find(t => t.source === 'ai' && t.lang === 'de');
+              return {{label: t.label, primary: {DBG}.primary === t.id, cues: t.cues}}; }}""")
+            check("the translation joins both lists and becomes the asker's main subtitle",
+                  made["primary"] and made["label"] == "AI · fake-model" and made["cues"] > 0, f"{made} from {source}")
+            a.wait_for_function("() => document.querySelector('#subPrimary').textContent.startsWith('[de]')", timeout=5000)
+            check("its lines play on the original times", a.inner_text("#subPrimary").startswith("[de]"), a.inner_text("#subPrimary"))
 
             # ---- cursor: A points at 25% / 75% of the picture; B's ball for A lands on the same spot of B's picture
             for page in (a, b):  # the subtitle forms scrolled the page; the whole picture must be on screen
@@ -370,6 +429,7 @@ def run(headed: bool) -> None:
             check("no errors in either window", not errors, " || ".join(errors))
             browser.close()
     finally:
+        fake_ai.shutdown()
         server.terminate()
         try:
             server.wait(timeout=10)
