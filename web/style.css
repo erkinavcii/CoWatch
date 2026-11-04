@@ -82,6 +82,37 @@ html.stage-fill, html.stage-fill body { overflow: hidden; }
 }
 .center-msg.clickable { cursor: pointer; border-color: var(--accent); }
 
+/* ---- waiting: a spinner, and on the stage a loader that follows the steps of opening a film ---- */
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes shimmer { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+.spinner { display: inline-block; width: 28px; height: 28px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, .18);
+  border-top-color: var(--accent); animation: spin .8s linear infinite; }
+button.busy:disabled::before, .loading::before {
+  content: ""; display: inline-block; width: .9em; height: .9em; margin-right: .45em; vertical-align: -.12em;
+  border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .7s linear infinite;
+}
+.loader {
+  position: absolute; z-index: 5; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(380px, calc(100% - 32px));
+  display: grid; justify-items: center; gap: 10px; padding: 16px 18px; text-align: center;
+  background: rgba(10, 11, 14, .85); border: 1px solid var(--line); border-radius: 12px; cursor: default;
+}
+.loader-text { font-size: 14px; }
+.loader-bar { position: relative; width: 100%; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .14); overflow: hidden; }
+.loader-bar i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent); border-radius: 2px; transition: width .4s ease; }
+.loader-bar::after {  /* a light running over the bar: it is working, even between steps */
+  content: ""; position: absolute; inset: 0; width: 40%; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent);
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+.loader.indeterminate .loader-bar i { width: 0 !important; }
+.loader-stats { font-size: 12.5px; color: var(--muted); min-height: 1em; }
+.loader-stats:empty { display: none; }
+.loader button { padding: 4px 14px; font-size: 13px; }
+.stage.mini .loader { width: calc(100% - 16px); padding: 8px; gap: 6px; }
+.stage.mini .loader .spinner { width: 18px; height: 18px; }
+.stage.mini .loader-stats, .stage.mini .loader button { display: none; }
+.dl-bar { height: 4px; margin-top: 4px; border-radius: 2px; background: var(--line); overflow: hidden; }
+.dl-bar i { display: block; height: 100%; background: var(--ok); transition: width .6s ease; }
+
 /* ---- controls ---- */
 .controls {
   position: absolute; z-index: 6; left: 0; right: 0; bottom: 0; padding: 26px 12px 8px;

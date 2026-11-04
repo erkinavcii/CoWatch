@@ -434,7 +434,11 @@ class MediaSession:
                 await stream.wait_ready(timeout=240)
                 first_pts = await stream.measure_first_pts()
                 break
-            except Exception:
+            except BaseException as exc:  # a cancelled open too: no ffmpeg may be left running
+                if not isinstance(exc, Exception):
+                    stream.stop()
+                    shutil.rmtree(out_dir, ignore_errors=True)
+                    raise
                 stream.stop()
                 tail = stream.log_tail(3)
                 shutil.rmtree(out_dir, ignore_errors=True)

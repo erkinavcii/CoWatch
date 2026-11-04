@@ -238,3 +238,52 @@ def test_media_control_trusted_keeps_the_film_to_the_host(monkeypatch):
             resp = client.post(path, json=body, headers=guest)
             assert resp.status_code == 403 and resp.json()["detail"] == "media_trusted_only", path
         assert client.post("/api/media/close", headers=me).status_code == 200
+
+
+def test_an_open_that_hangs_can_be_cancelled_or_replaced(monkeypatch):
+    """A torrent without peers can take many minutes to open: Cancel stops it, and opening
+    another film replaces it, instead of "already opening"."""
+    import asyncio
+    import time
+
+    from server import main
+
+    started, removed = [], []
+
+    async def hang(torrent, path, stream=None):
+        started.append(path)
+        main.ctl.opening_hash = f"hash-{path}"
+        await asyncio.sleep(3600)  # like waiting for peers that never come
+
+    async def remove(info_hash):
+        removed.append(info_hash)
+
+    monkeypatch.setattr(main.ctl, "_resolve_source", hang)
+    monkeypatch.setattr(main.ctl.helper, "remove", remove)
+
+    def wait(check):
+        deadline = time.monotonic() + 5
+        while not check() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return check()
+
+    host = {"base_url": "http://localhost:8000", "cookies": {"cw_key": KEY}, "client": ("127.0.0.1", 5)}
+    with TestClient(app, **host) as client:
+        with client.websocket_connect("/ws", headers={"host": "localhost:8000"}) as ws:
+            ws.receive_json()  # welcome
+            assert client.post("/api/media/open", json={"path": "first.mkv"}).status_code == 202
+            assert wait(lambda: started == ["first.mkv"])
+            # Another film while the first still opens: the first is dropped, not an error.
+            assert client.post("/api/media/open", json={"path": "second.mkv"}).status_code == 202
+            assert wait(lambda: started == ["first.mkv", "second.mkv"])
+            assert removed == ["hash-first.mkv"]  # its torrent stops downloading
+            assert client.post("/api/media/cancel").status_code == 200
+            assert wait(lambda: not main.ctl.opening) and removed == ["hash-first.mkv", "hash-second.mkv"]
+            keys = []
+            for _ in range(30):
+                msg = ws.receive_json()
+                if msg["type"] == "status":
+                    keys.append(msg["key"])
+                if keys.count("open_cancelled") == 2:
+                    break
+            assert keys.count("opening") == 2 and keys.count("open_cancelled") == 2 and "open_failed" not in keys

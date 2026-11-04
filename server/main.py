@@ -116,6 +116,8 @@ class Controller:
         self._relays: set[asyncio.Task] = set()
         self.screen_paused = False  # the film was paused for a screen share: it goes on afterwards
         self.translating: Optional[str] = None  # the language of the translation running now
+        self.open_task: Optional[asyncio.Task] = None  # the film being opened, to cancel
+        self.opening_hash: Optional[str] = None  # its torrent, for the progress shown while it opens
         self.briefs: dict[tuple[str, str], str] = {}  # (film, source subtitle) -> its brief, for the next language
 
     # ---- messages -------------------------------------------------------------
@@ -369,6 +371,7 @@ class Controller:
     async def _addon_torrent(self, stream: dict) -> dict:
         """Add an add-on's torrent to the helper and pick the file: the one the add-on named,
         else the largest video."""
+        self.opening_hash = stream["infoHash"].lower()
         await self.status("torrent_adding")
         info = await self.helper.add(magnet(stream["infoHash"], stream.get("filename") or stream.get("title"),
                                             stream.get("trackers") or []))
@@ -400,6 +403,7 @@ class Controller:
             return source
         if torrent:
             info_hash = str(torrent.get("infoHash", "")).lower()
+            self.opening_hash = info_hash
             index = int(torrent.get("fileIndex", -1))
             info = await self.helper.prepare(info_hash, index)
             entry = next((f for f in info.get("files", []) if f["index"] == index), None)
@@ -443,9 +447,17 @@ class Controller:
             except (MediaError, HelperError, OSError, ValueError) as exc:
                 log.warning("open failed: %s", exc)
                 await self.status("open_failed", "error", detail=str(exc)[:300])
+                await self._drop_opening_torrent()
                 return
+            except asyncio.CancelledError:
+                # Cancelled, or another film was opened instead: the film playing so far goes on.
+                log.info("open cancelled")
+                await self.status("open_cancelled")
+                await self._drop_opening_torrent()
+                raise
             finally:
                 self.opening = False
+                self.opening_hash = None
             old, self.session = self.session, session
             if old is not None:
                 old.stop()
@@ -457,6 +469,26 @@ class Controller:
             await self.broadcast_media()
             await self.broadcast_tracks()
             await self.status("stream_ready", mode=session.mode, title=source.title)
+
+    def start_open(self, **kwargs) -> None:
+        self.opening = True  # at once: a second request now finds it busy and cancels it
+        self.open_task = asyncio.create_task(self.open_media(**kwargs))
+
+    async def cancel_open(self) -> None:
+        """Stops a film that is still opening (a torrent without peers can take many minutes)."""
+        task = self.open_task
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.wait([task], timeout=15)
+
+    async def _drop_opening_torrent(self) -> None:
+        """A torrent that did not open stops downloading, unless the film playing is that torrent."""
+        playing = self.session.source.info_hash if self.session is not None else None
+        if self.opening_hash and self.opening_hash != playing:
+            try:
+                await self.helper.remove(self.opening_hash)
+            except HelperError:
+                pass
 
     async def close_media(self) -> None:
         if self.session is not None:
@@ -881,6 +913,17 @@ class SearchBody(BaseModel):
     languages: list[str]
 
 
+async def opening_torrent() -> Optional[dict]:
+    """While a torrent opens: its peers, speed and what came so far, for the loader on the stage."""
+    if not ctl.opening or not ctl.opening_hash:
+        return None
+    try:
+        info = await ctl.helper.info(ctl.opening_hash)
+    except HelperError:
+        return None
+    return {key: info.get(key) for key in ("ready", "numPeers", "downloadSpeed", "downloaded")}
+
+
 @app.get("/api/status")
 async def api_status(request: Request):
     session = ctl.session
@@ -896,6 +939,7 @@ async def api_status(request: Request):
         "progress": session.progress() if ctl.ready else None,
         "torrent": torrent,
         "opening": ctl.opening,
+        "openingTorrent": await opening_torrent(),
         "helper": await ctl.helper.healthy(),
         "osEnabled": ctl.os.enabled,
         "isHost": is_local(request),
@@ -942,9 +986,16 @@ async def api_media_open(body: OpenBody, request: Request):
     if not path and body.torrent is None and stream is None:
         raise HTTPException(400, detail="nothing_to_open")
     if ctl.opening:
-        raise HTTPException(409, detail="already_opening")
+        await ctl.cancel_open()  # the latest choice wins: no waiting for one that may never open
     torrent = body.torrent.model_dump() if body.torrent else None
-    asyncio.create_task(ctl.open_media(torrent=torrent, path=path, audio=body.audio, stream=stream))
+    ctl.start_open(torrent=torrent, path=path, audio=body.audio, stream=stream)
+    return {"ok": True}
+
+
+@app.post("/api/media/cancel")
+async def api_media_cancel(request: Request):
+    require_media_control(request)
+    await ctl.cancel_open()
     return {"ok": True}
 
 

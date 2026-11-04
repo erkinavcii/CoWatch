@@ -63,6 +63,8 @@
     aiBaseUrl: $('#aiBaseUrl'), aiApiKey: $('#aiApiKey'), aiModel: $('#aiModel'), aiModels: $('#aiModels'),
     aiModelsBtn: $('#aiModelsBtn'), aiTestBtn: $('#aiTestBtn'), aiTestOut: $('#aiTestOut'),
     aiNote: $('#aiNote'), aiKeyLabel: $('#aiKeyLabel'), aiModelLabel: $('#aiModelLabel'),
+    loader: $('#loader'), loaderText: $('#loaderText'), loaderBar: $('#loaderBar'), loaderStats: $('#loaderStats'),
+    loaderCancel: $('#loaderCancel'), torrentWait: $('#torrentWait'),
   };
   const video = el.video;
   // Screen sharing (see "screen sharing" below): who shares, who waits for an answer, and my
@@ -243,6 +245,7 @@
         S.clock.offset = msg.serverTime - performance.now();
         S.osEnabled = !!msg.osEnabled;
         S.opening = !!msg.opening;
+        followOpening();
         S.room = msg.state;
         S.members = msg.members || [];
         if (Array.isArray(msg.palette) && msg.palette.length) S.palette = msg.palette;
@@ -282,27 +285,53 @@
   function onStatus (msg) {
     const params = { ...(msg.params || {}) };
     if (params.at !== undefined) params.at = fmtTime(params.at);
-    if (msg.key === 'opening') S.opening = true;
-    if (msg.key === 'stream_ready' || msg.key === 'open_failed') S.opening = false;
-    if (msg.key === 'restarting') return; // the player shows its own loading message
+    if (msg.key === 'restarting') return; // the stage shows its own loader
     if (['translating', 'translated', 'translate_failed'].includes(msg.key)) { onAiStatus(msg, params); return; }
-    const text = t(`status_${msg.key}`, params);
-    // Opening a film takes a few steps: one notice follows them instead of a new one each.
-    if (OPEN_STEPS.has(msg.key) || (opening && (msg.key === 'stream_ready' || msg.key === 'open_failed'))) {
-      if (!opening || !opening.isConnected) opening = toast(text, 'info', 60000);
-      opening.textContent = text;
-      if (msg.key === 'stream_ready' || msg.key === 'open_failed') {
-        opening.className = `toast ${msg.level === 'error' ? 'error' : 'info'}`;
-        const done = opening;
-        opening = null;
-        setTimeout(() => done.remove(), msg.level === 'error' ? 9000 : 3000);
-      }
+    // Opening a film takes a few steps: the loader on the stage follows them, for everyone.
+    if (OPEN_ORDER.includes(msg.key)) {
+      S.opening = true;
+      Object.assign(OPEN, { step: msg.key, params });
+      followOpening();
+      renderCenter();
       return;
     }
-    toast(text, msg.level === 'error' ? 'error' : 'info');
+    if (['stream_ready', 'open_failed', 'open_cancelled'].includes(msg.key)) {
+      S.opening = false;
+      Object.assign(OPEN, { step: null, params: {}, torrent: null });
+      followOpening();
+      renderCenter();
+    }
+    toast(t(`status_${msg.key}`, params), msg.level === 'error' ? 'error' : 'info', msg.key === 'stream_ready' ? 3000 : 4500);
   }
-  const OPEN_STEPS = new Set(['opening', 'torrent_adding', 'reading_hash', 'probing', 'stream_starting']);
-  let opening = null; // the notice following the steps of opening a film
+  // ---- the loader on the stage, while a film opens or the stream restarts after a seek
+  const OPEN_ORDER = ['opening', 'torrent_adding', 'reading_hash', 'probing', 'stream_starting'];
+  const OPEN = { step: null, params: {}, torrent: null, poll: null };
+  // Torrent peers and speed come with the status; while a film opens, every second.
+  function followOpening () {
+    if (S.opening && !OPEN.poll) OPEN.poll = setInterval(pollStatus, 1000);
+    if (!S.opening && OPEN.poll) { clearInterval(OPEN.poll); OPEN.poll = null; }
+  }
+  function renderLoader () {
+    const opening = S.opening && !screen.owner;
+    const restarting = !!S.media && S.room.loading && !screen.owner;
+    el.loader.hidden = !(opening || restarting);
+    if (el.loader.hidden) return;
+    const step = OPEN_ORDER.indexOf(OPEN.step);
+    el.loaderText.textContent = opening ? t(`status_${OPEN.step || 'opening'}`, OPEN.params) : t('loading_stream');
+    // The bar moves step by step; between steps (and while the stream restarts) it shimmers.
+    el.loaderBar.style.width = opening ? `${Math.round(((Math.max(0, step) + 1) / (OPEN_ORDER.length + 1)) * 100)}%` : '';
+    el.loader.classList.toggle('indeterminate', !opening);
+    const tor = opening ? OPEN.torrent : null;
+    el.loaderStats.textContent = !tor ? '' : tor.numPeers
+      ? t('loader_torrent', { peers: tor.numPeers, speed: fmtBytes(tor.downloadSpeed), got: fmtBytes(tor.downloaded) })
+      : t('loader_no_peers');
+    el.loaderCancel.hidden = !opening || !S.canChangeMedia;
+  }
+  el.loaderCancel.addEventListener('click', async () => {
+    el.loaderCancel.disabled = true; el.loaderCancel.classList.add('busy');
+    try { await api('/api/media/cancel', { method: 'POST' }); } catch (err) { toast(errorText(err), 'error'); }
+    el.loaderCancel.disabled = false;
+  });
 
   // ---------------------------------------------------------------- player
   function applyMedia (media) {
@@ -634,7 +663,7 @@
   const MAX_STROKES = 300;
   const MAX_STROKE_POINTS = 4000;
 
-  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable, .share-asks, .mini-back, .mini-close, .chat'));
+  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable, .share-asks, .mini-back, .mini-close, .chat, .loader'));
   const hovers = (e) => e.pointerType === 'mouse' || e.pointerType === 'pen';
   const memberById = (id) => S.members.find((m) => m.id === id);
   const colorOf = (id) => { const m = memberById(id); return (m && m.color) || '#ffffff'; };
@@ -1860,7 +1889,7 @@
     if (!languages.length) return;
     prefs.searchLangs = el.searchLangs.value; savePrefs();
     const btn = el.searchForm.querySelector('button');
-    btn.disabled = true;
+    btn.disabled = true; btn.classList.add('busy');
     toast(t('search_running'));
     try {
       const result = await api('/api/subtitles/search', { json: { languages } });
@@ -1886,7 +1915,7 @@
     form.append('lang', lang);
     form.append('label', file.name);
     const btn = el.uploadForm.querySelector('button');
-    btn.disabled = true;
+    btn.disabled = true; btn.classList.add('busy');
     try {
       const track = await api('/api/subtitles/upload', { method: 'POST', body: form });
       toast(t('uploaded', { label: track.label }));
@@ -1905,9 +1934,13 @@
     const magnet = el.magnetInput.value.trim();
     if (!magnet) return;
     const btn = el.magnetForm.querySelector('button');
-    btn.disabled = true;
+    btn.disabled = true; btn.classList.add('busy');
     el.fileList.hidden = true;
-    toast(t('torrent_adding'));
+    const started = Date.now();
+    const tick = () => { el.torrentWait.textContent = t('torrent_wait', { s: Math.round((Date.now() - started) / 1000) }); };
+    tick();
+    el.torrentWait.hidden = false;
+    const clock = setInterval(tick, 1000);
     try {
       const info = await api('/api/torrent/add', { json: { magnet } });
       const videos = info.files.filter((f) => f.isVideo).sort((a, b) => b.length - a.length);
@@ -1921,6 +1954,8 @@
     } catch (err) {
       toast(errorText(err), 'error');
     } finally {
+      clearInterval(clock);
+      el.torrentWait.hidden = true;
       btn.disabled = false;
     }
   });
@@ -1965,7 +2000,7 @@
   // own picker would not tell us the file's full path.
   const pickFileBtn = $('#pickFileBtn');
   pickFileBtn.addEventListener('click', async () => {
-    pickFileBtn.disabled = true;
+    pickFileBtn.disabled = true; pickFileBtn.classList.add('busy');
     try {
       const { path } = await api('/api/media/pick', { json: { title: t('pick_file_title') } });
       if (path) { el.pathInput.value = path; openPath(path); }
@@ -2053,6 +2088,9 @@
       S.osEnabled = !!status.osEnabled;
       S.torrent = status.torrent;
       S.downloadThrottled = !!status.downloadThrottled;
+      OPEN.torrent = status.openingTorrent || null;
+      if (S.opening && !status.opening) { S.opening = false; followOpening(); } // missed the end (reconnect)
+      renderLoader();
       if (status.progress) S.progress = status.progress;
       renderMediaPanel();
       if (S.isHost) startShare();
@@ -2344,7 +2382,7 @@
     return body;
   }
   async function aiCall (path, button, show) {
-    button.disabled = true;
+    button.disabled = true; button.classList.add('busy');
     el.aiTestOut.hidden = false;
     el.aiTestOut.textContent = '…';
     try {
@@ -2391,7 +2429,7 @@
   });
   el.settingsForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    el.settingsSave.disabled = true;
+    el.settingsSave.disabled = true; el.settingsSave.classList.add('busy');
     try {
       const res = await api('/api/settings', { json: settingsBody() });
       closeSettings();
@@ -2459,6 +2497,7 @@
     showList();
     const seq = ++B.seq;
     el.browseStatus.textContent = t('browse_loading');
+    el.browseStatus.classList.add('loading');
     el.browseMore.hidden = true;
     const metas = [];
     try {
@@ -2471,7 +2510,7 @@
         if (c) metas.push(...(await api(`/api/addons/catalog?${query({ addon: c.addon, type: c.type, id: c.id, skip: B.skip })}`)).metas);
       }
     } catch (err) {
-      if (seq === B.seq) { el.browseStatus.textContent = ''; toast(errorText(err), 'error'); }
+      if (seq === B.seq) { el.browseStatus.textContent = ''; el.browseStatus.classList.remove('loading'); toast(errorText(err), 'error'); }
       return;
     }
     if (seq !== B.seq) return; // a newer search or catalog took over
@@ -2486,6 +2525,7 @@
     B.skip += metas.length;
     for (const m of fresh) el.browseGrid.appendChild(posterCard(m));
     el.browseStatus.textContent = !B.items.length ? t('browse_empty') : (B.query ? t('browse_results', { q: B.query }) : '');
+    el.browseStatus.classList.remove('loading');
     el.browseMore.hidden = !!B.query || !metas.length;
   }
 
@@ -2579,7 +2619,7 @@
 
   function streamMessage (text) {
     const li = document.createElement('li');
-    li.className = 'msg';
+    li.className = text === t('browse_loading') ? 'msg loading' : 'msg';
     li.textContent = text;
     el.streamList.replaceChildren(li);
   }
@@ -2667,7 +2707,7 @@
     open.textContent = t('stream_open');
     if (!S.canChangeMedia) { open.disabled = true; open.title = t('media_trusted_only'); }
     open.addEventListener('click', async () => {
-      open.disabled = true;
+      open.disabled = true; open.classList.add('busy');
       try {
         await api('/api/media/open', { json: { stream: s.ref } });
         toast(t('stream_opening', { name: ST.name }));
@@ -2745,7 +2785,7 @@
     const url = el.addonUrl.value.trim();
     if (!url) return;
     const btn = el.addonForm.querySelector('button[type="submit"]');
-    btn.disabled = true;
+    btn.disabled = true; btn.classList.add('busy');
     try {
       const added = await api('/api/addons', { json: { url } });
       toast(t('addons_added', { name: added.name }));
@@ -2759,7 +2799,7 @@
   });
   el.addonsStremio.addEventListener('click', async () => {
     if (!B.canEdit || !confirm(t('addons_stremio_confirm'))) return;
-    el.addonsStremio.disabled = true;
+    el.addonsStremio.disabled = true; el.addonsStremio.classList.add('busy');
     try {
       const { added, found } = await api('/api/addons/stremio', { method: 'POST' });
       if (added.length) toast(t('addons_stremio_added', { n: added.length }));
@@ -2782,7 +2822,7 @@
     .map((l) => String(l || '').trim().toLowerCase()).filter(Boolean));
 
   el.addonSubsBtn.addEventListener('click', async () => {
-    el.addonSubsBtn.disabled = true;
+    el.addonSubsBtn.disabled = true; el.addonSubsBtn.classList.add('busy');
     resetAddonSubs();
     try {
       const { subtitles } = await api('/api/addons/subtitles');
@@ -2841,7 +2881,7 @@
     const track = S.tracks.find((tr) => tr.key === sub.key);
     if (track && track.id === S.primary) {
       btn.textContent = t('subs_addons_on');
-      btn.disabled = true;
+      btn.disabled = true; btn.classList.add('busy');
       li.classList.add('on');
     } else if (track) {
       btn.textContent = t('subs_addons_use');
@@ -2849,7 +2889,7 @@
     } else {
       btn.textContent = t('addons_add');
       btn.addEventListener('click', async () => {
-        btn.disabled = true;
+        btn.disabled = true; btn.classList.add('busy');
         try {
           const added = await api('/api/addons/subtitles', { json: { ref: sub.ref } });
           toast(t('uploaded', { label: added.label }));
@@ -2914,7 +2954,7 @@
   el.aiSettings.addEventListener('click', openSettings);
   el.aiGo.addEventListener('click', async () => {
     const lang = el.aiLang.value;
-    el.aiGo.disabled = true;
+    el.aiGo.disabled = true; el.aiGo.classList.add('busy');
     try {
       const res = await api('/api/subtitles/translate', { json: { source: el.aiSource.value, lang } });
       if (res.cached) {
@@ -3158,10 +3198,8 @@
   function renderCenter () {
     let text = '';
     let clickable = false;
-    if (S.media && !screen.owner) {
-      if (S.room.loading) {
-        text = t('loading_stream');
-      } else if (S.room.waiting && S.room.waiting.length) {
+    if (S.media && !screen.owner && !S.room.loading) {
+      if (S.room.waiting && S.room.waiting.length) {
         const names = S.members.filter((m) => S.room.waiting.includes(m.id)).map((m) => m.name);
         text = t('waiting_for', { names: names.join(', ') || '…' });
       } else if (S.autoplayBlocked && S.joined) {
@@ -3169,9 +3207,10 @@
       }
     }
     el.centerMsg.textContent = text;
-    el.centerMsg.hidden = !text;
     el.centerMsg.classList.toggle('clickable', clickable);
-    el.empty.hidden = !!S.media || !!screen.owner;
+    el.empty.hidden = !!S.media || !!screen.owner || S.opening;
+    renderLoader();
+    el.centerMsg.hidden = !text || !el.loader.hidden;
   }
 
   function renderMediaPanel () {
@@ -3222,13 +3261,19 @@
 
   function renderTorrentInfo () {
     const tor = S.torrent;
-    if (!tor || !S.media || S.media.source !== 'torrent') { el.torrentInfo.textContent = ''; return; }
-    el.torrentInfo.textContent = t('torrent_stats', {
+    if (!tor || !S.media || S.media.source !== 'torrent') { el.torrentInfo.replaceChildren(); return; }
+    const text = document.createElement('div');
+    text.textContent = t('torrent_stats', {
       pct: (tor.progress * 100).toFixed(1),
       down: fmtBytes(tor.downloadSpeed),
       up: fmtBytes(tor.uploadSpeed),
       peers: tor.numPeers,
     }) + (S.downloadThrottled ? ` ${t('torrent_throttled')}` : '');
+    const bar = document.createElement('div');
+    bar.className = 'dl-bar';
+    bar.title = t('torrent_bar');
+    bar.appendChild(document.createElement('i')).style.width = `${Math.min(100, tor.progress * 100)}%`;
+    el.torrentInfo.replaceChildren(text, bar);
   }
 
   function trackLabel (track) {

@@ -35,6 +35,13 @@
       <canvas class="draw" id="drawCanvas"></canvas>
       <div class="cursors" id="cursors"></div>
       <div class="center-msg" id="centerMsg" hidden></div>
+      <div class="loader" id="loader" hidden>
+        <span class="spinner"></span>
+        <div class="loader-text" id="loaderText"></div>
+        <div class="loader-bar"><i id="loaderBar"></i></div>
+        <div class="loader-stats" id="loaderStats"></div>
+        <button type="button" id="loaderCancel" class="ghost" data-i18n="open_cancel" hidden></button>
+      </div>
       <div class="screen-tag" id="screenTag" hidden></div>
       <div class="share-asks" id="shareAsks" hidden></div>
       <ol class="chat-peek" id="chatPeek" aria-live="polite"></ol>
@@ -223,6 +230,7 @@
           <input id="magnetInput" placeholder="magnet:?xt=urn:btih:…" autocomplete="off" spellcheck="false">
           <button type="submit" class="primary" data-i18n="add_torrent"></button>
         </form>
+        <p class="hint loading" id="torrentWait" hidden></p>
         <div id="fileList" class="file-list" hidden></div>
         <form id="pathForm" class="inline-form" hidden>
           <input id="pathInput" data-i18n-placeholder="local_path" autocomplete="off" spellcheck="false">
