@@ -19,7 +19,7 @@ class TorrentHelper:
 
     async def _request(self, method: str, path: str, timeout: float = 15, **kwargs) -> dict:
         try:
-            async with httpx.AsyncClient(timeout=timeout) as http:
+            async with httpx.AsyncClient(timeout=timeout, verify=False) as http:  # plain http on this computer
                 resp = await http.request(method, f"{self.base}{path}", **kwargs)
         except httpx.TimeoutException as exc:
             raise HelperError("torrent helper timed out", 504) from exc
@@ -58,7 +58,7 @@ class TorrentHelper:
     async def read_range(self, info_hash: str, file_index: int, start: int, end: int,
                          timeout: float = 90) -> bytes:
         try:
-            async with httpx.AsyncClient(timeout=timeout) as http:
+            async with httpx.AsyncClient(timeout=timeout, verify=False) as http:  # plain http on this computer
                 resp = await http.get(self.file_url(info_hash, file_index),
                                       headers={"Range": f"bytes={start}-{end}"})
         except httpx.HTTPError as exc:

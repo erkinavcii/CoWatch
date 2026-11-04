@@ -23,6 +23,7 @@ from typing import Awaitable, Callable, Optional
 import httpx
 
 from .config import Settings
+from .net import tls
 from .subtitles import Cue
 
 log = logging.getLogger("cowatch.translate")
@@ -173,7 +174,8 @@ async def _call_json(method: str, url: str, errors: Optional[dict[int, str]] = N
     for attempt in range(3):
         try:
             # A model on this computer can take minutes for a chunk; a far one should not.
-            async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10), transport=TRANSPORT) as http:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10), transport=TRANSPORT,
+                                         verify=tls()) as http:
                 resp = await http.request(method, url, **kwargs)
         except httpx.TimeoutException:
             error = TranslateError("the provider did not answer in time", "ai_timeout")

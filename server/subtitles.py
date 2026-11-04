@@ -15,6 +15,8 @@ import httpx
 import pysubs2
 from charset_normalizer import from_bytes
 
+from .net import tls
+
 log = logging.getLogger("cowatch.subtitles")
 
 MAX_SUBTITLE_BYTES = 5 * 1024 * 1024
@@ -247,7 +249,8 @@ class OpenSubtitlesClient:
         elif m:
             params["imdb_id"] = str(int(m.group(1)))
         params = dict(sorted(params.items()))
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True, transport=self.transport) as http:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True, transport=self.transport,
+                                     verify=tls()) as http:
             resp = await http.get(f"{self.base}/subtitles", headers=self._headers(), params=params)
         if resp.status_code == 401:
             raise OpenSubtitlesError("API key rejected", "os_bad_key")
@@ -258,7 +261,8 @@ class OpenSubtitlesClient:
         return resp.json().get("data") or []
 
     async def download(self, file_id: int) -> tuple[bytes, dict]:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True, transport=self.transport) as http:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True, transport=self.transport,
+                                     verify=tls()) as http:
             await self._login(http)
             resp = await http.post(f"{self.base}/download", headers=self._headers(), json={"file_id": file_id})
             if resp.status_code == 406:

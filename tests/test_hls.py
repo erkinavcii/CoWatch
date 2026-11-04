@@ -104,4 +104,6 @@ def test_the_encoder_goes_into_the_command():
     info = ProbeInfo(duration=10, size=1, start_time=0, format_name="mp4", bitrate_kbps=1000,
                      video={"index": 0, "codec_name": "hevc"}, audio=[])
     cmd = build_command(cfg, "in.mkv", PureWindowsPath("C:/x"), 0, "transcode", info, None, "h264_nvenc")
+    # The card makes the forced keyframes IDR, or HLS segments grow to its GOP length.
+    assert cmd[cmd.index("-forced-idr") + 1] == "1"
     assert cmd[cmd.index("-c:v") + 1] == "h264_nvenc" and "-preset" in cmd

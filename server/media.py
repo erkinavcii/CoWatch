@@ -31,11 +31,14 @@ log = logging.getLogger("cowatch.media")
 BROWSER_PIX_FMTS = {"yuv420p", "yuvj420p"}
 
 # encoder -> (extra args, pixel format it wants)
+# The graphics card encoders make -force_key_frames frames plain I frames unless told to make
+# them IDR; the HLS muxer cuts only at IDR, so segments came out as long as the card's GOP
+# (10.4 s with NVENC instead of 4 s): slower start and coarser seeking.
 ENCODER_PRESETS: dict[str, tuple[list[str], str]] = {
     "libx264": (["-preset", "veryfast", "-tune", "film", "-profile:v", "high"], "yuv420p"),
-    "h264_nvenc": (["-preset", "p5", "-rc", "vbr", "-profile:v", "high"], "yuv420p"),
-    "h264_qsv": (["-preset", "veryfast", "-profile:v", "high"], "nv12"),
-    "h264_amf": (["-quality", "balanced", "-profile:v", "high"], "nv12"),
+    "h264_nvenc": (["-preset", "p5", "-rc", "vbr", "-profile:v", "high", "-forced-idr", "1"], "yuv420p"),
+    "h264_qsv": (["-preset", "veryfast", "-profile:v", "high", "-forced_idr", "1"], "nv12"),
+    "h264_amf": (["-quality", "balanced", "-profile:v", "high", "-forced_idr", "1"], "nv12"),
     "h264_videotoolbox": (["-profile:v", "high", "-allow_sw", "1"], "nv12"),
 }
 SOFTWARE_ENCODER = "libx264"

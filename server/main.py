@@ -50,6 +50,7 @@ from .subtitles import (
     pick_best,
     to_vtt,
 )
+from .net import tls
 from .torrent_client import HelperError, TorrentHelper
 
 log = logging.getLogger("cowatch")
@@ -78,7 +79,7 @@ async def url_hash(url: str) -> tuple[int, Optional[str]]:
     requests (first and last 64 KB). (0, None) if the server does not say its size or
     does not serve ranges; the film still plays, subtitles are then found by id or name."""
     try:
-        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as http:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True, verify=tls()) as http:
             head = await http.head(url)
             size = int(head.headers.get("content-length") or 0)
             if size < CHUNK or head.headers.get("accept-ranges", "").lower() != "bytes":

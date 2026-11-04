@@ -24,6 +24,8 @@ from urllib.parse import quote, urlencode
 
 import httpx
 
+from .net import tls
+
 DEFAULT_ADDONS = (
     "https://v3-cinemeta.strem.io/manifest.json",  # catalogs and details (posters, seasons, episodes)
     "https://caching.stremio.net/publicdomainmovies.now.sh/manifest.json",  # films out of copyright
@@ -250,7 +252,7 @@ class AddonStore:
     # ---- requests -------------------------------------------------------------------
     async def _fetch(self, url: str) -> dict:
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True, transport=self.transport,
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True, transport=self.transport, verify=tls(),
                                          headers={"User-Agent": "CoWatch"}) as http:
                 resp = await http.get(url)
         except httpx.HTTPError as exc:
@@ -443,7 +445,7 @@ class AddonStore:
 
     async def download(self, url: str, limit: int) -> bytes:
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True, transport=self.transport,
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True, transport=self.transport, verify=tls(),
                                          headers={"User-Agent": "CoWatch"}) as http:
                 resp = await http.get(url)
         except httpx.HTTPError as exc:
