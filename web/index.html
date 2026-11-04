@@ -321,6 +321,7 @@
     <form class="join-card" id="joinForm">
       <h1>Co<span>·</span>Watch</h1>
       <p class="join-sub" data-i18n="join_title"></p>
+      <p class="join-notice" id="joinNotice" data-i18n="kicked" hidden></p>
       <label class="field"><span data-i18n="join_name"></span><input id="nameInput" maxlength="24" required autocomplete="nickname"></label>
       <label class="field"><span data-i18n="join_lang"></span><select id="joinLang"></select></label>
       <div class="preview" id="preview">
@@ -458,6 +459,7 @@
     <button type="button" id="peerGrant" class="ghost" hidden></button>
     <button type="button" id="peerStopShare" class="ghost" data-i18n="screen_stop_theirs" hidden></button>
     <p class="hint" id="peerGrantHint" data-i18n="grant_hint" hidden></p>
+    <button type="button" id="peerKick" class="ghost danger" data-i18n="peer_kick" hidden></button>
   </div>
   <div id="voices" hidden></div>
 

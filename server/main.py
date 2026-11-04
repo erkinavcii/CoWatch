@@ -57,6 +57,7 @@ log = logging.getLogger("cowatch")
 
 COOKIE = "cw_key"
 VIEWER_COOKIE = "cw_viewer"  # one per browser, so the host's trust survives a reconnect
+KICKED_CLOSE = 4003  # the host removed this viewer: the page does not reconnect by itself
 LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-z]{2,4})?$")
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Set by a reverse proxy in front of us. Tailscale Serve adds Tailscale-User-Login (and drops
@@ -176,6 +177,37 @@ class Controller:
         self._relays.add(task)
         task.add_done_callback(self._relays.discard)
 
+    async def leave(self, client: Client) -> None:
+        """A viewer goes: the connection closed, or the host removed them. Twice is harmless."""
+        if client.id not in self.room.clients:
+            return
+        changed = self.room.remove(client.id)
+        await self.room.broadcast(self.room.members_msg())
+        if changed:
+            await self.broadcast_state()
+        if self.room.screen == client.id:
+            await self.set_screen(None)
+        elif self.room.share_asks.pop(client.id, None) is not None:
+            await self.room.broadcast(self.room.screen_msg())
+
+    async def kick(self, target: Client) -> None:
+        """The host removes someone, usually a ghost: a page left open on a phone, or a join
+        that never finished while the server was slow. They go from the room at once; the page,
+        if it is still there, is told so and does not reconnect by itself."""
+        await self.leave(target)
+
+        async def close() -> None:  # a dead connection may take a while: not on the host's turn
+            await target.send({"type": "kicked"})
+            target.alive = False
+            try:
+                await asyncio.wait_for(target.ws.close(code=KICKED_CLOSE), timeout=5)
+            except Exception:
+                pass
+
+        task = asyncio.create_task(close())
+        self._relays.add(task)
+        task.add_done_callback(self._relays.discard)
+
     def _relay_to(self, target: Client, msg: dict) -> None:
         """Like `_relay`, to one viewer. Messages to the same viewer keep their order: each send
         waits for the previous one on that viewer's lock, and the lock serves in turn."""
@@ -276,6 +308,10 @@ class Controller:
                 else:
                     self.room.cohosts.discard(target.viewer)
                 await self.room.broadcast(self.room.members_msg())
+        elif kind == "kick" and client.host:
+            target = self.room.clients.get(str(msg.get("to", "")))
+            if target is not None and not target.host:
+                await self.kick(target)
         elif kind == "hello":
             client.name = clean_name(msg.get("name"))
             client.joined = True
@@ -1395,6 +1431,8 @@ async def ws_endpoint(ws: WebSocket):
     try:
         while True:
             raw = await ws.receive_text()
+            if client.id not in ctl.room.clients:
+                break  # removed by the host: nothing it sends counts any more
             try:
                 msg = json.loads(raw)
             except ValueError:
@@ -1410,11 +1448,4 @@ async def ws_endpoint(ws: WebSocket):
         if WebSocketState.DISCONNECTED not in (ws.client_state, ws.application_state):
             log.exception("websocket error")
     finally:
-        changed = ctl.room.remove(client.id)
-        await ctl.room.broadcast(ctl.room.members_msg())
-        if changed:
-            await ctl.broadcast_state()
-        if ctl.room.screen == client.id:
-            await ctl.set_screen(None)
-        elif ctl.room.share_asks.pop(client.id, None) is not None:
-            await ctl.room.broadcast(ctl.room.screen_msg())
+        await ctl.leave(client)

@@ -14,7 +14,7 @@
     magnetForm: $('#magnetForm'), magnetInput: $('#magnetInput'), fileList: $('#fileList'),
     pathForm: $('#pathForm'), pathInput: $('#pathInput'), hostHint: $('#hostHint'),
     libraryBox: $('#libraryBox'), libraryHint: $('#libraryHint'), libraryFilter: $('#libraryFilter'),
-    libraryList: $('#libraryList'), peerGrant: $('#peerGrant'), peerGrantHint: $('#peerGrantHint'),
+    libraryList: $('#libraryList'), peerGrant: $('#peerGrant'), peerGrantHint: $('#peerGrantHint'), peerKick: $('#peerKick'), joinNotice: $('#joinNotice'),
     screenVideo: $('#screenVideo'), screenTag: $('#screenTag'), shareAsks: $('#shareAsks'), screenBtn: $('#screenBtn'),
     peerStopShare: $('#peerStopShare'), mediaLockHint: $('#mediaLockHint'),
     mediaInfo: $('#mediaInfo'), torrentInfo: $('#torrentInfo'), closeMedia: $('#closeMedia'),
@@ -214,10 +214,11 @@
       try { msg = JSON.parse(event.data); } catch { return; }
       onMessage(msg);
     };
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       S.connected = false;
       clearInterval(pingTimer);
-      if (S.ws === ws) {
+      if (event.code === 4003) onKicked(); // the host removed me (main.KICKED_CLOSE)
+      if (S.ws === ws && !S.kicked) {
         setConn('disconnected');
         clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(connect, 2000);
@@ -259,6 +260,7 @@
         renderAll();
         break;
       case 'pong': onPong(msg); break;
+      case 'kicked': onKicked(); break;
       case 'state': {
         const wasRunning = roomRunning();
         S.room = msg;
@@ -1649,6 +1651,8 @@
     el.peerGrant.textContent = t(m.cohost ? 'grant_revoke' : 'grant_give');
     el.peerGrantHint.hidden = !grantable || !!m.cohost;
     el.peerStopShare.hidden = !(amTrusted() && screen.owner === m.id);
+    el.peerKick.hidden = !(S.isHost && !m.host);
+    el.peerVol.hidden = !m.joined; // still on the join screen: nothing to hear yet
     const r = anchor.getBoundingClientRect();
     const beside = anchor.classList.contains('cam'); // a tile: to its left; a name: below it
     el.peerPop.style.top = `${beside ? r.top : r.bottom + 6}px`;
@@ -1666,6 +1670,10 @@
   el.peerGrant.addEventListener('click', () => {
     const m = memberById(popFor);
     if (m) send({ type: 'grant', to: m.id, value: !m.cohost });
+    el.peerPop.hidden = true;
+  });
+  el.peerKick.addEventListener('click', () => {
+    if (popFor) send({ type: 'kick', to: popFor });
     el.peerPop.hidden = true;
   });
   el.peerVol.addEventListener('input', () => {
@@ -2881,7 +2889,7 @@
     const track = S.tracks.find((tr) => tr.key === sub.key);
     if (track && track.id === S.primary) {
       btn.textContent = t('subs_addons_on');
-      btn.disabled = true; btn.classList.add('busy');
+      btn.disabled = true; // a state, not a wait: no spinner
       li.classList.add('on');
     } else if (track) {
       btn.textContent = t('subs_addons_use');
@@ -3118,6 +3126,11 @@
     savePrefs();
     S.joined = true;
     el.joinOverlay.hidden = true;
+    if (S.kicked) { // removed by the host earlier: this is a new connection
+      S.kicked = false;
+      el.joinNotice.hidden = true;
+      connect();
+    }
     // Called inside the click, so the browser allows sound for later play() calls
     // and for the poke sounds.
     video.play().then(() => { if (!roomRunning()) video.pause(); }).catch(() => {});
@@ -3125,6 +3138,24 @@
     sendHello();
     applyI18n();
   });
+
+  // The host removed me (a ghost of mine, or on purpose): devices off, no reconnecting, and
+  // back to the join screen, where joining again opens a new connection.
+  function onKicked () {
+    if (S.kicked) return;
+    S.kicked = true;
+    S.joined = false;
+    clearTimeout(reconnectTimer);
+    closeAllPeers();
+    useTrack('mic', null);
+    useTrack('cam', null);
+    if (screen.stream) stopMyScreen(false);
+    video.pause();
+    el.joinNotice.hidden = false;
+    el.joinOverlay.hidden = false;
+    if (S.ws && S.ws.readyState <= WebSocket.OPEN) S.ws.close();
+    setConn('disconnected');
+  }
 
   function fillLangSelect (select) {
     select.replaceChildren();
@@ -3173,7 +3204,7 @@
       chip.dataset.id = m.id;
       if (m.color) chip.style.setProperty('--c', m.color);
       chip.classList.toggle('me', me);
-      chip.classList.toggle('others', !me && !!m.joined);
+      chip.classList.toggle('others', !me && (!!m.joined || S.isHost)); // the host can remove a ghost that never joined
       chip.classList.toggle('speaking', speaking.has(m.id));
       const titles = [];
       if (m.buffering) { chip.classList.add('buffering'); titles.push(t('buffering')); }

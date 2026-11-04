@@ -177,6 +177,31 @@ def next_of(ws, kind, check=lambda msg: True):
             return msg
 
 
+def test_the_host_removes_a_ghost():
+    """A page that never joined (a phone's half-finished entry) leaves at once; it is told so
+    and closed with 4003, and only the host may do it."""
+    from starlette.websockets import WebSocketDisconnect
+    host_headers = {"cookie": f"cw_key={KEY}; cw_viewer=kick-host", "host": "localhost:8000"}
+    ghost_headers = {"cookie": f"cw_key={KEY}; cw_viewer=kick-ghost", "x-forwarded-for": "100.64.0.9"}
+    with TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 5)) as client:
+        with client.websocket_connect("/ws", headers=host_headers) as hws,                 client.websocket_connect("/ws", headers=ghost_headers) as gws:
+            host = hws.receive_json()["clientId"]
+            ghost = gws.receive_json()["clientId"]
+            next_of(hws, "members", lambda m: len(m["members"]) == 2)
+            gws.send_json({"type": "kick", "to": host})  # a guest cannot
+            hws.send_json({"type": "kick", "to": ghost})
+            members = next_of(hws, "members", lambda m: len(m["members"]) == 1)["members"]
+            assert [m["id"] for m in members] == [host]
+            next_of(gws, "kicked")
+            try:
+                while True:
+                    gws.receive_json()
+            except WebSocketDisconnect as exc:
+                assert exc.code == 4003
+            from server.main import ctl
+            assert ghost not in ctl.room.clients
+
+
 def test_screen_share_waits_for_the_host():
     host_headers = {"cookie": f"cw_key={KEY}; cw_viewer=screen-host", "host": "localhost:8000"}
     friend_headers = {"cookie": f"cw_key={KEY}; cw_viewer=screen-friend", "x-forwarded-for": "100.64.0.8"}

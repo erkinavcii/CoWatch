@@ -426,6 +426,29 @@ def run(headed: bool) -> None:
                                  " && document.querySelector('#chatBox').parentNode.id === 'chatDock'"))
             phone_ctx.close()
 
+            # ---- a ghost: a page that loaded but never joined (a phone's entry that did not
+            # finish). The host removes it from its name; it stays out until it joins again.
+            # Through Tailscale, like a phone: a page on this computer would be a host, and hosts stay.
+            ghost_ctx = browser.new_context(locale="tr-TR", extra_http_headers={"Tailscale-User-Login": "ghost@example.com"})
+            ghost = ghost_ctx.new_page()
+            ghost.on("pageerror", lambda exc: errors.append(f"ghost pageerror: {exc}"))
+            ghost.goto(f"{base}/?k={KEY}")
+            a.wait_for_function(f"() => {DBG}.members.length === 3")
+            ghost_id = ghost.evaluate(f"() => {DBG}.clientId")
+            a.evaluate("() => window.scrollTo(0, 0)")
+            a.click(f"#members .member[data-id='{ghost_id}']")
+            a.click("#peerKick")
+            a.wait_for_function(f"() => {DBG}.members.length === 2", timeout=5000)
+            ghost.wait_for_selector("#joinNotice:not([hidden])", timeout=5000)
+            time.sleep(3)  # longer than a reconnect would take
+            check("the host removes a ghost from its name, and it does not come back by itself",
+                  a.evaluate(f"() => {DBG}.members.length") == 2 and ghost.is_visible("#joinOverlay"))
+            ghost.fill("#nameInput", "Geri")
+            ghost.click("#joinForm button[type=submit]")
+            a.wait_for_function(f"() => {DBG}.members.some(m => m.name === 'Geri')", timeout=5000)
+            check("joining again brings it back", ghost.is_hidden("#joinNotice"))
+            ghost_ctx.close()
+
             check("no errors in either window", not errors, " || ".join(errors))
             browser.close()
     finally:

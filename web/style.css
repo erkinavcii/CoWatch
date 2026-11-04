@@ -416,6 +416,8 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .join-card { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
 .join-card h1 { margin: 0; font-size: 26px; }
 .join-sub { color: var(--muted); margin: 2px 0 10px; }
+.join-notice { margin: 0 0 10px; padding: 8px 10px; border-radius: 8px; background: rgba(255, 107, 107, .12); color: #ff8a8a; }
+.peer-pop .danger { color: #ff8a8a; }
 .preview {
   position: relative; aspect-ratio: 16 / 9; margin: 10px 0 14px; border-radius: 10px; overflow: hidden;
   background: #08090b; border: 1px solid var(--line);
