@@ -186,6 +186,8 @@ def run(headed: bool) -> None:
                 page.on("console", lambda msg, n=name: on_console(msg, n))
                 page.goto(f"{base}/?k={KEY}")
                 page.fill("#nameInput", name)
+                if name == "Masha":
+                    page.click("#joinAnimals button[title='Tilki']")
                 page.click("#joinForm button[type=submit]")
                 pages[name] = page
             a, b = pages["Erkin"], pages["Masha"]
@@ -193,6 +195,10 @@ def run(headed: bool) -> None:
             a.wait_for_function(f"() => {DBG}.members.length === 2 && {DBG}.members.every(m => m.color)")
             color = {m["name"]: m["color"] for m in a.evaluate(f"() => {DBG}.members")}
             check("each viewer gets a colour of their own", color["Erkin"] != color["Masha"], str(color))
+            animals = {m["name"]: m["animal"] for m in a.evaluate(f"() => {DBG}.members")}
+            check("the animal picked on the join screen reaches the others, the ball wears it",
+                  animals == {"Erkin": "ball", "Masha": "fox"}
+                  and b.evaluate("() => document.querySelector('.ball.me .face').dataset.animal") == "fox", str(animals))
 
             # ---- open the film from the host window (127.0.0.1 counts as the host)
             a.wait_for_selector("#pathForm:not([hidden])")
@@ -233,6 +239,9 @@ def run(headed: bool) -> None:
             time.sleep(0.8)
             ta, tb = film_time(a), film_time(b)
             check("pausing in one window pauses both", abs(ta - tb) < 0.3, f"{ta:.2f} s vs {tb:.2f} s")
+            note = a.evaluate("() => { const n = document.querySelector('#centerMsg'); return n.hidden ? '' : n.textContent; }")
+            check("the other window says who paused, the one who did sees nothing",
+                  note == "Masha durdurdu" and b.is_hidden("#centerMsg"), repr(note))
 
             # ---- seek both to 7 s and read the subtitles each window shows
             b.evaluate("() => { const s = document.querySelector('#seekBar'); s.value = '7'; s.dispatchEvent(new Event('change')); }")

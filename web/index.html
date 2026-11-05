@@ -326,12 +326,17 @@
       <label class="field"><span data-i18n="join_lang"></span><select id="joinLang"></select></label>
       <div class="preview" id="preview">
         <video id="previewVideo" autoplay playsinline muted></video>
-        <p class="preview-off" data-i18n="preview_off"></p>
+        <div class="preview-off"><div class="face" id="previewFace"></div><p data-i18n="preview_off"></p></div>
         <div class="preview-meter" id="previewMeter" hidden><i></i><i></i><i></i><i></i><i></i></div>
         <div class="preview-btns">
           <button type="button" id="preMicBtn" class="round av off"></button>
           <button type="button" id="preCamBtn" class="round av off"></button>
         </div>
+      </div>
+      <div class="look" id="joinLook">
+        <span class="look-label" data-i18n="join_look"></span>
+        <div class="look-colors" id="joinColors"></div>
+        <div class="look-animals" id="joinAnimals"></div>
       </div>
       <button type="submit" class="primary big" data-i18n="join_button"></button>
       <p class="hint" data-i18n="join_hint"></p>

@@ -10,6 +10,8 @@ from typing import Optional
 
 # Bright enough for dark text on top, distinct enough to tell people apart.
 PALETTE = ("#ff6b6b", "#4dabf7", "#51cf66", "#fcc419", "#cc5de8", "#ff922b", "#22b8cf", "#f06595")
+# The face on a viewer's ball and camera tile: ears and a snout over the plain ball (web/style.css).
+ANIMALS = ("ball", "cat", "bear", "bunny", "fox", "panda", "mouse", "dog")
 POKE_INTERVAL_S = 0.15
 MAX_POINTS = 256  # per message; clients send a stroke in small batches
 

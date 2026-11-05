@@ -177,6 +177,21 @@ def next_of(ws, kind, check=lambda msg: True):
             return msg
 
 
+def test_each_viewer_picks_an_animal():
+    headers = {"cookie": f"cw_key={KEY}; cw_viewer=animal", "host": "localhost:8000"}
+    with TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 5)) as client:
+        with client.websocket_connect("/ws", headers=headers) as ws:
+            me = ws.receive_json()["clientId"]
+
+            def mine(msg):
+                return next(m for m in msg["members"] if m["id"] == me)
+            ws.send_json({"type": "hello", "name": "Erkin", "animal": "cat"})
+            assert mine(next_of(ws, "members", lambda m: mine(m)["joined"]))["animal"] == "cat"
+            ws.send_json({"type": "color", "animal": "dragon"})  # not one of ours: ignored
+            ws.send_json({"type": "color", "animal": "fox"})
+            assert mine(next_of(ws, "members"))["animal"] == "fox"
+
+
 def test_the_host_removes_a_ghost():
     """A page that never joined (a phone's half-finished entry) leaves at once; it is told so
     and closed with 4003, and only the host may do it."""

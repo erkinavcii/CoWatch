@@ -30,6 +30,7 @@
     voices: $('#voices'), camBtn: $('#camBtn'), camMenuBtn: $('#camMenuBtn'), camMenu: $('#camMenu'),
     camDevice: $('#camDevice'), selfCheck: $('#selfCheck'), camsCheck: $('#camsCheck'), cams: $('#cams'),
     preview: $('#preview'), previewVideo: $('#previewVideo'), previewMeter: $('#previewMeter'),
+    previewFace: $('#previewFace'), joinColors: $('#joinColors'), joinAnimals: $('#joinAnimals'),
     preMicBtn: $('#preMicBtn'), preCamBtn: $('#preCamBtn'),
     camsBox: $('#camsBox'), camsSizeBtn: $('#camsSizeBtn'), sideLeft: $('#sideLeft'), sideRight: $('#sideRight'),
     catalogSel: $('#catalogSel'), browseSearch: $('#browseSearch'), browseQuery: $('#browseQuery'),
@@ -258,6 +259,7 @@
         applyTracks(msg.tracks || []);
         setChatHistory(msg.chat);
         renderAll();
+        if (!el.joinOverlay.hidden) renderLook();
         break;
       case 'pong': onPong(msg); break;
       case 'kicked': onKicked(); break;
@@ -268,7 +270,10 @@
         renderControls(); renderCenter();
         break;
       }
-      case 'members': S.members = msg.members || []; onMembers(); renderMembers(); renderCenter(); renderScreen(); break;
+      case 'members':
+        S.members = msg.members || []; onMembers(); renderMembers(); renderCenter(); renderScreen();
+        if (!el.joinOverlay.hidden) renderLook();
+        break;
       case 'screen': onScreen(msg); break;
       case 'media': applyMedia(msg.media); break;
       case 'progress': S.progress = msg; renderMediaInfo(); break;
@@ -692,19 +697,34 @@
   const toStage = (p, g) => [g.ox + p[0] * g.w, g.oy + p[1] * g.h];
 
   // ---- balls
+  // A face (web/style.css): the colour, the eyes, and the ears and snout of the chosen animal.
+  const ANIMALS = ['ball', 'cat', 'bear', 'bunny', 'fox', 'panda', 'mouse', 'dog'];
+  const FACE = '<span class="ear l"></span><span class="ear r"></span>'
+    + '<span class="head"><span class="eye"><i></i></span><span class="eye"><i></i></span><span class="snout"></span></span>';
+  const myAnimal = () => (ANIMALS.includes(prefs.animal) ? prefs.animal : 'ball');
+  const animalOf = (m) => (m && ANIMALS.includes(m.animal) ? m.animal : 'ball');
+  function makeFace (animal, color) {
+    const face = document.createElement('div');
+    face.className = 'face';
+    face.innerHTML = FACE;
+    face.dataset.animal = animal;
+    if (color) face.style.setProperty('--c', color);
+    return face;
+  }
   function makeBall (me) {
     const node = document.createElement('div');
     node.className = me ? 'ball me gone' : 'ball gone';
-    node.innerHTML = '<div class="body"><span class="eye"><i></i></span><span class="eye"><i></i></span></div><span class="tag"></span>';
+    node.innerHTML = `<div class="body face" data-animal="ball">${FACE}</div><span class="tag"></span>`;
     el.cursors.appendChild(node);
-    return { node, tag: node.querySelector('.tag'), x: 0, y: 0, tx: 0, ty: 0, lx: 0, ly: 0, seen: 0, visible: false };
+    return { node, face: node.querySelector('.face'), tag: node.querySelector('.tag'), x: 0, y: 0, tx: 0, ty: 0, lx: 0, ly: 0, seen: 0, visible: false };
   }
   const balls = new Map(); // clientId -> the ball of another viewer
   const mine = Object.assign(makeBall(true), { inside: false, overUi: false, sent: false, sx: null, sy: null });
 
-  function paintBall (ball, color, name) {
+  function paintBall (ball, color, name, animal) {
     ball.node.style.setProperty('--c', color);
     if (ball.tag.textContent !== name) ball.tag.textContent = name;
+    ball.face.dataset.animal = animal || 'ball';
   }
   function ballFor (id) {
     let ball = balls.get(id);
@@ -712,7 +732,7 @@
       ball = makeBall(false);
       balls.set(id, ball);
       const m = memberById(id);
-      paintBall(ball, colorOf(id), m ? m.name : '?');
+      paintBall(ball, colorOf(id), m ? m.name : '?', animalOf(m));
     }
     return ball;
   }
@@ -738,7 +758,7 @@
     for (const [id, ball] of balls) {
       if (!ids.has(id)) { ball.node.remove(); balls.delete(id); continue; }
       const m = memberById(id);
-      paintBall(ball, m.color || '#ffffff', m.name);
+      paintBall(ball, m.color || '#ffffff', m.name, animalOf(m));
     }
     for (const stroke of strokes.values()) if (!stroke.done && !ids.has(stroke.owner)) finishStroke(stroke);
     const me = memberById(S.clientId);
@@ -1061,7 +1081,7 @@
     const color = myColor();
     el.stage.style.setProperty('--me', color);
     el.sfxBtn.classList.toggle('off', !prefs.sfx);
-    paintBall(mine, color, prefs.name || '?');
+    paintBall(mine, color, prefs.name || '?', myAnimal());
     if (!el.palette.hidden) renderPalette();
   }
   function renderPalette () {
@@ -1075,6 +1095,30 @@
       swatch.addEventListener('click', () => pickColor(color));
       el.palette.appendChild(swatch);
     }
+    const animals = document.createElement('div');
+    animals.className = 'palette-animals';
+    animals.style.setProperty('--c', current);
+    for (const animal of ANIMALS) animals.appendChild(animalButton(animal, current, () => pickAnimal(animal)));
+    el.palette.appendChild(animals);
+  }
+  function animalButton (animal, color, onPick) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.title = t(`animal_${animal}`);
+    btn.classList.toggle('sel', animal === myAnimal());
+    btn.appendChild(makeFace(animal, color));
+    btn.addEventListener('click', onPick);
+    return btn;
+  }
+  function pickAnimal (animal) {
+    prefs.animal = animal; savePrefs();
+    const me = memberById(S.clientId);
+    if (me) me.animal = animal;
+    send({ type: 'color', animal });
+    el.palette.hidden = true;
+    onMembers();
+    renderToolbar();
+    renderCams();
   }
   function pickColor (color) {
     prefs.color = color; savePrefs();
@@ -1136,7 +1180,7 @@
   const speaking = new Set();
 
   function sendHello () {
-    send({ type: 'hello', name: prefs.name, color: prefs.color, mic: !!voice.mic, cam: !!voice.cam });
+    send({ type: 'hello', name: prefs.name, color: prefs.color, animal: myAnimal(), mic: !!voice.mic, cam: !!voice.cam });
   }
   const sendAv = () => send({ type: 'av', mic: !!voice.mic, cam: !!voice.cam });
   const sendRtc = (to, data) => send({ type: 'rtc', to, data });
@@ -1459,8 +1503,33 @@
   }
   function renderPreviewMeter () {
     if (el.joinOverlay.hidden || !voice.mic) return;
-    const bars = Math.min(5, Math.floor(Math.sqrt(myLevel()) * 12)); // about 1 bar at the talking level
+    const level = myLevel();
+    const bars = Math.min(5, Math.floor(Math.sqrt(level) * 12)); // about 1 bar at the talking level
     el.previewMeter.querySelectorAll('i').forEach((bar, i) => bar.classList.toggle('on', i < bars));
+    el.previewFace.classList.toggle('speaking', level >= SPEAK_LEVEL);
+  }
+
+  // ---- the join screen's look: a colour (others' are dimmed: the server would give you
+  // another) and an animal, with your face in the preview while the camera is off.
+  function renderLook () {
+    const taken = new Set(S.members.filter((m) => m.id !== S.clientId && m.color).map((m) => m.color));
+    const color = S.palette.includes(prefs.color) ? prefs.color : (S.palette.find((c) => !taken.has(c)) || S.palette[0]);
+    el.joinColors.replaceChildren(...S.palette.map((c) => {
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
+      swatch.style.setProperty('--c', c);
+      swatch.classList.toggle('sel', c === color);
+      swatch.classList.toggle('taken', taken.has(c));
+      swatch.addEventListener('click', () => { prefs.color = c; savePrefs(); renderLook(); });
+      return swatch;
+    }));
+    el.joinAnimals.style.setProperty('--c', color);
+    el.joinAnimals.replaceChildren(...ANIMALS.map((animal) => animalButton(animal, color, () => {
+      prefs.animal = animal; savePrefs(); renderLook();
+    })));
+    el.previewFace.innerHTML = FACE;
+    el.previewFace.dataset.animal = myAnimal();
+    el.previewFace.style.setProperty('--c', color);
   }
 
   // ---- camera tiles over the picture, top right. They show while anyone's camera is on:
@@ -1472,8 +1541,8 @@
     node.className = me ? 'cam me' : 'cam others';
     node.dataset.id = id;
     node.innerHTML = '<video autoplay playsinline muted></video>'
-      + '<div class="cam-face"><span class="eye"><i></i></span><span class="eye"><i></i></span></div><span class="cam-name"></span>';
-    const tile = { node, video: node.querySelector('video'), name: node.querySelector('.cam-name') };
+      + `<div class="cam-face face" data-animal="ball">${FACE}</div><span class="cam-name"></span>`;
+    const tile = { node, video: node.querySelector('video'), name: node.querySelector('.cam-name'), face: node.querySelector('.face') };
     tiles.set(id, tile);
     return tile;
   }
@@ -1491,6 +1560,7 @@
       const tile = tiles.get(m.id) || makeTile(m.id, isMe);
       el.cams.appendChild(tile.node); // also keeps the order of the member list
       tile.node.style.setProperty('--c', m.color || '#ffffff');
+      tile.face.dataset.animal = isMe ? myAnimal() : animalOf(m);
       tile.node.classList.toggle('speaking', speaking.has(m.id));
       const camOn = isMe ? !!voice.cam : !!m.cam;
       const peer = peers.get(m.id);
@@ -3119,6 +3189,7 @@
 
   // ---------------------------------------------------------------- join
   el.nameInput.value = prefs.name;
+  renderLook();
   el.joinForm.addEventListener('submit', (e) => {
     e.preventDefault();
     prefs.name = el.nameInput.value.trim().slice(0, 24) || '?';
@@ -3229,16 +3300,20 @@
   function renderCenter () {
     let text = '';
     let clickable = false;
+    let note = false;
     if (S.media && !screen.owner && !S.room.loading) {
       if (S.room.waiting && S.room.waiting.length) {
         const names = S.members.filter((m) => S.room.waiting.includes(m.id)).map((m) => m.name);
         text = t('waiting_for', { names: names.join(', ') || '…' });
       } else if (S.autoplayBlocked && S.joined) {
         text = t('autoplay_blocked'); clickable = true;
+      } else if (!S.room.playing && S.room.pausedBy && S.room.pausedBy.id !== S.clientId) {
+        text = t('paused_by', { name: S.room.pausedBy.name }); note = true;
       }
     }
     el.centerMsg.textContent = text;
     el.centerMsg.classList.toggle('clickable', clickable);
+    el.centerMsg.classList.toggle('note', note);
     el.empty.hidden = !!S.media || !!screen.owner || S.opening;
     renderLoader();
     el.centerMsg.hidden = !text || !el.loader.hidden;

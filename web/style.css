@@ -81,6 +81,8 @@ html.stage-fill, html.stage-fill body { overflow: hidden; }
   max-width: 80%; text-align: center; cursor: default;
 }
 .center-msg.clickable { cursor: pointer; border-color: var(--accent); }
+/* "Masha paused": a small note at the top, out of the picture's way and of clicks. */
+.center-msg.note { top: 12px; transform: translateX(-50%); padding: 4px 12px; border-radius: 999px; font-size: 13px; pointer-events: none; }
 
 /* ---- waiting: a spinner, and on the stage a loader that follows the steps of opening a film ---- */
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -160,7 +162,7 @@ button.busy:disabled::before, .loading::before {
 .member.others { cursor: pointer; }
 .member .mic-off { display: inline-block; width: 12px; height: 12px; margin-left: 4px; vertical-align: -1px; fill: var(--muted); }
 .member.speaking { box-shadow: 0 0 0 2px var(--c, var(--accent)), 0 0 12px var(--c, var(--accent)); }
-.ball.speaking .body { box-shadow: 0 0 0 3px rgba(255, 255, 255, .9), 0 0 16px 5px var(--c, #fff); }
+.ball.speaking .head { box-shadow: 0 0 0 3px rgba(255, 255, 255, .9), 0 0 16px 5px var(--c, #fff); }
 .peer-pop {
   position: fixed; z-index: 40; display: grid; gap: 6px; width: 200px; padding: 10px 12px;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; font-size: 13px; box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
@@ -196,18 +198,8 @@ button.busy:disabled::before, .loading::before {
 .stage.ball-cursor { cursor: none; }
 .ball { position: absolute; left: 0; top: 0; transition: opacity .25s ease; will-change: transform; }
 .ball.gone, .stage.idle .ball.me { opacity: 0; }
-.ball .body {
-  position: absolute; left: -14px; top: -14px; width: 28px; height: 28px; border-radius: 50%;
-  display: flex; align-items: center; justify-content: center; gap: 3px;
-  background: radial-gradient(circle at 34% 28%, rgba(255, 255, 255, .5), transparent 52%), var(--c, #fff);
-  box-shadow: 0 3px 8px rgba(0, 0, 0, .45), inset 0 -3px 0 rgba(0, 0, 0, .16);
-  transition: transform .12s ease;
-}
-.ball .eye { position: relative; width: 8px; height: 10px; border-radius: 50%; background: #fff; overflow: hidden; }
-.ball .eye i {
-  position: absolute; left: 2px; top: 3px; width: 4px; height: 4px; border-radius: 50%; background: #15161a;
-  transform: translate(var(--lx, 0px), var(--ly, 0px));
-}
+.ball .body { position: absolute; left: -14px; top: -14px; width: 28px; height: 28px; transition: transform .12s ease; }
+.ball .eye i { transform: translate(var(--lx, 0px), var(--ly, 0px)); }
 .ball.blink .body { transform: scale(.86); }
 .ball.blink .eye { animation: blink .36s ease; }
 @keyframes blink { 0%, 100% { transform: scaleY(1); } 25%, 75% { transform: scaleY(.1); } }
@@ -263,15 +255,77 @@ button.busy:disabled::before, .loading::before {
 .cam video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; display: none; }
 .cam.live video { display: block; }
 .cam.me video { transform: scaleX(-1); } /* a mirror, as people expect to see themselves */
-.cam-face {
-  position: absolute; left: 50%; top: 45%; width: 34%; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%;
-  display: flex; align-items: center; justify-content: center; gap: 8%;
+.cam-face { position: absolute; left: 50%; top: 52%; width: 28%; aspect-ratio: 1; transform: translate(-50%, -50%); }
+.cam.live .cam-face { display: none; }
+
+/* ---- a face: the viewer's colour, two eyes, and the ears and snout of the animal they chose.
+   Sized by its box (everything in %), so the same markup is the pointer ball, the camera tile
+   and the join screen's preview. The ears come first, so the head covers their bottoms. ---- */
+.face { position: relative; }
+.face .head {
+  position: absolute; inset: 0; border-radius: 50%; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: center; gap: 9%;
   background: radial-gradient(circle at 34% 28%, rgba(255, 255, 255, .5), transparent 52%), var(--c, #fff);
   box-shadow: 0 3px 8px rgba(0, 0, 0, .45), inset 0 -3px 0 rgba(0, 0, 0, .16);
 }
-.cam.live .cam-face { display: none; }
-.cam-face .eye { position: relative; width: 22%; height: 28%; border-radius: 50%; background: #fff; overflow: hidden; }
-.cam-face .eye i { position: absolute; left: 25%; top: 30%; width: 50%; height: 40%; border-radius: 50%; background: #15161a; }
+.face .eye { position: relative; width: 28%; height: 35%; border-radius: 50%; background: #fff; overflow: hidden; transition: transform .12s ease; }
+.face .eye i { position: absolute; left: 25%; top: 30%; width: 50%; height: 40%; border-radius: 50%; background: #15161a; }
+.face .ear, .face .snout { display: none; position: absolute; }
+/* Talking: the eyes shut into happy arcs while the voice lasts. */
+.speaking .face .eye, .face.speaking .eye {
+  height: 16%; margin-bottom: 8%; background: transparent; border-top: 2px solid #15161a; border-radius: 50% 50% 0 0;
+}
+.speaking .face .eye i, .face.speaking .eye i { display: none; }
+.face:not([data-animal="ball"]):not([data-animal=""]) .head { padding-bottom: 16%; }
+.face .snout { left: 50%; transform: translateX(-50%); }
+
+.face[data-animal="cat"] .ear, .face[data-animal="fox"] .ear {
+  display: block; top: -14%; width: 40%; height: 44%; background: var(--c, #fff); clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.face[data-animal="cat"] .ear.l { left: 2%; transform: rotate(-16deg); }
+.face[data-animal="cat"] .ear.r { right: 2%; transform: rotate(16deg); }
+.face[data-animal="cat"] .snout { display: block; top: 60%; width: 16%; height: 10%; background: #ff8fa3; clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.face[data-animal="fox"] .ear { top: -22%; height: 52%; background: linear-gradient(transparent 55%, rgba(255, 255, 255, .55) 55%), var(--c, #fff); }
+.face[data-animal="fox"] .ear.l { left: 0; transform: rotate(-20deg); }
+.face[data-animal="fox"] .ear.r { right: 0; transform: rotate(20deg); }
+.face[data-animal="fox"] .snout {
+  display: block; top: 55%; width: 62%; height: 38%; border-radius: 0 0 50% 50%;
+  background: radial-gradient(circle at 50% 22%, #15161a 0 12%, transparent 13%), rgba(255, 255, 255, .85);
+  clip-path: polygon(0 0, 100% 0, 60% 100%, 40% 100%);
+}
+.face[data-animal="bear"] .ear, .face[data-animal="panda"] .ear, .face[data-animal="mouse"] .ear {
+  display: block; top: -8%; width: 36%; height: 36%; border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 0, 0, .2) 0 38%, transparent 40%), var(--c, #fff);
+}
+.face[data-animal="bear"] .ear.l, .face[data-animal="panda"] .ear.l { left: 0; }
+.face[data-animal="bear"] .ear.r, .face[data-animal="panda"] .ear.r { right: 0; }
+.face[data-animal="bear"] .snout {
+  display: block; top: 56%; width: 38%; height: 28%; border-radius: 50%;
+  background: radial-gradient(ellipse 22% 20% at 50% 30%, #15161a 0 96%, transparent 100%), rgba(255, 255, 255, .78);
+}
+.face[data-animal="panda"] .ear { background: #15161a; box-shadow: 0 0 0 max(1px, .06em) rgba(255, 255, 255, .75); }
+.face[data-animal="panda"] .eye { background: #15161a; }
+.face[data-animal="panda"] .eye i { background: #fff; }
+.speaking .face[data-animal="panda"] .eye, .face.speaking[data-animal="panda"] .eye { background: transparent; }
+.face[data-animal="panda"] .snout { display: block; top: 62%; width: 18%; height: 11%; border-radius: 50%; background: #15161a; }
+.face[data-animal="mouse"] .ear { top: -16%; width: 46%; height: 46%; background: radial-gradient(circle, #ffb3c4 0 45%, transparent 47%), var(--c, #fff); }
+.face[data-animal="mouse"] .ear.l { left: -12%; }
+.face[data-animal="mouse"] .ear.r { right: -12%; }
+.face[data-animal="mouse"] .snout { display: block; top: 61%; width: 14%; height: 12%; border-radius: 50%; background: #ff8fa3; }
+.face[data-animal="bunny"] .ear {
+  display: block; top: -48%; width: 24%; height: 64%; border-radius: 50%;
+  background: radial-gradient(ellipse 34% 40% at 50% 52%, #ffb3c4 0 96%, transparent 100%), var(--c, #fff);
+}
+.face[data-animal="bunny"] .ear.l { left: 18%; transform: rotate(-8deg); }
+.face[data-animal="bunny"] .ear.r { right: 18%; transform: rotate(8deg); }
+.face[data-animal="bunny"] .snout { display: block; top: 60%; width: 14%; height: 10%; border-radius: 50%; background: #ff8fa3; }
+.face[data-animal="dog"] .ear {
+  display: block; top: 2%; width: 30%; height: 54%; border-radius: 50%;
+  background: linear-gradient(rgba(0, 0, 0, .28), rgba(0, 0, 0, .28)), var(--c, #fff);
+}
+.face[data-animal="dog"] .ear.l { left: -12%; transform: rotate(22deg); }
+.face[data-animal="dog"] .ear.r { right: -12%; transform: rotate(-22deg); }
+.face[data-animal="dog"] .snout { display: block; top: 58%; width: 22%; height: 14%; border-radius: 50%; background: #15161a; }
 .cam-name {
   position: absolute; left: 6px; bottom: 5px; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   padding: 0 7px 1px; border-radius: 999px; background: rgba(0, 0, 0, .6); font-size: 12px; font-weight: 600;
@@ -300,7 +354,7 @@ button.busy:disabled::before, .loading::before {
 #sfxBtn.off .i-off { display: block; }
 .palette {
   position: absolute; right: calc(100% + 8px); top: 50%; transform: translateY(-50%);
-  display: grid; grid-template-columns: repeat(2, 26px); gap: 8px; padding: 10px;
+  display: grid; grid-template-columns: repeat(4, 38px); justify-items: center; gap: 8px; padding: 10px;
   background: rgba(10, 11, 14, .88); border: 1px solid var(--line); border-radius: 12px;
 }
 .palette button { width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 2px solid transparent; background: var(--c); }
@@ -424,7 +478,27 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 }
 .preview video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: none; }
 .preview.live video { display: block; }
-.preview-off { position: absolute; inset: 0 0 46px; margin: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; padding: 0 12px; text-align: center; }
+.preview-off {
+  position: absolute; inset: 0 0 46px; margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; color: var(--muted); font-size: 13px; padding: 0 12px; text-align: center;
+}
+.preview-off p { margin: 0; }
+#previewFace { width: 54px; height: 54px; margin-top: 10px; }
+.look { display: grid; gap: 8px; margin: 0 0 14px; }
+.look-label { font-size: 13px; color: var(--muted); }
+.look-colors { display: flex; flex-wrap: wrap; gap: 8px; }
+.look-animals { display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; }
+.look-colors button { width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 2px solid transparent; background: var(--c); }
+.look-colors button.sel, .palette button.sel { border-color: #fff; }
+.look-colors button.taken { opacity: .3; }
+.look-animals button, .palette-animals button {
+  padding: 6px 5px 4px; border-radius: 10px; border: 2px solid transparent; background: rgba(255, 255, 255, .06);
+}
+.look-animals button.sel, .palette-animals button.sel { border-color: var(--c, #fff); background: rgba(255, 255, 255, .12); }
+.look-animals .face, .palette-animals .face { width: 100%; height: 100%; }
+.palette-animals { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(4, 38px); gap: 6px; padding-top: 8px; border-top: 1px solid var(--line); }
+.palette-animals button { width: 38px; height: 38px; }
+.look-animals button { width: 100%; aspect-ratio: 1; }
 .preview.live .preview-off { display: none; }
 .preview-btns { position: absolute; left: 0; right: 0; bottom: 8px; display: flex; justify-content: center; gap: 12px; }
 .round {

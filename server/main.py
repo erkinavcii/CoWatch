@@ -36,7 +36,7 @@ from . import filepicker, library, stremio, tailscale, translate
 from .stremio import StremioError
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, pick_encoder, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
-from .presence import PALETTE, POKE_INTERVAL_S, chat_text, pick_color, point, stroke_message
+from .presence import ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, pick_color, point, stroke_message
 from .room import Client, Room, now_ms
 from .signaling import ice_servers, rtc_data
 from .subtitles import (
@@ -259,10 +259,15 @@ class Controller:
                    "color": client.color, "text": text, "ts": now_ms()}
             self.room.chat.append(out)
             self._relay(None, out)
-        elif kind == "color":
+        elif kind == "color":  # the colour, the animal, or both
+            changed = False
             color = str(msg.get("color", "")).lower()
             if color in PALETTE and color != client.color:
-                client.color = color
+                client.color, changed = color, True
+            animal = msg.get("animal")
+            if animal in ANIMALS and animal != client.animal:
+                client.animal, changed = animal, True
+            if changed:
                 await self.room.broadcast(self.room.members_msg())
         elif kind == "rtc":
             target = self.room.clients.get(str(msg.get("to", "")))
@@ -315,6 +320,7 @@ class Controller:
         elif kind == "hello":
             client.name = clean_name(msg.get("name"))
             client.joined = True
+            client.animal = msg.get("animal") if msg.get("animal") in ANIMALS else "ball"
             self._set_av(client, msg)
             taken = {c.color for c in self.room.clients.values() if c is not client and c.color}
             client.color = pick_color(msg.get("color"), taken)
@@ -339,7 +345,7 @@ class Controller:
                     await self.seek(0.0)  # play again from the start
                 if self.room.play():
                     await self.broadcast_state()
-            elif kind == "pause" and self.room.pause():
+            elif kind == "pause" and self.room.pause(by=client):
                 await self.broadcast_state()
             elif kind == "seek":
                 try:

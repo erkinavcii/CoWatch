@@ -32,6 +32,7 @@ class Client:
         self.host = host  # the host at this computer (`main.is_local`)
         self.name = "?"
         self.color = ""
+        self.animal = "ball"
         self.joined = False  # sent hello: pressed "Join", so it can take part in voice and camera
         self.mic = False
         self.cam = False
@@ -87,6 +88,7 @@ class Room:
         self.updated_at = now_ms()
         self.rate = 1.0
         self.loading = False  # server is restarting the stream
+        self.paused_by: Optional[dict] = None  # {id, name} of who paused, for "Masha paused"
         self.seq = 0
 
     # ---- time -------------------------------------------------------------
@@ -118,11 +120,12 @@ class Room:
         self.playing = True
         return self._changed()
 
-    def pause(self) -> bool:
+    def pause(self, by: Optional[Client] = None) -> bool:
         if not self.playing:
             return False
         self._freeze()
         self.playing = False
+        self.paused_by = {"id": by.id, "name": by.name} if by is not None else None
         return self._changed()
 
     def seek(self, position: float) -> bool:
@@ -146,6 +149,7 @@ class Room:
 
     def reset(self) -> None:
         self.playing = False
+        self.paused_by = None
         self.position = 0.0
         self.updated_at = now_ms()
         self.loading = False
@@ -201,6 +205,7 @@ class Room:
             "rate": self.rate,
             "loading": self.loading,
             "waiting": self.waiting(),
+            "pausedBy": None if self.playing else self.paused_by,
             "seq": self.seq,
         }
 
@@ -209,7 +214,7 @@ class Room:
             "type": "members",
             "members": [
                 {"id": c.id, "name": c.name, "color": c.color, "buffering": c.buffering,
-                 "joined": c.joined, "mic": c.mic, "cam": c.cam,
+                 "joined": c.joined, "mic": c.mic, "cam": c.cam, "animal": c.animal,
                  "host": c.host, "cohost": self.is_cohost(c.viewer)}
                 for c in self.clients.values()
             ],

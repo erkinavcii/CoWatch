@@ -69,6 +69,20 @@ def test_seek_and_loading(clock):
     assert room.seq > 0
 
 
+def test_the_state_says_who_paused(clock):
+    room = Room()
+    masha = room.add(None)
+    masha.name = "Masha"
+    room.play()
+    assert room.state_msg()["pausedBy"] is None
+    room.pause(by=masha)
+    assert room.state_msg()["pausedBy"] == {"id": masha.id, "name": "Masha"}
+    room.play()
+    assert room.state_msg()["pausedBy"] is None  # playing again: nobody's pause shows
+    room.pause()  # the server's own pause (a screen share): no name
+    assert room.state_msg()["pausedBy"] is None
+
+
 def test_screen_share_requests_run_out():
     import time
     from server.room import SHARE_ASK_TIMEOUT_S
