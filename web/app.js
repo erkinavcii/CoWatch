@@ -3113,8 +3113,10 @@
   const chatDocked = () => el.chatBox.parentNode === el.chatDock;
   const chatOpen = () => (chatDocked() ? prefs.chatDock : CHAT.overlay);
   // In sight: the column while its part of the page is on screen, the panel unless the film
-  // is in the corner box (where it is hidden).
-  const chatSeen = () => chatOpen() && (chatDocked() ? MINI.visible : !el.stage.classList.contains('mini'));
+  // is in the corner box (where it is hidden); neither while the tab is behind another one.
+  const chatSeen = () => chatOpen() && (!!PIP.win || !document.hidden) &&
+    (chatDocked() ? MINI.visible : !el.stage.classList.contains('mini'));
+  const PAGE_TITLE = document.title;
 
   function placeChat () {
     const parent = dockScreen.matches && !stageFull() && !PIP.win ? el.chatDock : el.stage;
@@ -3135,6 +3137,8 @@
     el.chatBtn.classList.toggle('on', open);
     el.chatBadge.hidden = !CHAT.unread;
     el.chatBadge.textContent = CHAT.unread > 99 ? '99+' : String(CHAT.unread);
+    el.stage.classList.toggle('chat-unread', CHAT.unread > 0); // the dot while the controls are hidden
+    document.title = CHAT.unread ? `(${el.chatBadge.textContent}) ${PAGE_TITLE}` : PAGE_TITLE; // on the tab
   }
   function onChat (msg) {
     CHAT.messages.push(msg);
@@ -3181,6 +3185,7 @@
     el.chatInput.value = '';
   });
   dockScreen.addEventListener('change', placeChat);
+  document.addEventListener('visibilitychange', () => { if (chatSeen() && CHAT.unread) renderChat(); });
   document.addEventListener('fullscreenchange', placeChat);
   // Back from the corner box: what came meanwhile is now in sight.
   new MutationObserver(() => { if (chatSeen() && CHAT.unread) renderChat(); })

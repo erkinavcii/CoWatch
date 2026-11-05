@@ -380,11 +380,17 @@ def run(headed: bool) -> None:
             a.wait_for_function("() => document.querySelector('#chatPeek .chat-msg')", timeout=3000)
             badge = a.evaluate("() => document.querySelector('#chatBadge').hidden ? '' : document.querySelector('#chatBadge').textContent")
             check("with the column closed a message peeks over the picture and counts", badge == "1", badge)
+            dot = a.evaluate("""() => { const stage = document.querySelector('#stage'); const idle = stage.classList.contains('idle');
+              stage.classList.add('idle'); const shown = getComputedStyle(document.querySelector('.chat-dot')).display;
+              if (!idle) stage.classList.remove('idle'); return {shown, title: document.title}; }""")
+            check("with the controls hidden a dot stays in the corner, and the tab counts", dot["shown"] == "grid" and dot["title"].startswith("(1) "), str(dot))
             a.click("#chatBtn")
             time.sleep(0.3)
             seen = a.evaluate("""() => ({docked: document.querySelector('#watch').classList.contains('docked'),
-              badge: document.querySelector('#chatBadge').hidden, peek: document.querySelectorAll('#chatPeek .chat-msg').length})""")
-            check("the button brings the column back and clears the count", seen["docked"] and seen["badge"] and not seen["peek"], str(seen))
+              badge: document.querySelector('#chatBadge').hidden, peek: document.querySelectorAll('#chatPeek .chat-msg').length,
+              dot: document.querySelector('#stage').classList.contains('chat-unread'), title: document.title})""")
+            check("the button brings the column back and clears the count",
+                  seen["docked"] and seen["badge"] and not seen["peek"] and not seen["dot"] and not seen["title"].startswith("("), str(seen))
 
             a.evaluate("() => document.querySelector('#stage').requestFullscreen()")
             a.wait_for_function("() => document.fullscreenElement && document.querySelector('#chatBox').parentNode.id === 'stage'", timeout=3000)
