@@ -407,9 +407,11 @@ button:disabled { opacity: .55; cursor: progress; }
 button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
 button.ghost { background: transparent; }
 button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
-.field { display: grid; gap: 4px; margin: 8px 0; }
+/* minmax(0, …): a select is as wide as its longest option; a long subtitle name must not widen the card. */
+.field { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; margin: 8px 0; }
 .field > span { font-size: 13px; color: var(--muted); }
-.grid2 { display: grid; gap: 0 12px; grid-template-columns: 1fr 1fr; }
+.field select { min-width: 0; text-overflow: ellipsis; }
+.grid2 { display: grid; gap: 0 12px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .hint { font-size: 12.5px; color: var(--muted); margin: 4px 0; }
 .info { font-size: 13px; color: var(--muted); margin-top: 6px; overflow-wrap: anywhere; }
 .info b { color: var(--text); font-weight: 600; }
@@ -702,7 +704,7 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
   .top { padding: 8px 12px; gap: 8px; }
   .film-title { display: none; }
   .bar .volume { display: none; }
-  .grid2 { grid-template-columns: 1fr; }
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
   .qr { display: none; } /* the phone is the one that would scan it */
   .stage.mini { width: 58vw; right: 10px; bottom: 10px; }
   .settings-card { margin: 0; padding: 14px; }
