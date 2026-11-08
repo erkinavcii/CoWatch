@@ -194,7 +194,7 @@ button.busy:disabled::before, .loading::before {
 /* ---- shared pointers: a ball with eyes and a name tag per viewer ---- */
 .draw { position: absolute; z-index: 3; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .stage.drawing .draw { pointer-events: auto; cursor: crosshair; touch-action: none; }
-.stage.erasing .draw { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28'%3E%3Ccircle cx='14' cy='14' r='12' fill='rgba(255,255,255,.18)' stroke='white' stroke-width='2'/%3E%3Ccircle cx='14' cy='14' r='12' fill='none' stroke='black' stroke-opacity='.5' stroke-width='1' stroke-dasharray='3 3'/%3E%3C/svg%3E") 14 14, cell; }
+.stage.erasing .draw { cursor: var(--eraser-cursor, cell); }
 .cursors { position: absolute; z-index: 4; inset: 0; pointer-events: none; overflow: hidden; }
 .stage.ball-cursor { cursor: none; }
 .ball { position: absolute; left: 0; top: 0; transition: opacity .25s ease; will-change: transform; }
@@ -374,6 +374,15 @@ button.busy:disabled::before, .loading::before {
   display: grid; grid-template-columns: repeat(4, 38px); justify-items: center; gap: 8px; padding: 10px;
   background: rgba(10, 11, 14, .88); border: 1px solid var(--line); border-radius: 12px;
 }
+/* The eraser's two kinds, beside it while it is on. */
+.eraser-modes {
+  position: absolute; right: calc(100% + 8px); transform: translateY(-50%); display: flex; gap: 4px; padding: 4px;
+  background: rgba(10, 11, 14, .88); border: 1px solid var(--line); border-radius: 10px;
+}
+.eraser-modes button { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; color: #fff; background: transparent; border: 1px solid transparent; border-radius: 8px; }
+.eraser-modes button svg { width: 20px; height: 20px; }
+.eraser-modes button:hover { background: rgba(255, 255, 255, .12); }
+.eraser-modes button.sel { background: var(--me, var(--accent)); color: #111; }
 .palette button { width: 26px; height: 26px; padding: 0; border-radius: 50%; border: 2px solid transparent; background: var(--c); }
 .palette button:hover { border-color: rgba(255, 255, 255, .5); }
 .palette button.sel { border-color: #fff; }

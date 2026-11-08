@@ -46,6 +46,13 @@ def test_erase_message_names_whole_strokes():
     assert erase_message({"strokes": "s1"}, "abc") is None
 
 
+def test_an_eraser_is_a_stroke_that_says_so():
+    out = stroke_message({"id": "e1", "start": True, "erase": 1, "points": [[0.5, 0.5]]}, "abc", PALETTE[0])
+    assert out["erase"] is True and out["start"] is True
+    assert "erase" not in stroke_message({"id": "s1", "start": True, "points": [[0.5, 0.5]]}, "abc", PALETTE[0])
+    assert "erase" not in stroke_message({"id": "e1", "erase": True, "points": [[0.5, 0.5]]}, "abc", PALETTE[0])
+
+
 def _next(ws, kinds):
     """The next message of one of `kinds`, skipping the rest (members, pongs...)."""
     for _ in range(50):
@@ -100,6 +107,9 @@ def test_colors_cursors_pokes_and_drawings_reach_the_others():
                 second = _next(b, {"draw"})
                 assert second["points"] == [[0.3, 0.4]] and second["end"]
 
+                b.send_json({"type": "draw", "id": "e1", "start": True, "erase": True, "points": [[0.2, 0.3]], "end": True})
+                rubbed = _next(a, {"draw"})
+                assert rubbed["from"] == b_id and rubbed["erase"] and rubbed["end"]
                 b.send_json({"type": "draw_erase", "strokes": [[a_id, "s1"]]})
                 assert _next(a, {"draw_erase"}) == {"type": "draw_erase", "from": b_id, "strokes": [[a_id, "s1"]]}
 

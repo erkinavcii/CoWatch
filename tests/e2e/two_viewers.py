@@ -342,7 +342,7 @@ def run(headed: bool) -> None:
             check("a stroke shows in the other window at the same spot, in the drawer's colour",
                   on[3] > 200 and drawn == color["Erkin"] and off[3] == 0, f"{drawn} alpha {on[3]}, off-line alpha {off[3]}")
 
-            # ---- eraser: A draws a second line lower down; B rubs across the first one only
+            # ---- eraser: A draws a second line lower down; B rubs across the first, then takes the second whole
             a.mouse.move(ra["left"] + 0.2 * ra["w"], ra["top"] + 0.6 * ra["h"])
             a.mouse.down()
             a.mouse.move(ra["left"] + 0.6 * ra["w"], ra["top"] + 0.6 * ra["h"], steps=20)
@@ -355,12 +355,25 @@ def run(headed: bool) -> None:
             b.mouse.down()
             b.mouse.move(rb["left"] + 0.4 * rb["w"], rb["top"] + 0.45 * rb["h"], steps=12)
             b.mouse.up()
-            a.wait_for_function(f"() => {DBG}.strokes === 1", timeout=3000)
+            a.wait_for_function(f"() => {DBG}.strokes === 3", timeout=3000)
             time.sleep(0.3)
-            gone, kept = a.evaluate(CANVAS_PIXEL, [0.4, 0.3]), a.evaluate(CANVAS_PIXEL, [0.4, 0.6])
-            check("the eraser takes the line it crosses for everyone, and leaves the other",
-                  b.evaluate(f"() => {DBG}.eraser && {DBG}.strokes === 1") and gone[3] == 0 and kept[3] > 200,
-                  f"crossed alpha {gone[3]}, other alpha {kept[3]}")
+            px = lambda x, y: a.evaluate(CANVAS_PIXEL, [x, y])[3]
+            gone, left, other = px(0.4, 0.3), px(0.25, 0.3), px(0.4, 0.6)
+            check("the eraser rubs out only where it passes, for everyone",
+                  b.evaluate(f"() => {DBG}.eraser && !{DBG}.eraseWhole") and gone == 0 and left > 200 and other > 200,
+                  f"rubbed alpha {gone}, rest of the line {left}, other line {other}")
+            b.mouse.move(400, 300)
+            b.click("#eraserModes [data-mode=whole]")
+            b.mouse.move(rb["left"] + 0.3 * rb["w"], rb["top"] + 0.5 * rb["h"])
+            b.mouse.down()
+            b.mouse.move(rb["left"] + 0.3 * rb["w"], rb["top"] + 0.7 * rb["h"], steps=8)
+            b.mouse.up()
+            a.wait_for_function(f"() => {DBG}.strokes === 2", timeout=3000)
+            time.sleep(0.3)
+            other, left = px(0.5, 0.6), px(0.25, 0.3)
+            check("the whole-line eraser takes the line it touches, all of it",
+                  other == 0 and left > 200, f"touched line {other}, the first line {left}")
+            b.click("#eraserModes [data-mode=area]")
             b.keyboard.press("e")  # eraser off
 
             # ---- clear: B clears the drawings for everyone

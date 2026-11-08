@@ -80,6 +80,14 @@
         <button type="button" id="eraserBtn" class="tool" data-i18n-title="tool_eraser">
           <svg viewBox="0 0 24 24"><path d="M15.1 3.6a2 2 0 0 1 2.8 0l3.5 3.5a2 2 0 0 1 0 2.8L12.3 19H20v2H8.6l-5-5a2 2 0 0 1 0-2.8zM9.3 9.4 5 13.7 9.3 18h.2l3.7-3.7z"/></svg>
         </button>
+        <div class="eraser-modes" id="eraserModes" hidden>
+          <button type="button" data-mode="area" data-i18n-title="eraser_area">
+            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="2" stroke-dasharray="3 2.4"/></svg>
+          </button>
+          <button type="button" data-mode="whole" data-i18n-title="eraser_whole">
+            <svg viewBox="0 0 24 24"><path d="M3 15c3-6 6-6 9 0s6 6 9 0" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="m15 3 6 6m0-6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
         <button type="button" id="colorBtn" class="tool" data-i18n-title="tool_color"><span class="dot"></span></button>
         <div class="palette" id="palette" hidden></div>
         <button type="button" id="clearBtn" class="tool" data-i18n-title="tool_clear">

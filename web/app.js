@@ -25,7 +25,7 @@
     nameInput: $('#nameInput'), joinLang: $('#joinLang'), toasts: $('#toasts'),
     drawCanvas: $('#drawCanvas'), cursors: $('#cursors'), toolbar: $('#toolbar'), penBtn: $('#penBtn'),
     colorBtn: $('#colorBtn'), palette: $('#palette'), clearBtn: $('#clearBtn'), sfxBtn: $('#sfxBtn'),
-    eraserBtn: $('#eraserBtn'), camBig: $('#camBig'), camBigVideo: $('#camBig video'), camBigName: $('#camBigName'),
+    eraserBtn: $('#eraserBtn'), eraserModes: $('#eraserModes'), camBig: $('#camBig'), camBigVideo: $('#camBig video'), camBigName: $('#camBigName'),
     micBtn: $('#micBtn'), micMenuBtn: $('#micMenuBtn'), micMenu: $('#micMenu'), micDevice: $('#micDevice'),
     duckCheck: $('#duckCheck'), peerPop: $('#peerPop'), peerPopName: $('#peerPopName'), peerVol: $('#peerVol'),
     voices: $('#voices'), camBtn: $('#camBtn'), camMenuBtn: $('#camMenuBtn'), camMenu: $('#camMenu'),
@@ -79,7 +79,7 @@
     name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '', offsetMs: 0,
     fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false, color: '', sfx: true,
     micDevice: '', duck: true, peerVolume: {}, micHintShown: false, camDevice: '', showSelf: true, showCams: true,
-    camCorner: 'tr', camsSmall: false, browseCatalog: '', chatDock: true,
+    camCorner: 'tr', camsSmall: false, browseCatalog: '', chatDock: true, eraseWhole: false,
   };
   const prefs = (() => {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULT_PREFS }; }
@@ -903,14 +903,18 @@
   }
 
   // ---- pen
-  const strokes = new Map(); // `${owner}:${id}` -> { id, owner, color, pts, done, fadeAt }
+  // An eraser is a stroke too (`erase`): drawn in order with the others, it rubs out what was
+  // drawn before it where it passes, as wide as a share of the picture so it covers the same
+  // spot on every screen. It never fades by itself; it goes once nothing is left under it.
+  const strokes = new Map(); // `${owner}:${id}` -> { id, owner, color, pts, done, fadeAt, erase }
+  const ERASER_SIZE = 0.045; // of the picture's height: about 50 px on a 1080p picture
   const drawCtx = el.drawCanvas.getContext('2d');
   let drawDirty = true; let geomKey = '';
   let myStroke = null; let strokeQueue = []; let strokeTimer = null;
 
-  function addStroke (key, id, owner, color) {
+  function addStroke (key, id, owner, color, erase = false) {
     if (strokes.size >= MAX_STROKES) strokes.delete(strokes.keys().next().value);
-    const stroke = { id, owner, color, pts: [], done: false, fadeAt: null };
+    const stroke = { id, owner, color, pts: [], done: false, fadeAt: null, erase };
     strokes.set(key, stroke);
     return stroke;
   }
@@ -918,13 +922,13 @@
   // strokes stay until playback resumes or someone clears them.
   function finishStroke (stroke) {
     stroke.done = true;
-    stroke.fadeAt = roomRunning() ? performance.now() + STROKE_HOLD_MS : null;
+    stroke.fadeAt = roomRunning() && !stroke.erase ? performance.now() + STROKE_HOLD_MS : null;
     drawDirty = true;
   }
   function retimeStrokes () {
     const running = roomRunning(); const now = performance.now();
     for (const stroke of strokes.values()) {
-      if (!stroke.done) continue;
+      if (!stroke.done || stroke.erase) continue;
       if (running && stroke.fadeAt === null) stroke.fadeAt = now + 1500;
       else if (!running && stroke.fadeAt !== null && stroke.fadeAt > now) stroke.fadeAt = null;
     }
@@ -933,7 +937,7 @@
   function onDraw (msg) {
     if (!msg.from || msg.from === S.clientId) return;
     const key = `${msg.from}:${msg.stroke}`;
-    const stroke = strokes.get(key) || addStroke(key, msg.stroke, msg.from, msg.color || colorOf(msg.from));
+    const stroke = strokes.get(key) || addStroke(key, msg.stroke, msg.from, msg.color || colorOf(msg.from), !!msg.erase);
     for (const p of msg.points || []) if (stroke.pts.length < MAX_STROKE_POINTS) stroke.pts.push(p);
     if (msg.end) finishStroke(stroke);
     drawDirty = true;
@@ -962,30 +966,58 @@
     el.eraserBtn.classList.toggle('active', S.eraser);
     el.palette.hidden = true;
     if (S.penMode) withdrawCursor(); // while drawing, the stroke itself shows where you are
+    renderEraserModes();
     renderMine();
   }
+  // Two erasers: the area under it (a stroke that rubs out), or whole lines it touches.
+  function renderEraserModes () {
+    el.eraserModes.hidden = !S.eraser;
+    el.stage.classList.toggle('erase-whole', S.eraser && !!prefs.eraseWhole);
+    if (!S.eraser) return;
+    el.eraserModes.style.top = `${el.eraserBtn.offsetTop + el.eraserBtn.offsetHeight / 2}px`;
+    for (const btn of el.eraserModes.querySelectorAll('button')) {
+      btn.classList.toggle('sel', (btn.dataset.mode === 'whole') === !!prefs.eraseWhole);
+    }
+    sizeEraserCursor(geom());
+  }
+  el.eraserModes.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    prefs.eraseWhole = btn.dataset.mode === 'whole'; savePrefs();
+    renderEraserModes();
+  });
+  // The pointer is a ring as wide as what the eraser takes away.
+  let eraserCursorPx = 0;
+  function sizeEraserCursor (g) {
+    const d = prefs.eraseWhole ? 2 * ERASER_PX : Math.round(clamp(g.h * ERASER_SIZE, 8, 120));
+    if (d === eraserCursorPx) return;
+    eraserCursorPx = d;
+    const r = d / 2 - 1.5; const c = d / 2;
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${d}' height='${d}'>`
+      + `<circle cx='${c}' cy='${c}' r='${r}' fill='rgba(255,255,255,.18)' stroke='white' stroke-width='2'/>`
+      + `<circle cx='${c}' cy='${c}' r='${r}' fill='none' stroke='black' stroke-opacity='.5' stroke-dasharray='3 3'/></svg>`;
+    el.stage.style.setProperty('--eraser-cursor', `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${Math.round(c)} ${Math.round(c)}, cell`);
+  }
   const setPen = (on) => setTool(on ? 'pen' : null);
-  el.penBtn.addEventListener('click', () => setTool(S.penMode && !S.eraser ? null : 'pen'));
-  el.eraserBtn.addEventListener('click', () => setTool(S.eraser ? null : 'eraser'));
 
-  // The eraser takes whole strokes, anyone's, as it passes over them (finished ones only).
+  // The whole-line eraser takes the pen lines it touches, anyone's (finished ones only).
   const ERASER_PX = 12;
-  let erasing = null;
+  let wiping = null;
   function segmentDistance (px, py, ax, ay, bx, by) {
     const dx = bx - ax; const dy = by - ay;
     const len = dx * dx + dy * dy;
     const k = len ? clamp(((px - ax) * dx + (py - ay) * dy) / len, 0, 1) : 0;
     return Math.hypot(px - (ax + k * dx), py - (ay + k * dy));
   }
-  function eraseAt (events) {
+  function wipeAt (events) {
     const g = geom();
-    const reach = ERASER_PX + Math.max(4, g.h * 0.009) / 2; // the eraser's radius and half a line
+    const reach = ERASER_PX + Math.max(4, g.h * 0.009) / 2; // the ring's radius and half a line
     const hit = [];
     for (const ev of events) {
       const [x, y] = toPicture(ev, g);
       const px = x * g.w; const py = y * g.h;
       for (const [key, stroke] of strokes) {
-        if (!stroke.done || hit.includes(key)) continue;
+        if (!stroke.done || stroke.erase || hit.includes(key)) continue;
         const pts = stroke.pts;
         for (let i = 0; i < pts.length; i++) {
           const a = pts[i]; const b = pts[Math.min(i + 1, pts.length - 1)];
@@ -997,25 +1029,27 @@
     send({ type: 'draw_erase', strokes: hit.map((key) => { const s = strokes.get(key); return [s.owner, s.id]; }) });
     eraseStrokes(hit);
   }
+  el.penBtn.addEventListener('click', () => setTool(S.penMode && !S.eraser ? null : 'pen'));
+  el.eraserBtn.addEventListener('click', () => setTool(S.eraser ? null : 'eraser'));
 
   el.drawCanvas.addEventListener('pointerdown', (e) => {
     if (!S.penMode || !S.joined || (e.pointerType === 'mouse' && e.button !== 0)) return;
     e.preventDefault();
     el.drawCanvas.setPointerCapture(e.pointerId);
-    if (S.eraser) { erasing = e.pointerId; eraseAt([e]); return; }
+    if (S.eraser && prefs.eraseWhole) { wiping = e.pointerId; wipeAt([e]); return; }
     const id = Math.random().toString(36).slice(2, 10);
     const p = toPicture(e, geom());
     const color = myColor();
-    myStroke = addStroke(`${S.clientId}:${id}`, id, S.clientId, color);
+    myStroke = addStroke(`${S.clientId}:${id}`, id, S.clientId, color, S.eraser);
     myStroke.pts.push(p);
     strokeQueue = [];
-    send({ type: 'draw', id, start: true, color, points: [p] });
+    send(S.eraser ? { type: 'draw', id, start: true, erase: true, points: [p] } : { type: 'draw', id, start: true, color, points: [p] });
     drawDirty = true;
   });
   el.drawCanvas.addEventListener('pointermove', (e) => {
-    if (erasing === e.pointerId) {
+    if (wiping === e.pointerId) {
       const coalesced = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
-      eraseAt(coalesced.length ? coalesced : [e]);
+      wipeAt(coalesced.length ? coalesced : [e]);
       return;
     }
     if (!myStroke) return;
@@ -1044,7 +1078,7 @@
     } while (strokeQueue.length);
   }
   function endStroke (e) {
-    if (e && erasing === e.pointerId) erasing = null;
+    if (e && wiping === e.pointerId) wiping = null;
     if (!myStroke) return;
     flushStroke(true);
     finishStroke(myStroke);
@@ -1059,7 +1093,7 @@
     const cw = Math.max(1, Math.round(g.width * dpr)); const ch = Math.max(1, Math.round(g.height * dpr));
     if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; drawDirty = true; }
     const key = `${g.ox.toFixed(1)},${g.oy.toFixed(1)},${g.w.toFixed(1)},${g.h.toFixed(1)}`;
-    if (key !== geomKey) { geomKey = key; drawDirty = true; }
+    if (key !== geomKey) { geomKey = key; drawDirty = true; if (S.eraser) sizeEraserCursor(g); }
     let fading = false;
     for (const stroke of strokes.values()) {
       if (stroke.fadeAt !== null && now >= stroke.fadeAt) { fading = true; break; }
@@ -1070,18 +1104,25 @@
     ctx.clearRect(0, 0, cw, ch);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    ctx.lineWidth = Math.max(4, g.h * 0.009) * dpr; // a marker: about 10 px on a 1080p picture
+    const penWidth = Math.max(4, g.h * 0.009) * dpr; // a marker: about 10 px on a 1080p picture
+    const eraserWidth = g.h * ERASER_SIZE * dpr;
     ctx.shadowColor = 'rgba(0, 0, 0, .55)';
-    ctx.shadowBlur = 3 * dpr;
     const at = (p) => [(g.ox + p[0] * g.w) * dpr, (g.oy + p[1] * g.h) * dpr];
+    let inked = false; // a pen stroke so far, for an eraser to rub out
     for (const [strokeKey, stroke] of strokes) {
       let alpha = 1;
-      if (stroke.fadeAt !== null && now >= stroke.fadeAt) {
+      if (stroke.erase) {
+        if (stroke.done && !inked) { strokes.delete(strokeKey); continue; } // nothing left under it
+      } else if (stroke.fadeAt !== null && now >= stroke.fadeAt) {
         alpha = 1 - (now - stroke.fadeAt) / STROKE_FADE_MS;
         if (alpha <= 0) { strokes.delete(strokeKey); continue; }
       }
       const pts = stroke.pts;
       if (!pts.length) continue;
+      if (!stroke.erase) inked = true;
+      ctx.globalCompositeOperation = stroke.erase ? 'destination-out' : 'source-over';
+      ctx.lineWidth = stroke.erase ? eraserWidth : penWidth;
+      ctx.shadowBlur = stroke.erase ? 0 : 3 * dpr;
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = stroke.color;
       ctx.fillStyle = stroke.color;
@@ -1102,6 +1143,7 @@
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
   }
 
   let lastFrameAt = 0;
@@ -3604,7 +3646,7 @@
       showing: !el.screenVideo.hidden && el.screenVideo.videoWidth > 0 && !el.screenVideo.paused,
       asks: [...el.shareAsks.querySelectorAll('[data-from]')].map((n) => n.dataset.from),
     },
-    clientId: S.clientId, members: S.members, tracks: S.tracks, penMode: S.penMode, eraser: S.eraser, strokes: strokes.size, balls: [...balls.keys()],
+    clientId: S.clientId, members: S.members, tracks: S.tracks, penMode: S.penMode, eraser: S.eraser, eraseWhole: !!prefs.eraseWhole, strokes: strokes.size, balls: [...balls.keys()],
     voice: {
       mic: !!voice.mic, cam: !!voice.cam, camLive: !!(voice.cam && voice.cam.readyState === 'live'),
       duck, filmVolume: video.volume, speaking: [...speaking],

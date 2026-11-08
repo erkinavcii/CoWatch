@@ -14,7 +14,7 @@ PALETTE = ("#ff6b6b", "#4dabf7", "#51cf66", "#fcc419", "#cc5de8", "#ff922b", "#2
 ANIMALS = ("ball", "cat", "bear", "bunny", "fox", "panda", "mouse", "dog")
 POKE_INTERVAL_S = 0.15
 MAX_POINTS = 256  # per message; clients send a stroke in small batches
-MAX_ERASE = 64  # strokes one eraser message may remove
+MAX_ERASE = 64  # whole strokes one eraser message may remove
 
 _COLOR = re.compile(r"^#[0-9a-f]{6}$")
 _STROKE_ID = re.compile(r"^[a-z0-9]{1,12}$")
@@ -69,6 +69,8 @@ def stroke_message(msg: dict, sender_id: str, fallback_color: str) -> Optional[d
         color = str(msg.get("color", "")).lower()
         out["start"] = True
         out["color"] = color if _COLOR.match(color) else fallback_color
+        if msg.get("erase"):
+            out["erase"] = True  # rubs out what was drawn before it, where it passes
     if msg.get("end"):
         out["end"] = True
     if not points and not out.get("start") and not out.get("end"):
@@ -77,7 +79,7 @@ def stroke_message(msg: dict, sender_id: str, fallback_color: str) -> Optional[d
 
 
 def erase_message(msg: dict, sender_id: str) -> Optional[dict]:
-    """The eraser: whole strokes, named by their drawer and id, that the sender rubbed out."""
+    """The whole-line eraser: strokes, named by their drawer and id, that the sender took away."""
     out: list[list[str]] = []
     raw = msg.get("strokes")
     if isinstance(raw, list):
