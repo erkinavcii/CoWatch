@@ -21,15 +21,19 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from typing import Optional
 
+from .addons import subtitle_lang
 from .config import Settings
 
 log = logging.getLogger("cowatch.media")
 
 BROWSER_PIX_FMTS = {"yuv420p", "yuvj420p"}
+# Subtitles inside a video file that are text (MKV's SRT and ASS, MP4's mov_text): these become
+# tracks. Picture subtitles (Blu-ray PGS, DVD) cannot be turned into text.
+TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
 
 # encoder -> (extra args, pixel format it wants)
 # The graphics card encoders make -force_key_frames frames plain I frames unless told to make
@@ -93,6 +97,7 @@ class ProbeInfo:
     bitrate_kbps: int
     video: dict
     audio: list[dict]
+    subtitles: list[dict] = field(default_factory=list)  # the text subtitle streams in the file
 
     @property
     def video_codec(self) -> str:
@@ -134,7 +139,39 @@ async def probe(cfg: Settings, source: str, timeout: float = 180) -> ProbeInfo:
         bitrate_kbps=int((bitrate or 0) / 1000),
         video=videos[0],
         audio=audios,
+        subtitles=[s for s in streams if s.get("codec_type") == "subtitle"
+                   and s.get("codec_name") in TEXT_SUBTITLE_CODECS],
     )
+
+
+async def extract_subtitles(cfg: Settings, source: str, streams: list[dict], timeout: float = 900) -> dict[int, str]:
+    """The text of the given subtitle streams (stream index -> SRT or ASS text), in one ffmpeg
+    pass. Subtitles are spread over the whole file, so this reads all of it."""
+    with tempfile.TemporaryDirectory(prefix="cowatch-subs-") as tmp:
+        cmd = [cfg.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", source]
+        outputs: dict[int, Path] = {}
+        for stream in streams:
+            fmt = "ass" if stream.get("codec_name") in ("ass", "ssa") else "srt"  # ASS keeps its line breaks
+            out = Path(tmp) / f"{stream['index']}.{fmt}"
+            cmd += ["-map", f"0:{stream['index']}", "-c:s", fmt, "-f", fmt, _ffmpeg_out(out)]
+            outputs[stream["index"]] = out
+        try:
+            proc = await asyncio.to_thread(_run, cmd, timeout)
+        except subprocess.TimeoutExpired as exc:
+            raise MediaError("reading the subtitles took too long") from exc
+        except FileNotFoundError as exc:
+            raise MediaError(f"ffmpeg not found: {cfg.ffmpeg}") from exc
+        texts = {}
+        for index, out in outputs.items():
+            try:
+                text = out.read_text(encoding="utf-8", errors="replace")
+            except FileNotFoundError:
+                continue
+            if text.strip():
+                texts[index] = text
+        if not texts and proc.returncode != 0:
+            raise MediaError((proc.stderr or "ffmpeg failed").strip()[-300:])
+        return texts
 
 
 def choose_audio(info: ProbeInfo, preferred: Optional[int] = None) -> Optional[dict]:
@@ -644,12 +681,23 @@ class MediaSession:
         """True if seeking to `target` works without restarting ffmpeg. A target slightly
         past the produced part is fine (ffmpeg gets there soon); further away, restarting
         at the target is faster than waiting for everything in between."""
-        if self.stream is None or target < self.stream_start - 0.5:
+        if self.stream is None or target < self.stream_start - 0.5 or self.stream.audio is not self.audio:
             return False
         end = self.produced_end()
         if target <= end:
             return True
         return self.stream.running and not self.stream.ended() and target <= end + slack
+
+    @property
+    def audio_index(self) -> Optional[int]:
+        return next((i for i, a in enumerate(self.info.audio) if a is self.audio), None)
+
+    def set_audio(self, index: int) -> bool:
+        """Another sound track of the file (dubbed / original): the next stream carries it."""
+        if not 0 <= index < len(self.info.audio):
+            return False
+        self.audio = self.info.audio[index]
+        return True
 
     def public(self) -> dict:
         audio = self.audio or {}
@@ -679,6 +727,13 @@ class MediaSession:
                 "channels": audio.get("channels"),
                 "language": (audio.get("tags") or {}).get("language"),
             } if audio else None,
+            "audioIndex": self.audio_index,
+            "audioTracks": [{
+                "lang": subtitle_lang((a.get("tags") or {}).get("language")),
+                "title": str((a.get("tags") or {}).get("title") or "")[:60],
+                "codec": a.get("codec_name"),
+                "channels": a.get("channels"),
+            } for a in self.info.audio],
         }
 
     def progress(self) -> dict:

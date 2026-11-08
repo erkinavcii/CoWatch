@@ -104,6 +104,70 @@ function waitReady (t, ms) {
   })
 }
 
+// ---- the downloaded files
+// Every torrent lands in DOWNLOAD_DIR under its own name (a file, or a folder for several files).
+// They pile up film after film; the host empties the folder from the settings page. Torrents the
+// server still needs (the film playing, one being opened: `keep`) stay, with their files.
+async function sizeOf (p) {
+  let st
+  try { st = await fs.promises.lstat(p) } catch { return 0 }
+  if (!st.isDirectory()) return st.size
+  let total = 0
+  for (const name of await fs.promises.readdir(p)) total += await sizeOf(path.join(p, name))
+  return total
+}
+
+async function keptNames (keep) {
+  const names = new Set()
+  for (const hash of keep) {
+    const t = await client.get(hash)
+    if (t && t.name) names.add(t.name)
+  }
+  return names
+}
+
+function keepList (value) {
+  const list = Array.isArray(value) ? value : String(value || '').split(',')
+  return list.map((h) => String(h).trim().toLowerCase()).filter((h) => /^[a-f0-9]{40}$/.test(h))
+}
+
+async function storage (keep) {
+  const names = await keptNames(keep)
+  let total = 0
+  let kept = 0
+  const others = []
+  for (const name of await fs.promises.readdir(DOWNLOAD_DIR)) {
+    const size = await sizeOf(path.join(DOWNLOAD_DIR, name))
+    total += size
+    if (names.has(name)) kept += size
+    else others.push({ name, size })
+  }
+  return { total, kept, others }
+}
+
+async function cleanup (keep) {
+  const wanted = new Set(keep)
+  for (const t of [...client.torrents]) {
+    if (!wanted.has(t.infoHash)) await client.remove(t.infoHash, { destroyStore: false })
+  }
+  const { others } = await storage(keep)
+  let freed = 0
+  let failed = 0
+  for (const { name, size } of others) {
+    try {
+      // maxRetries: on Windows a file the torrent just let go of can be busy for a moment.
+      await fs.promises.rm(path.join(DOWNLOAD_DIR, name), { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+      freed += size
+    } catch (err) {
+      failed += 1
+      log('could not delete', name, err?.message || err)
+    }
+  }
+  log(`cleanup: freed ${Math.round(freed / 1048576)} MB${failed ? `, ${failed} left` : ''}`)
+  const left = await storage(keep)
+  return { freed, failed, total: left.total, kept: left.kept }
+}
+
 const MAGNET_RE = /^(magnet:\?.*xt=urn:bt[im]h:|[a-f0-9]{40}$|[a-z2-7]{32}$)/i
 
 async function addTorrent (body) {
@@ -212,6 +276,13 @@ async function route (req, res) {
   }
   if (req.method === 'POST' && url.pathname === '/torrents') {
     return json(res, 200, await addTorrent(await readJson(req)))
+  }
+  if (req.method === 'GET' && url.pathname === '/storage') {
+    const { total, kept } = await storage(keepList(url.searchParams.get('keep')))
+    return json(res, 200, { total, kept })
+  }
+  if (req.method === 'POST' && url.pathname === '/cleanup') {
+    return json(res, 200, await cleanup(keepList((await readJson(req)).keep)))
   }
   if (req.method === 'POST' && url.pathname === '/throttle') {
     const body = await readJson(req)

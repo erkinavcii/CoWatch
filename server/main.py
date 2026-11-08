@@ -30,11 +30,12 @@ from pydantic import BaseModel, Field
 from starlette.requests import HTTPConnection
 from starlette.websockets import WebSocketState
 
-from .addons import AddonError, AddonStore, episode_label, magnet, subtitle_key
+from .addons import AddonError, AddonStore, episode_label, magnet, subtitle_key, subtitle_lang
 from .config import AI_PRESETS, CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
 from . import filepicker, library, stremio, tailscale, translate
 from .stremio import StremioError
-from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, prepare_converting, probe
+from .media import (MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, extract_subtitles,
+                    prepare_converting, probe)
 from .oshash import CHUNK, hash_file, hash_from_chunks
 from .presence import (ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, erase_message, pick_color, playback_report, point,
                        stroke_message)
@@ -123,6 +124,7 @@ class Controller:
         self.translating: Optional[str] = None  # the language of the translation running now
         self.open_task: Optional[asyncio.Task] = None  # the film being opened, to cancel
         self.opening_hash: Optional[str] = None  # its torrent, for the progress shown while it opens
+        self.embedded_tried: set[str] = set()  # films whose own subtitles were read (or tried) this run
         self.briefs: dict[tuple[str, str], str] = {}  # (film, source subtitle) -> its brief, for the next language
 
     # ---- messages -------------------------------------------------------------
@@ -416,6 +418,14 @@ class Controller:
         self.restart_target = target
         self.restart_task = asyncio.create_task(self._restart_loop(session))
 
+    async def set_audio(self, index: int) -> None:
+        """Another sound track: the stream starts again where the room is, with it."""
+        session = self.session
+        if session is None or not session.set_audio(index):
+            raise HTTPException(400, detail="bad_audio")
+        await self.broadcast_media()
+        await self.seek(self.room.current_position())
+
     async def _restart_loop(self, session: MediaSession) -> None:
         try:
             while self.restart_target is not None and session is self.session:
@@ -538,6 +548,64 @@ class Controller:
             await self.broadcast_media()
             await self.broadcast_tracks()
             await self.status("stream_ready", mode=session.mode, title=source.title)
+            self.embedded_soon(session)
+
+    # ---- subtitles inside the film's file
+    # Text subtitle streams (an MKV's Turkish, English... tracks) become tracks of their own, in
+    # sync with the file by nature (hashMatch). They are spread over the whole file, so reading
+    # them means reading all of it: a file on this computer at once; a torrent once it has fully
+    # downloaded (throttle_loop looks every 5 s); an add-on's web address not at all (that would
+    # download the whole film once more). Once per film per run, and never twice the same stream.
+    def embedded_soon(self, session: MediaSession) -> None:
+        key = session.source.media_key
+        if not session.info.subtitles or key in self.embedded_tried or session.source.kind == "url":
+            return
+        have = {t.get("stream") for t in self.store.list(key) if t.get("source") == "embedded"}
+        if all(s["index"] in have for s in session.info.subtitles):
+            self.embedded_tried.add(key)
+            return
+        asyncio.create_task(self.extract_embedded(session))
+
+    async def extract_embedded(self, session: MediaSession) -> None:
+        key = session.source.media_key
+        if key in self.embedded_tried:
+            return
+        if session.source.kind == "torrent":
+            try:
+                info = await self.helper.info(session.source.info_hash)
+            except HelperError:
+                return
+            files = [f for f in info.get("files", []) if f.get("index") == session.source.file_index]
+            if not files or files[0].get("progress", 0) < 1:
+                return  # not all of it is here yet: the next look
+        self.embedded_tried.add(key)
+        have = {t.get("stream") for t in self.store.list(key) if t.get("source") == "embedded"}
+        wanted = [s for s in session.info.subtitles if s["index"] not in have]
+        try:
+            texts = await extract_subtitles(cfg, session.source.url, wanted)
+        except MediaError as exc:
+            log.warning("subtitles in the file could not be read: %s", exc)
+            return
+        added = 0
+        for number, stream in enumerate(wanted, start=1):
+            text = texts.get(stream["index"])
+            if not text:
+                continue
+            try:
+                cues = parse_cues(text)
+            except SubtitleError:
+                continue
+            tags = stream.get("tags") or {}
+            label = re.sub(r"[\x00-\x1f\x7f]", "", str(tags.get("title") or "")).strip()[:60] or f"#{number}"
+            if (stream.get("disposition") or {}).get("forced"):
+                label += " (forced)"
+            self.store.add(key, subtitle_lang(tags.get("language")), label, "embedded", cues,
+                           {"stream": stream["index"], "hashMatch": True})
+            added += 1
+        log.info("%d subtitles from the file of %s", added, session.source.title)
+        if added and self.session is session:
+            await self.broadcast_tracks()
+            await self.status("embedded_subs", n=added)
 
     def start_open(self, **kwargs) -> None:
         self.opening = True  # at once: a second request now finds it busy and cancels it
@@ -759,6 +827,8 @@ class Controller:
             await asyncio.sleep(5)
             try:
                 session = self.session
+                if session is not None and session.source.kind == "torrent":
+                    self.embedded_soon(session)
                 if session is None or session.source.kind != "torrent" or session.stream is None:
                     if self.download_throttled:
                         await self.helper.throttle(download_kb=0)
@@ -1061,6 +1131,18 @@ async def api_media_open(body: OpenBody, request: Request):
     return {"ok": True}
 
 
+class AudioBody(BaseModel):
+    index: int = Field(ge=0, le=99)
+
+
+@app.post("/api/media/audio")
+async def api_media_audio(body: AudioBody, request: Request):
+    """The film's sound track (dubbed or original), for everyone in the room."""
+    require_media_control(request)
+    await ctl.set_audio(body.index)
+    return {"ok": True}
+
+
 @app.post("/api/media/cancel")
 async def api_media_cancel(request: Request):
     require_media_control(request)
@@ -1250,6 +1332,32 @@ async def api_share(request: Request):
         "tailscale": await asyncio.to_thread(tailscale.status) if cfg.connection != "http" else None,
         "canRestart": launcher is not None,
     }
+
+
+def _torrents_in_use() -> list[str]:
+    """The torrents the room still needs: the film playing and one being opened."""
+    hashes = {ctl.opening_hash, ctl.session.source.info_hash if ctl.session else None}
+    return sorted(h for h in hashes if h)
+
+
+@app.get("/api/torrents/storage")
+async def api_torrent_storage(request: Request):
+    """How much the downloaded torrents take on this computer (settings page)."""
+    require_local(request)
+    try:
+        return await ctl.helper.storage(_torrents_in_use())
+    except HelperError as exc:
+        raise HTTPException(503, detail="helper_down") from exc
+
+
+@app.post("/api/torrents/cleanup")
+async def api_torrent_cleanup(request: Request):
+    """Delete the downloaded torrents, except the film playing (and one being opened)."""
+    require_local(request)
+    try:
+        return await ctl.helper.cleanup(_torrents_in_use())
+    except HelperError as exc:
+        raise HTTPException(503, detail="helper_down") from exc
 
 
 @app.post("/api/share/retry")

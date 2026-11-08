@@ -75,5 +75,13 @@ class TorrentHelper:
             body["upload"] = upload_kb
         await self._request("POST", "/throttle", json=body)
 
+    async def storage(self, keep: list[str]) -> dict:
+        """Bytes in the download folder: {total, kept} (kept = the torrents in `keep`)."""
+        return await self._request("GET", "/storage", params={"keep": ",".join(keep)})
+
+    async def cleanup(self, keep: list[str]) -> dict:
+        """Drop every torrent but `keep` and delete their files: {freed, failed, total, kept}."""
+        return await self._request("POST", "/cleanup", timeout=120, json={"keep": keep})
+
     async def remove(self, info_hash: str) -> None:
         await self._request("DELETE", f"/torrents/{info_hash}")

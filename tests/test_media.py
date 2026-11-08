@@ -203,3 +203,105 @@ def test_an_hdr_film_is_converted_and_a_failing_filter_gives_way(hdr_sample, mon
         session.stop()
 
     asyncio.run(run())
+
+
+SRT_TR = "1\n00:00:01,000 --> 00:00:02,500\nGüzel, şimdi çıkıyoruz.\n\n2\n00:00:03,000 --> 00:00:04,000\nİkinci satır\nalt satır\n"
+ASS_EN = r"""[Script Info]
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,Good, {\i1}we leave{\i0} now.\NSecond line
+Dialogue: 0,0:00:03.00,0:00:04.00,Default,,0,0,0,,{\p1}m 0 0 l 100 0 100 100{\p0}
+"""
+
+
+@pytest.fixture(scope="module")
+def subbed_sample(tmp_path_factory):
+    """6 s of video with a Turkish SRT and an English ASS inside, like an anime release."""
+    folder = tmp_path_factory.mktemp("subbed")
+    (folder / "tr.srt").write_text(SRT_TR, encoding="utf-8")
+    (folder / "en.ass").write_text(ASS_EN, encoding="utf-8")
+    path = folder / "Show.S01E01.Multi-Subs.mkv"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-i", str(folder / "tr.srt"), "-i", str(folder / "en.ass"),
+        "-t", "6", "-map", "0:v", "-map", "1:s", "-map", "2:s", "-c:v", "libx264", "-preset", "ultrafast",
+        "-c:s:0", "srt", "-c:s:1", "ass", "-metadata:s:s:0", "language=tur", "-metadata:s:s:0", "title=Türkçe [Fansub]",
+        "-metadata:s:s:1", "language=eng", "-disposition:s:1", "forced", str(path),
+    ], check=True)
+    return path
+
+
+def test_the_subtitles_inside_a_file_become_tracks_once(subbed_sample):
+    from server.main import ctl
+
+    cfg = get_settings()
+
+    async def run():
+        info = await probe(cfg, str(subbed_sample))
+        assert [s["codec_name"] for s in info.subtitles] == ["subrip", "ass"]
+        source = MediaSource(kind="file", url=str(subbed_sample), title=subbed_sample.name, size=info.size,
+                             media_key="embedded-test")
+        session = MediaSession(cfg, source, info)
+        await ctl.extract_embedded(session)
+        tracks = ctl.store.list("embedded-test")
+        assert [(t["lang"], t["label"], t["source"], t["hashMatch"]) for t in tracks] == [
+            ("tr", "Türkçe [Fansub]", "embedded", True), ("en", "#2 (forced)", "embedded", True)]
+        tr = ctl.store.cues("embedded-test", tracks[0]["id"])
+        assert tr[0] == (1.0, 2.5, "Güzel, şimdi çıkıyoruz.") and tr[1][2] == "İkinci satır\nalt satır"
+        en = ctl.store.cues("embedded-test", tracks[1]["id"])
+        assert [c[2] for c in en] == ["Good, we leave now.\nSecond line"]  # the drawing is not text
+        # Opened again (another run of the server): no second copy.
+        ctl.embedded_tried.clear()
+        await ctl.extract_embedded(session)
+        assert len(ctl.store.list("embedded-test")) == 2
+
+    asyncio.run(run())
+
+
+def test_another_sound_track_needs_a_new_stream(tmp_path):
+    cfg = get_settings()
+    path = tmp_path / "Dual.Audio.mkv"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
+        "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=48000",
+        "-f", "lavfi", "-i", "sine=frequency=550:sample_rate=48000",
+        "-t", "6", "-map", "0:v", "-map", "1:a", "-map", "2:a", "-c:v", "libx264", "-preset", "ultrafast",
+        "-c:a", "aac", "-metadata:s:a:0", "language=tur", "-metadata:s:a:0", "title=Dublaj",
+        "-metadata:s:a:1", "language=jpn", "-disposition:a:0", "default", "-disposition:a:1", "0", str(path),
+    ], check=True)
+
+    async def run():
+        info = await probe(cfg, str(path))
+        session = MediaSession(cfg, MediaSource(kind="file", url=str(path), title=path.name, size=info.size,
+                                                media_key="k"), info)
+        pub = session.public()
+        assert pub["audioIndex"] == 0
+        assert [(a["lang"], a["title"]) for a in pub["audioTracks"]] == [("tr", "Dublaj"), ("ja", "")]
+        await session.start_at(0)
+        await _wait_finished(session)
+        assert session.can_serve(2)
+        assert not session.set_audio(5) and session.audio_index == 0
+        assert session.set_audio(1) and session.public()["audioIndex"] == 1
+        assert not session.can_serve(2)  # the stream so far carries the other sound
+        await session.start_at(2)
+        assert session.stream.audio is info.audio[1] and session.can_serve(3)
+        session.stop()
+
+    asyncio.run(run())
+
+
+def test_the_sound_track_is_chosen_by_those_who_may_change_the_film():
+    from fastapi.testclient import TestClient
+
+    from server.main import app
+
+    with TestClient(app, cookies={"cw_key": "test-key"}) as client:
+        assert client.post("/api/media/audio", json={"index": 1}).status_code == 400  # no film open
+        assert client.post("/api/media/audio", json={"index": -1}).status_code == 422

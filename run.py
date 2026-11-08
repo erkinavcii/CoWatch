@@ -100,7 +100,12 @@ class Launcher:
         return self.share.public() if self.share is not None else {"state": self.share_note}
 
     def start_helper(self, cfg) -> None:
-        key = (cfg.helper_port, cfg.torrent_upload_limit, str(cfg.torrent_dir))
+        # Its code too: after an update of index.mjs a restart brings the new helper.
+        try:
+            stamp = (ROOT / "torrent-helper" / "index.mjs").stat().st_mtime
+        except OSError:
+            stamp = 0.0
+        key = (cfg.helper_port, cfg.torrent_upload_limit, str(cfg.torrent_dir), stamp)
         if self.helper is not None and self.helper.poll() is None and key == self.helper_key:
             return
         tailscale.stop(self.helper)

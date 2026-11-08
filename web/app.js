@@ -57,6 +57,7 @@
     dirPick: $('#dirPick'), dirAdd: $('#dirAdd'), osApiKey: $('#osApiKey'), osUsername: $('#osUsername'),
     osPassword: $('#osPassword'), port: $('#port'), torrentUploadLimit: $('#torrentUploadLimit'),
     iceServers: $('#iceServers'), newKeyBtn: $('#newKeyBtn'),
+    storageInfo: $('#storageInfo'), storageClean: $('#storageClean'), audioField: $('#audioField'), audioSel: $('#audioSel'),
     stageWrap: $('#stageWrap'), miniBack: $('#miniBack'), miniClose: $('#miniClose'), pipBtn: $('#pipBtn'),
     awayMsg: $('#awayMsg'), pipReturn: $('#pipReturn'),
     chatBtn: $('#chatBtn'), chatBadge: $('#chatBadge'), chatBox: $('#chatBox'), chatClose: $('#chatClose'),
@@ -2602,6 +2603,7 @@
     let data;
     try { data = await api('/api/settings'); } catch (err) { toast(errorText(err), 'error'); return; }
     SH.settings = data;
+    renderStorage();
     SH.key = new URLSearchParams(new URL(SH.data ? SH.data.localLink : location.href).search).get('k');
     const v = data.values;
     const cur = data.current;
@@ -2813,6 +2815,38 @@
       el.settingsSave.disabled = false;
     }
   });
+  // ---- storage: the downloaded torrents pile up film after film; the film playing stays.
+  const STORE = { free: 0 };
+  async function renderStorage () {
+    el.storageInfo.textContent = '…';
+    el.storageClean.disabled = true;
+    try {
+      const s = await api('/api/torrents/storage');
+      STORE.free = Math.max(0, s.total - s.kept);
+      el.storageInfo.textContent = s.kept
+        ? t('set_storage_size_kept', { size: fmtBytes(s.total), kept: fmtBytes(s.kept) })
+        : t('set_storage_size', { size: fmtBytes(s.total) });
+      el.storageClean.disabled = STORE.free <= 0;
+    } catch (err) {
+      el.storageInfo.textContent = errorText(err);
+    }
+  }
+  el.storageClean.addEventListener('click', async () => {
+    if (!confirm(t('set_storage_confirm', { size: fmtBytes(STORE.free) }))) return;
+    el.storageClean.disabled = true;
+    el.storageClean.classList.add('busy');
+    try {
+      const res = await api('/api/torrents/cleanup', { method: 'POST' });
+      toast(t(res.failed ? 'set_storage_partly' : 'set_storage_done', { size: fmtBytes(res.freed), n: res.failed }),
+        res.failed ? 'error' : 'info');
+    } catch (err) {
+      toast(errorText(err), 'error');
+    } finally {
+      el.storageClean.classList.remove('busy');
+      renderStorage();
+    }
+  });
+
   el.newKeyBtn.addEventListener('click', async () => {
     if (!confirm(t('set_new_key_confirm'))) return;
     try {
@@ -3631,8 +3665,36 @@
     el.addonSubs.hidden = !(S.media && S.media.content);
     el.filmTitle.textContent = S.media ? S.media.title : '';
     renderMediaInfo();
+    renderAudioTracks();
     renderTorrentInfo();
   }
+
+  // A file with several sound tracks (dubbed and original): one choice for the whole room.
+  function renderAudioTracks () {
+    const tracks = (S.media && S.media.audioTracks) || [];
+    el.audioField.hidden = tracks.length < 2;
+    if (el.audioField.hidden) return;
+    el.audioSel.replaceChildren(...tracks.map((a, i) => {
+      const option = document.createElement('option');
+      option.value = String(i);
+      const lang = a.lang && a.lang !== 'und' ? langName(a.lang) : t('audio_unknown', { n: i + 1 });
+      const tech = [(a.codec || '').toUpperCase(), a.channels ? `${a.channels}ch` : ''].filter(Boolean).join(' ');
+      option.textContent = [lang, a.title].filter(Boolean).join(' · ') + (tech ? ` (${tech})` : '');
+      return option;
+    }));
+    el.audioSel.value = String(S.media.audioIndex ?? 0);
+    el.audioSel.disabled = !S.canChangeMedia;
+    el.audioSel.title = S.canChangeMedia ? '' : t('media_trusted_only');
+  }
+  el.audioSel.addEventListener('change', async () => {
+    const index = Number(el.audioSel.value);
+    try {
+      await api('/api/media/audio', { json: { index } });
+    } catch (err) {
+      toast(errorText(err), 'error');
+      renderAudioTracks();
+    }
+  });
 
   // Converting: on the graphics card (which one) or on the CPU.
   const GPU_ENCODERS = { h264_nvenc: 'NVIDIA', h264_qsv: 'Intel', h264_amf: 'AMD', h264_videotoolbox: 'Apple' };
@@ -3686,7 +3748,13 @@
 
   function trackLabel (track) {
     const name = langName(track.lang);
-    return `${name} · ${track.label}${track.hashMatch ? ' ✓' : ''}`;
+    // A file's own track is often titled with its language ("English"): no need to say it twice.
+    const said = (code) => { try { return new Intl.DisplayNames(['en'], { type: 'language' }).of(code); } catch { return ''; } };
+    // ...nor its number when it is the file's only track in that language.
+    const alone = /^#\d+$/.test(track.label) && S.tracks.filter((tr) => tr.source === 'embedded' && tr.lang === track.lang).length === 1;
+    const plain = track.source === 'embedded' && (alone || [name, said(track.lang)].some((n) => n && n.toLowerCase() === String(track.label).toLowerCase()));
+    const label = track.source !== 'embedded' ? track.label : plain ? t('subs_embedded') : `${t('subs_embedded')} · ${track.label}`;
+    return `${name} · ${label}${track.hashMatch ? ' ✓' : ''}`;
   }
 
   function renderTracks () {

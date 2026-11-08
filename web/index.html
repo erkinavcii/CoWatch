@@ -279,6 +279,7 @@
           <div id="libraryList" class="file-list library-list"></div>
         </div>
         <div class="info" id="mediaInfo"></div>
+        <label class="field" id="audioField" hidden><span data-i18n="audio_track"></span><select id="audioSel"></select></label>
         <div class="info" id="torrentInfo"></div>
         <button id="closeMedia" class="ghost" data-i18n="close_media" hidden></button>
       </section>
@@ -466,6 +467,15 @@
           <label class="choice"><input type="radio" name="aiTranslate" value="trusted"><span><b data-i18n="ai_who_trusted"></b></span></label>
           <label class="choice"><input type="radio" name="aiTranslate" value="everyone"><span><b data-i18n="ai_who_everyone"></b></span></label>
         </div>
+      </fieldset>
+
+      <fieldset id="storageSet">
+        <legend data-i18n="set_storage"></legend>
+        <div class="inline-form storage-row">
+          <span id="storageInfo"></span>
+          <button type="button" id="storageClean" data-i18n="set_storage_clean"></button>
+        </div>
+        <p class="hint" data-i18n="set_storage_hint"></p>
       </fieldset>
 
       <details class="advanced">
