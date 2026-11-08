@@ -25,6 +25,7 @@
     nameInput: $('#nameInput'), joinLang: $('#joinLang'), toasts: $('#toasts'),
     drawCanvas: $('#drawCanvas'), cursors: $('#cursors'), toolbar: $('#toolbar'), penBtn: $('#penBtn'),
     colorBtn: $('#colorBtn'), palette: $('#palette'), clearBtn: $('#clearBtn'), sfxBtn: $('#sfxBtn'),
+    eraserBtn: $('#eraserBtn'), camBig: $('#camBig'), camBigVideo: $('#camBig video'), camBigName: $('#camBigName'),
     micBtn: $('#micBtn'), micMenuBtn: $('#micMenuBtn'), micMenu: $('#micMenu'), micDevice: $('#micDevice'),
     duckCheck: $('#duckCheck'), peerPop: $('#peerPop'), peerPopName: $('#peerPopName'), peerVol: $('#peerVol'),
     voices: $('#voices'), camBtn: $('#camBtn'), camMenuBtn: $('#camMenuBtn'), camMenu: $('#camMenu'),
@@ -114,7 +115,7 @@
     bufferingSent: false, waitTimer: null, dragging: false, isHost: false, canLibrary: false, libraryConfigured: false, canChangeMedia: true, cohost: null, autoplayBlocked: false,
     torrent: null, downloadThrottled: false,
     palette: ['#ff6b6b', '#4dabf7', '#51cf66', '#fcc419', '#cc5de8', '#ff922b', '#22b8cf', '#f06595'],
-    penMode: false, iceServers: [],
+    penMode: false, eraser: false, iceServers: [],
   };
 
   // ---------------------------------------------------------------- helpers
@@ -283,6 +284,9 @@
       case 'poke': if (msg.from !== S.clientId) pokeEffect(msg.from, [msg.x, msg.y]); break;
       case 'draw': onDraw(msg); break;
       case 'draw_clear': clearStrokes(msg.from); break;
+      case 'draw_erase':
+        if (Array.isArray(msg.strokes)) eraseStrokes(msg.strokes.map((s) => `${s[0]}:${s[1]}`));
+        break;
       case 'rtc': onRtc(msg); break;
       case 'chat': onChat(msg); break;
       default: break;
@@ -639,11 +643,13 @@
     else if (e.key === 'ArrowRight') { e.preventDefault(); seekTo(expectedPosition() + 10); }
     else if (e.key === 'f') toggleFullscreen();
     else if (e.key === 'm') el.muteBtn.click();
-    else if (e.key === 'd') setPen(!S.penMode);
+    else if (e.key === 'd') setTool(S.penMode && !S.eraser ? null : 'pen');
+    else if (e.key === 'e') setTool(S.eraser ? null : 'eraser');
     else if (e.key === 'c') { e.preventDefault(); setChat(true); } // preventDefault: no "c" in the box
     else if (e.key === 'Escape') {
       el.palette.hidden = true; el.micMenu.hidden = true; el.camMenu.hidden = true; el.peerPop.hidden = true;
-      if (S.penMode) setPen(false);
+      if (camBig.id) showBig(null);
+      else if (S.penMode) setPen(false);
       else if (el.stage.classList.contains('fill')) setFill(false);
     }
   });
@@ -670,7 +676,7 @@
   const MAX_STROKES = 300;
   const MAX_STROKE_POINTS = 4000;
 
-  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .center-msg.clickable, .share-asks, .mini-back, .mini-close, .chat, .loader'));
+  const isUi = (node) => !!(node && node.closest && node.closest('.controls, .toolbar, .cams-box, .cam-big, .center-msg.clickable, .share-asks, .mini-back, .mini-close, .chat, .loader'));
   const hovers = (e) => e.pointerType === 'mouse' || e.pointerType === 'pen';
   const memberById = (id) => S.members.find((m) => m.id === id);
   const colorOf = (id) => { const m = memberById(id); return (m && m.color) || '#ffffff'; };
@@ -932,6 +938,10 @@
     if (msg.end) finishStroke(stroke);
     drawDirty = true;
   }
+  function eraseStrokes (keys) {
+    for (const key of keys) strokes.delete(key);
+    drawDirty = true;
+  }
   function clearStrokes (fromId) {
     strokes.clear();
     myStroke = null; strokeQueue = [];
@@ -942,20 +952,57 @@
     }
   }
 
-  function setPen (on) {
-    S.penMode = on;
-    el.stage.classList.toggle('drawing', on);
-    el.penBtn.classList.toggle('active', on);
+  // The pen or the eraser (null: neither). Both take the picture's clicks away from playing.
+  function setTool (tool) {
+    S.penMode = !!tool;
+    S.eraser = tool === 'eraser';
+    el.stage.classList.toggle('drawing', S.penMode);
+    el.stage.classList.toggle('erasing', S.eraser);
+    el.penBtn.classList.toggle('active', S.penMode && !S.eraser);
+    el.eraserBtn.classList.toggle('active', S.eraser);
     el.palette.hidden = true;
-    if (on) withdrawCursor(); // while drawing, the stroke itself shows where you are
+    if (S.penMode) withdrawCursor(); // while drawing, the stroke itself shows where you are
     renderMine();
   }
-  el.penBtn.addEventListener('click', () => setPen(!S.penMode));
+  const setPen = (on) => setTool(on ? 'pen' : null);
+  el.penBtn.addEventListener('click', () => setTool(S.penMode && !S.eraser ? null : 'pen'));
+  el.eraserBtn.addEventListener('click', () => setTool(S.eraser ? null : 'eraser'));
+
+  // The eraser takes whole strokes, anyone's, as it passes over them (finished ones only).
+  const ERASER_PX = 12;
+  let erasing = null;
+  function segmentDistance (px, py, ax, ay, bx, by) {
+    const dx = bx - ax; const dy = by - ay;
+    const len = dx * dx + dy * dy;
+    const k = len ? clamp(((px - ax) * dx + (py - ay) * dy) / len, 0, 1) : 0;
+    return Math.hypot(px - (ax + k * dx), py - (ay + k * dy));
+  }
+  function eraseAt (events) {
+    const g = geom();
+    const reach = ERASER_PX + Math.max(4, g.h * 0.009) / 2; // the eraser's radius and half a line
+    const hit = [];
+    for (const ev of events) {
+      const [x, y] = toPicture(ev, g);
+      const px = x * g.w; const py = y * g.h;
+      for (const [key, stroke] of strokes) {
+        if (!stroke.done || hit.includes(key)) continue;
+        const pts = stroke.pts;
+        for (let i = 0; i < pts.length; i++) {
+          const a = pts[i]; const b = pts[Math.min(i + 1, pts.length - 1)];
+          if (segmentDistance(px, py, a[0] * g.w, a[1] * g.h, b[0] * g.w, b[1] * g.h) <= reach) { hit.push(key); break; }
+        }
+      }
+    }
+    if (!hit.length) return;
+    send({ type: 'draw_erase', strokes: hit.map((key) => { const s = strokes.get(key); return [s.owner, s.id]; }) });
+    eraseStrokes(hit);
+  }
 
   el.drawCanvas.addEventListener('pointerdown', (e) => {
     if (!S.penMode || !S.joined || (e.pointerType === 'mouse' && e.button !== 0)) return;
     e.preventDefault();
     el.drawCanvas.setPointerCapture(e.pointerId);
+    if (S.eraser) { erasing = e.pointerId; eraseAt([e]); return; }
     const id = Math.random().toString(36).slice(2, 10);
     const p = toPicture(e, geom());
     const color = myColor();
@@ -966,6 +1013,11 @@
     drawDirty = true;
   });
   el.drawCanvas.addEventListener('pointermove', (e) => {
+    if (erasing === e.pointerId) {
+      const coalesced = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+      eraseAt(coalesced.length ? coalesced : [e]);
+      return;
+    }
     if (!myStroke) return;
     const g = geom();
     const coalesced = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
@@ -991,7 +1043,8 @@
       }
     } while (strokeQueue.length);
   }
-  function endStroke () {
+  function endStroke (e) {
+    if (e && erasing === e.pointerId) erasing = null;
     if (!myStroke) return;
     flushStroke(true);
     finishStroke(myStroke);
@@ -1536,6 +1589,7 @@
   // the picture for those whose camera is on, their coloured ball for the others, mine
   // mirrored at the bottom. Inside the stage, so they stay in fullscreen.
   const tiles = new Map(); // member id -> { node, video, name }
+  const camBig = { id: null }; // whose camera is shown large over the picture
   function makeTile (id, me) {
     const node = document.createElement('div');
     node.className = me ? 'cam me' : 'cam others';
@@ -1575,7 +1629,29 @@
     }
     el.camsBox.hidden = !list.length;
     placeCams();
+    renderBig();
   }
+
+  // A click on a camera that is on shows it large over the picture; a click on it, or Esc,
+  // makes it small again. It goes when that camera does.
+  function showBig (id) { camBig.id = id; renderBig(); }
+  function renderBig () {
+    const tile = camBig.id ? tiles.get(camBig.id) : null;
+    const stream = tile && tile.node.classList.contains('live') ? tile.video.srcObject : null;
+    if (!stream) camBig.id = null;
+    el.camBig.hidden = !stream;
+    if (el.camBigVideo.srcObject !== stream) {
+      el.camBigVideo.srcObject = stream;
+      if (stream) el.camBigVideo.play().catch(() => {});
+    }
+    for (const [id, t] of tiles) t.node.classList.toggle('big', id === camBig.id);
+    if (!stream) return;
+    el.camBig.classList.toggle('me', camBig.id === S.clientId);
+    el.camBig.classList.toggle('speaking', tile.node.classList.contains('speaking'));
+    el.camBig.style.setProperty('--c', tile.node.style.getPropertyValue('--c'));
+    el.camBigName.textContent = tile.name.textContent;
+  }
+  el.camBig.addEventListener('click', () => showBig(null));
 
   // The tiles sit in a corner of the picture, top right at first: dragged anywhere, they
   // settle in the nearest corner. On the right they share the side with the drawing toolbar.
@@ -1586,14 +1662,26 @@
     if (el.camsBox.parentNode !== side) side.prepend(el.camsBox);
     for (const s of [el.sideLeft, el.sideRight]) {
       const here = !el.camsBox.hidden && s === side;
-      s.classList.toggle('top', here && corner[0] === 't');
-      s.classList.toggle('bottom', here && corner[0] === 'b');
+      s.classList.toggle('at-top', here && corner[0] === 't');
+      s.classList.toggle('at-bottom', here && corner[0] === 'b');
     }
     el.camsBox.style.order = corner[0] === 't' ? '-1' : '1'; // above or below the toolbar
     el.camsBox.classList.toggle('small', !!prefs.camsSmall);
     el.camsBox.title = t('cams_move');
     el.camsSizeBtn.title = t(prefs.camsSmall ? 'cams_big' : 'cams_small');
+    fitCams();
   }
+  // Many tiles on a short picture get smaller instead of being cut off at the bottom.
+  function fitCams () {
+    el.camsBox.style.removeProperty('--cam-fit');
+    const n = el.cams.children.length;
+    if (el.camsBox.hidden || !n || getComputedStyle(el.cams).flexDirection !== 'column') return; // a phone: one row
+    const side = el.camsBox.parentNode;
+    let room = side.clientHeight - 8 * (n - 1);
+    for (const other of side.children) if (other !== el.camsBox && other.offsetHeight) room -= other.offsetHeight + 10;
+    el.camsBox.style.setProperty('--cam-fit', `${Math.max(64, Math.floor((room / n) * 16 / 9))}px`);
+  }
+  new ResizeObserver(fitCams).observe(el.stage);
   el.camsSizeBtn.addEventListener('click', () => { prefs.camsSmall = !prefs.camsSmall; savePrefs(); placeCams(); });
 
   let camDrag = null; let dragEndedAt = 0;
@@ -1627,10 +1715,20 @@
   window.addEventListener('pointerup', endCamDrag);
   window.addEventListener('pointercancel', endCamDrag);
 
+  // A camera that is on: large. Someone without a camera: their volume box, as on their name;
+  // a right click gives the volume box for anyone.
   el.cams.addEventListener('click', (e) => {
     if (performance.now() - dragEndedAt < 300) return;
+    const node = e.target.closest('.cam');
+    if (!node) return;
+    if (node.classList.contains('live')) showBig(camBig.id === node.dataset.id ? null : node.dataset.id);
+    else if (node.classList.contains('others')) openPeerPop(node.dataset.id, node);
+  });
+  el.cams.addEventListener('contextmenu', (e) => {
     const node = e.target.closest('.cam.others');
-    if (node) openPeerPop(node.dataset.id, node);
+    if (!node) return;
+    e.preventDefault();
+    openPeerPop(node.dataset.id, node);
   });
 
   // ---- who is talking: my own level from the microphone, the others' from the incoming
@@ -1697,6 +1795,7 @@
     if (chip) chip.classList.toggle('speaking', on);
     const tile = tiles.get(id);
     if (tile) tile.node.classList.toggle('speaking', on);
+    if (camBig.id === id) el.camBig.classList.toggle('speaking', on);
   }
 
   // ---- per-person volume: click someone's name at the top, or their camera tile
@@ -3505,7 +3604,7 @@
       showing: !el.screenVideo.hidden && el.screenVideo.videoWidth > 0 && !el.screenVideo.paused,
       asks: [...el.shareAsks.querySelectorAll('[data-from]')].map((n) => n.dataset.from),
     },
-    clientId: S.clientId, members: S.members, tracks: S.tracks, penMode: S.penMode, strokes: strokes.size, balls: [...balls.keys()],
+    clientId: S.clientId, members: S.members, tracks: S.tracks, penMode: S.penMode, eraser: S.eraser, strokes: strokes.size, balls: [...balls.keys()],
     voice: {
       mic: !!voice.mic, cam: !!voice.cam, camLive: !!(voice.cam && voice.cam.readyState === 'live'),
       duck, filmVolume: video.volume, speaking: [...speaking],

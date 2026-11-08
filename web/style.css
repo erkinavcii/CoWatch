@@ -194,6 +194,7 @@ button.busy:disabled::before, .loading::before {
 /* ---- shared pointers: a ball with eyes and a name tag per viewer ---- */
 .draw { position: absolute; z-index: 3; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .stage.drawing .draw { pointer-events: auto; cursor: crosshair; touch-action: none; }
+.stage.erasing .draw { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='28'%3E%3Ccircle cx='14' cy='14' r='12' fill='rgba(255,255,255,.18)' stroke='white' stroke-width='2'/%3E%3Ccircle cx='14' cy='14' r='12' fill='none' stroke='black' stroke-opacity='.5' stroke-width='1' stroke-dasharray='3 3'/%3E%3C/svg%3E") 14 14, cell; }
 .cursors { position: absolute; z-index: 4; inset: 0; pointer-events: none; overflow: hidden; }
 .stage.ball-cursor { cursor: none; }
 .ball { position: absolute; left: 0; top: 0; transition: opacity .25s ease; will-change: transform; }
@@ -222,8 +223,9 @@ button.busy:disabled::before, .loading::before {
 }
 .side > * { pointer-events: auto; }
 .side.left { right: auto; left: 10px; align-items: flex-start; }
-.side.top { justify-content: flex-start; } /* set on the side holding the tiles: their corner */
-.side.bottom { justify-content: flex-end; }
+/* Set on the side holding the tiles: their corner. Not .top: that is the page header's class. */
+.side.at-top { justify-content: flex-start; }
+.side.at-bottom { justify-content: flex-end; }
 .stage:fullscreen .side { --cam-w: clamp(140px, 14vw, 300px); }
 .cams-box { position: relative; flex: 0 1 auto; min-height: 0; display: flex; touch-action: none; }
 .cams-box.dragging { opacity: .85; z-index: 1; cursor: grabbing; }
@@ -246,11 +248,26 @@ button.busy:disabled::before, .loading::before {
   .stage.idle .toolbar { opacity: 0; pointer-events: none; } /* a tap brings it back with the controls */
 }
 .cam {
-  position: relative; flex: none; width: var(--cam-w); aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden;
+  position: relative; flex: none; width: min(var(--cam-w), var(--cam-fit, 100vw)); aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden;
   background: rgba(22, 24, 29, .9); border: 2px solid rgba(255, 255, 255, .12); box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
   cursor: default; transition: border-color .15s ease, box-shadow .15s ease;
 }
 .cam.others { cursor: pointer; }
+.cam.live { cursor: zoom-in; }
+.cam.big { opacity: .45; } /* shown large over the picture */
+/* One camera large over the picture: a click on a tile that is on. */
+.cam-big {
+  position: absolute; z-index: 6; left: 50%; top: calc(50% - 30px); transform: translate(-50%, -50%); /* under the tiles */
+  height: min(72%, calc(100% - 130px)); aspect-ratio: 16 / 9; max-width: calc(100% - 40px);
+  border-radius: 14px; overflow: hidden; background: #000; cursor: zoom-out;
+  border: 2px solid rgba(255, 255, 255, .2); box-shadow: 0 12px 40px rgba(0, 0, 0, .65);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.cam-big.speaking { border-color: var(--c, var(--accent)); box-shadow: 0 0 22px var(--c, var(--accent)), 0 12px 40px rgba(0, 0, 0, .65); }
+.cam-big video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.cam-big.me video { transform: scaleX(-1); }
+.cam-big .cam-name { left: 10px; bottom: 8px; font-size: 14px; padding: 1px 10px 2px; }
+.stage.mini .cam-big { display: none; }
 .cam.speaking { border-color: var(--c, var(--accent)); box-shadow: 0 0 14px var(--c, var(--accent)); }
 .cam video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; display: none; }
 .cam.live video { display: block; }
@@ -687,9 +704,9 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
   /* A phone's picture is short: tiles go in a row along the top, the toolbar beside them. */
   .side { right: 6px; top: 6px; bottom: 70px; gap: 6px; --cam-w: 84px; flex-direction: row; align-items: flex-start; justify-content: flex-end; }
   .side.left { left: 6px; justify-content: flex-start; }
-  .side.top, .side.bottom { justify-content: flex-end; }
-  .side.left.top, .side.left.bottom { justify-content: flex-start; }
-  .side.bottom { align-items: flex-end; }
+  .side.at-top, .side.at-bottom { justify-content: flex-end; }
+  .side.left.at-top, .side.left.at-bottom { justify-content: flex-start; }
+  .side.at-bottom { align-items: flex-end; }
   .cams-box { min-width: 0; }
   .cams-box.small { --cam-w: 52px; }
   .cams { gap: 5px; flex-direction: row; min-width: 0; }

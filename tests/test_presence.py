@@ -1,8 +1,8 @@
 from fastapi.testclient import TestClient
 
 from server.main import app
-from server.presence import (CHAT_BURST, CHAT_HISTORY, CHAT_MAX_CHARS, MAX_POINTS, PALETTE, Bucket, chat_text,
-                             pick_color, point, stroke_message)
+from server.presence import (CHAT_BURST, CHAT_HISTORY, CHAT_MAX_CHARS, MAX_ERASE, MAX_POINTS, PALETTE, Bucket, chat_text,
+                             erase_message, pick_color, point, stroke_message)
 
 KEY = "test-key"
 
@@ -35,6 +35,15 @@ def test_stroke_message_keeps_only_valid_parts():
     assert len(many["points"]) == MAX_POINTS and many["end"] is True
     assert stroke_message({"id": "../x", "points": [[0.1, 0.1]]}, "abc", PALETTE[0]) is None
     assert stroke_message({"id": "s1", "points": []}, "abc", PALETTE[0]) is None
+
+
+def test_erase_message_names_whole_strokes():
+    out = erase_message({"strokes": [["0a1b2c3d", "s1"], ["0a1b2c3d", "s1"], ["nothex!!", "s2"], ["0a1b2c3d", "../x"], "x"]}, "abc")
+    assert out == {"type": "draw_erase", "from": "abc", "strokes": [["0a1b2c3d", "s1"]]}
+    many = erase_message({"strokes": [["0a1b2c3d", f"s{i}"] for i in range(200)]}, "abc")
+    assert len(many["strokes"]) == MAX_ERASE
+    assert erase_message({"strokes": []}, "abc") is None
+    assert erase_message({"strokes": "s1"}, "abc") is None
 
 
 def _next(ws, kinds):
@@ -90,6 +99,9 @@ def test_colors_cursors_pokes_and_drawings_reach_the_others():
                 assert first["from"] == a_id and first["start"] and first["points"] == [[0.1, 0.2]]
                 second = _next(b, {"draw"})
                 assert second["points"] == [[0.3, 0.4]] and second["end"]
+
+                b.send_json({"type": "draw_erase", "strokes": [[a_id, "s1"]]})
+                assert _next(a, {"draw_erase"}) == {"type": "draw_erase", "from": b_id, "strokes": [[a_id, "s1"]]}
 
                 b.send_json({"type": "draw_clear"})
                 assert _next(a, {"draw_clear"}) == {"type": "draw_clear", "from": b_id}

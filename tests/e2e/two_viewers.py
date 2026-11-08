@@ -342,6 +342,27 @@ def run(headed: bool) -> None:
             check("a stroke shows in the other window at the same spot, in the drawer's colour",
                   on[3] > 200 and drawn == color["Erkin"] and off[3] == 0, f"{drawn} alpha {on[3]}, off-line alpha {off[3]}")
 
+            # ---- eraser: A draws a second line lower down; B rubs across the first one only
+            a.mouse.move(ra["left"] + 0.2 * ra["w"], ra["top"] + 0.6 * ra["h"])
+            a.mouse.down()
+            a.mouse.move(ra["left"] + 0.6 * ra["w"], ra["top"] + 0.6 * ra["h"], steps=20)
+            a.mouse.up()
+            b.wait_for_function(f"() => {DBG}.strokes === 2", timeout=3000)
+            rb = b.evaluate(PICTURE_RECT)
+            blur(b)
+            b.keyboard.press("e")
+            b.mouse.move(rb["left"] + 0.4 * rb["w"], rb["top"] + 0.15 * rb["h"])
+            b.mouse.down()
+            b.mouse.move(rb["left"] + 0.4 * rb["w"], rb["top"] + 0.45 * rb["h"], steps=12)
+            b.mouse.up()
+            a.wait_for_function(f"() => {DBG}.strokes === 1", timeout=3000)
+            time.sleep(0.3)
+            gone, kept = a.evaluate(CANVAS_PIXEL, [0.4, 0.3]), a.evaluate(CANVAS_PIXEL, [0.4, 0.6])
+            check("the eraser takes the line it crosses for everyone, and leaves the other",
+                  b.evaluate(f"() => {DBG}.eraser && {DBG}.strokes === 1") and gone[3] == 0 and kept[3] > 200,
+                  f"crossed alpha {gone[3]}, other alpha {kept[3]}")
+            b.keyboard.press("e")  # eraser off
+
             # ---- clear: B clears the drawings for everyone
             b.mouse.move(400, 300)
             b.click("#clearBtn")

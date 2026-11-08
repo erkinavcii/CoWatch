@@ -224,11 +224,20 @@ def check_camera(host: Page, guest: Page) -> None:
 
     tile = host.locator(f".cam.others[data-id='{guest_id}']")
     tile.click()
-    host.wait_for_selector("#peerPop", state="visible", timeout=3000)
+    host.wait_for_selector("#camBig", state="visible", timeout=3000)
+    host.wait_for_function("(() => { const v = document.querySelector('#camBig video'); return v.videoWidth > 0 && !v.paused; })()",
+                           timeout=5000)
+    big, small = host.locator("#camBig").bounding_box(), tile.bounding_box()
+    assert big["width"] > small["width"] * 2, (big, small)
     guest.wait_for_timeout(800)
     assert guest.locator(".ripple").count() == 0, "a click on a tile poked"
+    host.locator("#camBig").click()
+    host.wait_for_selector("#camBig", state="hidden", timeout=3000)
+    ok("a click on a camera shows it large, another click makes it small; no poke")
+    tile.click(button="right")
+    host.wait_for_selector("#peerPop", state="visible", timeout=3000)
     host.keyboard.press("Escape")
-    ok("a click on a tile opens the volume, not a poke")
+    ok("a right click on a tile opens the volume")
 
     host.click("#fsBtn")
     host.wait_for_function("document.fullscreenElement && document.fullscreenElement.id === 'stage'", timeout=5000)

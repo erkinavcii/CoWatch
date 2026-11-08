@@ -36,7 +36,7 @@ from . import filepicker, library, stremio, tailscale, translate
 from .stremio import StremioError
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, pick_encoder, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
-from .presence import ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, pick_color, point, stroke_message
+from .presence import ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, erase_message, pick_color, point, stroke_message
 from .room import Client, Room, now_ms
 from .signaling import ice_servers, rtc_data
 from .subtitles import (
@@ -242,6 +242,10 @@ class Controller:
                 self._relay(client, {"type": "poke", "from": client.id, "x": at[0], "y": at[1]})
         elif kind == "draw":
             out = stroke_message(msg, client.id, client.color or PALETTE[0])
+            if out is not None:
+                self._relay(client, out)
+        elif kind == "draw_erase":
+            out = erase_message(msg, client.id)
             if out is not None:
                 self._relay(client, out)
         elif kind == "draw_clear":
