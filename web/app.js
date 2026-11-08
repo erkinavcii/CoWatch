@@ -16,6 +16,8 @@
     libraryBox: $('#libraryBox'), libraryHint: $('#libraryHint'), libraryFilter: $('#libraryFilter'),
     libraryList: $('#libraryList'), peerGrant: $('#peerGrant'), peerGrantHint: $('#peerGrantHint'), peerKick: $('#peerKick'), joinNotice: $('#joinNotice'),
     screenVideo: $('#screenVideo'), screenTag: $('#screenTag'), shareAsks: $('#shareAsks'), screenBtn: $('#screenBtn'),
+    screenGroup: $('#screenGroup'), screenMenuBtn: $('#screenMenuBtn'), screenMenu: $('#screenMenu'), screenQuality: $('#screenQuality'),
+    screenQualityHint: $('#screenQualityHint'), screenStats: $('#screenStats'),
     peerStopShare: $('#peerStopShare'), mediaLockHint: $('#mediaLockHint'),
     mediaInfo: $('#mediaInfo'), torrentInfo: $('#torrentInfo'), closeMedia: $('#closeMedia'),
     primarySel: $('#primarySel'), secondarySel: $('#secondarySel'), offsetOut: $('#offsetOut'),
@@ -79,7 +81,7 @@
     name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '', offsetMs: 0,
     fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false, color: '', sfx: true,
     micDevice: '', duck: true, peerVolume: {}, micHintShown: false, camDevice: '', showSelf: true, showCams: true,
-    camCorner: 'tr', camsSmall: false, browseCatalog: '', chatDock: true, eraseWhole: false,
+    camCorner: 'tr', camsSmall: false, browseCatalog: '', chatDock: true, eraseWhole: false, screenQuality: 'auto',
   };
   const prefs = (() => {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULT_PREFS }; }
@@ -647,7 +649,7 @@
     else if (e.key === 'e') setTool(S.eraser ? null : 'eraser');
     else if (e.key === 'c') { e.preventDefault(); setChat(true); } // preventDefault: no "c" in the box
     else if (e.key === 'Escape') {
-      el.palette.hidden = true; el.micMenu.hidden = true; el.camMenu.hidden = true; el.peerPop.hidden = true;
+      el.palette.hidden = true; el.micMenu.hidden = true; el.camMenu.hidden = true; el.screenMenu.hidden = true; el.peerPop.hidden = true;
       if (camBig.id) showBig(null);
       else if (S.penMode) setPen(false);
       else if (el.stage.classList.contains('fill')) setFill(false);
@@ -1235,7 +1237,7 @@
   });
   document.addEventListener('pointerdown', (e) => {
     if (!el.palette.hidden && !el.toolbar.contains(e.target)) el.palette.hidden = true;
-    for (const menu of [el.micMenu, el.camMenu]) {
+    for (const menu of [el.micMenu, el.camMenu, el.screenMenu]) {
       if (!menu.hidden && !menu.parentNode.contains(e.target)) menu.hidden = true;
     }
     if (!el.peerPop.hidden && !el.peerPop.contains(e.target) && !el.members.contains(e.target) && !el.camsBox.contains(e.target)) {
@@ -1260,10 +1262,24 @@
   const SENDER_LIMITS = {
     audio: { priority: 'high', networkPriority: 'high' },
     video: { maxBitrate: 500000, maxFramerate: 24, priority: 'low', networkPriority: 'low' },
-    // A shared screen is often a video: enough for 720p-1080p motion, sent to each viewer.
-    screen: { maxBitrate: 4000000, maxFramerate: 30 },
     screenAudio: { maxBitrate: 128000 },
   };
+  // The sharer picks how a shared screen goes out (prefs.screenQuality). A shared screen is often
+  // a video. Auto keeps the frame rate and lets the browser lower the resolution when the link
+  // or the processor cannot keep up; high keeps the resolution and drops frames instead; low
+  // sends at most 720p for a slow link.
+  const SCREEN_QUALITY = {
+    auto: { maxBitrate: 4000000, maxFramerate: 30, degradation: 'maintain-framerate' },
+    high: { maxBitrate: 10000000, maxFramerate: 30, degradation: 'maintain-resolution' },
+    low: { maxBitrate: 1500000, maxFramerate: 24, degradation: 'maintain-framerate', maxHeight: 720 },
+  };
+  function screenLimits () {
+    const q = SCREEN_QUALITY[prefs.screenQuality] || SCREEN_QUALITY.auto;
+    const track = screen.stream && screen.stream.getVideoTracks()[0];
+    const height = (track && track.getSettings().height) || 0;
+    const down = q.maxHeight && height > q.maxHeight ? Math.round(height / q.maxHeight * 100) / 100 : 1;
+    return [{ maxBitrate: q.maxBitrate, maxFramerate: q.maxFramerate, scaleResolutionDownBy: down }, q.degradation];
+  }
   // The transceivers of a connection, in the order the offer adds them: my sound and camera,
   // then a shared screen's picture and sound. Both sides find them by this order.
   const SLOTS = ['audioTx', 'videoTx', 'screenTx', 'screenAudioTx'];
@@ -1407,13 +1423,15 @@
   // Encodings exist only once the connection is negotiated; until then this does nothing and
   // runs again when the connection comes up.
   async function limitSenders (peer) {
-    for (const [tx, limits] of [[peer.audioTx, SENDER_LIMITS.audio], [peer.videoTx, SENDER_LIMITS.video],
-      [peer.screenTx, SENDER_LIMITS.screen], [peer.screenAudioTx, SENDER_LIMITS.screenAudio]]) {
+    for (const [tx, limits, degradation] of [[peer.audioTx, SENDER_LIMITS.audio], [peer.videoTx, SENDER_LIMITS.video],
+      [peer.screenTx, ...screenLimits()], [peer.screenAudioTx, SENDER_LIMITS.screenAudio]]) {
       if (!tx || peer.pc.signalingState === 'closed') continue;
       const params = tx.sender.getParameters();
       const enc = params.encodings && params.encodings[0];
-      if (!enc || Object.entries(limits).every(([k, v]) => enc[k] === v)) continue;
+      const sameDegradation = !degradation || !('degradationPreference' in params) || params.degradationPreference === degradation;
+      if (!enc || (sameDegradation && Object.entries(limits).every(([k, v]) => enc[k] === v))) continue;
       Object.assign(enc, limits);
+      if (degradation) params.degradationPreference = degradation; // a browser without it ignores it
       try { await tx.sender.setParameters(params); } catch (err) { console.warn('[cowatch] setParameters', err); }
     }
   }
@@ -1903,7 +1921,7 @@
   // transceivers, so sharing never needs a new offer.
   const amTrusted = () => S.isHost || !!(memberById(S.clientId) || {}).cohost;
   // Phone browsers cannot capture the screen: on a narrow screen the button gives its room away.
-  el.screenBtn.classList.toggle('no-share', !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia));
+  el.screenGroup.classList.toggle('no-share', !(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia));
   async function toggleScreen () {
     if (screen.stream) { stopMyScreen(true); return; }
     if (!S.joined) return;
@@ -2023,6 +2041,75 @@
     el.shareAsks.hidden = !el.shareAsks.children.length;
   }
   el.screenBtn.addEventListener('click', toggleScreen);
+
+  // The screen menu: the quality I share with, and what the shared picture is doing right now,
+  // read from the connection's statistics once a second while the menu is open. The browser says
+  // why it sends less than asked (qualityLimitationReason): the link or the processor.
+  const screenStats = { timer: null, last: new Map() };
+  function renderScreenMenu () {
+    el.screenQuality.value = SCREEN_QUALITY[prefs.screenQuality] ? prefs.screenQuality : 'auto';
+    el.screenQualityHint.textContent = t(`screen_q_${el.screenQuality.value}_hint`);
+  }
+  el.screenMenuBtn.addEventListener('click', () => {
+    el.screenMenu.hidden = !el.screenMenu.hidden;
+    clearInterval(screenStats.timer);
+    screenStats.last.clear();
+    el.screenStats.textContent = '';
+    if (el.screenMenu.hidden) return;
+    renderScreenMenu();
+    readScreenStats();
+    screenStats.timer = setInterval(() => {
+      if (el.screenMenu.hidden) { clearInterval(screenStats.timer); return; }
+      readScreenStats();
+    }, 1000);
+  });
+  el.screenQuality.addEventListener('change', () => {
+    prefs.screenQuality = el.screenQuality.value; savePrefs(); renderScreenMenu();
+    if (screen.owner === S.clientId) for (const peer of peers.values()) limitSenders(peer);
+  });
+  async function readScreenStats () {
+    const owner = screen.owner;
+    const lines = [];
+    if (owner === S.clientId) {
+      for (const [id, peer] of peers) {
+        if (!peer.screenTx) continue;
+        const row = await videoStats(peer.screenTx.sender, 'outbound-rtp', id);
+        if (row) lines.push([(memberById(id) || {}).name || '…', row]);
+      }
+    } else if (owner && peers.get(owner) && peers.get(owner).screenTx) {
+      const row = await videoStats(peers.get(owner).screenTx.receiver, 'inbound-rtp', owner);
+      if (row) lines.push([t('screen_in'), row]);
+    }
+    if (el.screenMenu.hidden) return;
+    el.screenStats.replaceChildren(...(lines.length ? lines : [[null, null]]).map(([who, row]) => {
+      const div = document.createElement('div');
+      if (!row) { div.textContent = t(owner ? 'screen_stats_wait' : 'screen_stats_none'); return div; }
+      div.textContent = `${who}: ${row.text}`;
+      if (row.limit) {
+        const lim = document.createElement('span');
+        lim.className = 'lim';
+        lim.textContent = ` · ${t(`screen_limit_${row.limit}`)}`;
+        div.append(lim);
+      }
+      return div;
+    }));
+  }
+  async function videoStats (end, type, key) {
+    let report;
+    try { report = await end.getStats(); } catch { return null; }
+    let rtp = null;
+    report.forEach((s) => { if (s.type === type && s.kind === 'video') rtp = s; });
+    if (!rtp || !rtp.frameHeight) return null;
+    const bytes = type === 'outbound-rtp' ? rtp.bytesSent : rtp.bytesReceived;
+    const prev = screenStats.last.get(key + type);
+    screenStats.last.set(key + type, { bytes, at: rtp.timestamp });
+    const mbps = prev && rtp.timestamp > prev.at ? (bytes - prev.bytes) * 8 / ((rtp.timestamp - prev.at) * 1000) : null;
+    const fps = Math.round(rtp.framesPerSecond || 0);
+    const text = `${rtp.frameWidth}×${rtp.frameHeight} · ${t('screen_fps', { n: fps })}` +
+      (mbps == null ? '' : ` · ${mbps.toFixed(1).replace('.', t('decimal_sep'))} Mbps`);
+    const limit = ['bandwidth', 'cpu'].includes(rtp.qualityLimitationReason) ? rtp.qualityLimitationReason : '';
+    return { text, limit };
+  }
 
   // ---------------------------------------------------------------- subtitles
   function activeText (trackId, time) {
@@ -3652,7 +3739,11 @@
       duck, filmVolume: video.volume, speaking: [...speaking],
       peers: [...peers.values()].map((p) => {
         const enc = p.videoTx && (p.videoTx.sender.getParameters().encodings || [])[0];
+        const screenParams = p.screenTx && p.screenTx.sender.getParameters();
+        const screenEnc = screenParams && (screenParams.encodings || [])[0];
         return {
+          screenMaxBitrate: screenEnc ? screenEnc.maxBitrate : null, screenDown: screenEnc ? screenEnc.scaleResolutionDownBy : null,
+          screenDegradation: screenParams ? screenParams.degradationPreference || null : null,
           id: p.id, polite: p.polite, state: p.pc.connectionState, level: peerLevel(p),
           sending: !!(p.audioTx && p.audioTx.sender.track), sendingVideo: !!(p.videoTx && p.videoTx.sender.track),
           videoMaxBitrate: enc ? enc.maxBitrate : null, transceivers: p.pc.getTransceivers().length,

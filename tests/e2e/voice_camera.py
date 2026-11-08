@@ -299,6 +299,29 @@ def check_screen(host: Page, guest: Page) -> None:
     assert host.locator("#screenTag").inner_text().startswith("Misafir")
     ok("allowed: the guest's screen covers the film in both windows, and the film waits")
 
+    guest.wait_for_function("cowatchDebug().voice.peers.every(p => p.screenMaxBitrate === 4000000)", timeout=10000)
+    guest.locator("#stage").hover()
+    guest.click("#screenMenuBtn")
+    guest.wait_for_selector("#screenMenu", state="visible", timeout=5000)
+    guest.select_option("#screenQuality", "low")
+    guest.wait_for_function("cowatchDebug().voice.peers.every(p => p.screenMaxBitrate === 1500000)", timeout=10000)
+    low = debug(guest)["voice"]["peers"][0]
+    assert low["screenDegradation"] in (None, "maintain-framerate"), low
+    guest.select_option("#screenQuality", "high")
+    guest.wait_for_function("cowatchDebug().voice.peers.every(p => p.screenMaxBitrate === 10000000 && p.screenDown === 1)",
+                            timeout=10000)
+    high = debug(guest)["voice"]["peers"][0]
+    assert high["screenDegradation"] in (None, "maintain-resolution"), high
+    guest.wait_for_function(r"/\d+×\d+/.test(document.querySelector('#screenStats').textContent)", timeout=10000)
+    host.locator("#stage").hover()
+    host.click("#screenMenuBtn")
+    host.wait_for_function(r"/^Gelen: \d+×\d+/.test(document.querySelector('#screenStats').textContent)", timeout=10000)
+    stats = host.locator("#screenStats").inner_text()
+    for page in (host, guest):
+        page.keyboard.press("Escape")
+        page.wait_for_selector("#screenMenu", state="hidden", timeout=5000)
+    ok(f"the sharer picks low and high quality, both see the live picture size ({stats.strip()})")
+
     host.click(f".member.others[data-id='{guest_id}']")
     host.wait_for_selector("#peerStopShare", state="visible", timeout=5000)
     host.click("#peerStopShare")

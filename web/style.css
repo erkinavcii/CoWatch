@@ -156,6 +156,10 @@ button.busy:disabled::before, .loading::before {
   background: rgba(10, 11, 14, .94); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
 }
 .av-menu select { width: 100%; }
+.av-menu .hint { margin: 0 0 4px; }
+.screen-stats { font-size: 12.5px; display: grid; gap: 3px; font-variant-numeric: tabular-nums; }
+.screen-stats:empty { display: none; }
+.screen-stats .lim { color: #ffb86b; }
 .check { display: flex; gap: 8px; align-items: center; font-size: 13px; margin-top: 6px; cursor: pointer; }
 .check input { accent-color: var(--accent); }
 .member { cursor: default; transition: box-shadow .15s ease; }
@@ -726,7 +730,7 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
   .bar .icon { width: 32px; }
   .bar .icon.caret { width: 16px; }
   .av-group, .chat-btn { margin-left: 2px; }
-  #pipBtn, #screenBtn.no-share { display: none; } /* phones have neither the window nor screen capture */
+  #pipBtn, #screenGroup.no-share { display: none; } /* phones have neither the window nor screen capture */
   .cam-name { font-size: 10px; left: 3px; bottom: 3px; padding: 0 5px; }
   .toolbar { padding: 3px; gap: 2px; }
   .toolbar .tool { width: 32px; height: 32px; }

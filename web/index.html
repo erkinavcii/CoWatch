@@ -139,9 +139,23 @@
               <label class="check"><input type="checkbox" id="camsCheck"><span data-i18n="show_cams"></span></label>
             </div>
           </span>
-          <button id="screenBtn" class="icon av screen" type="button">
-            <svg viewBox="0 0 24 24"><path d="M3 4h18a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v9h16V6zm8 1 3.5 3.5H13V14h-2v-3.5H8.5z"/></svg>
-          </button>
+          <span class="av-group" id="screenGroup">
+            <button id="screenBtn" class="icon av screen" type="button">
+              <svg viewBox="0 0 24 24"><path d="M3 4h18a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-7v2h3v2H7v-2h3v-2H3a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm1 2v9h16V6zm8 1 3.5 3.5H13V14h-2v-3.5H8.5z"/></svg>
+            </button>
+            <button id="screenMenuBtn" class="icon caret" type="button" data-i18n-title="screen_settings">
+              <svg viewBox="0 0 24 24"><path d="M7 14.5 12 9.5l5 5z"/></svg>
+            </button>
+            <div class="av-menu" id="screenMenu" hidden>
+              <label class="field"><span data-i18n="screen_quality"></span><select id="screenQuality">
+                <option value="auto" data-i18n="screen_q_auto"></option>
+                <option value="high" data-i18n="screen_q_high"></option>
+                <option value="low" data-i18n="screen_q_low"></option>
+              </select></label>
+              <p class="hint" id="screenQualityHint"></p>
+              <div class="screen-stats" id="screenStats"></div>
+            </div>
+          </span>
           <button id="chatBtn" class="icon chat-btn" type="button" data-i18n-title="chat_open">
             <svg viewBox="0 0 24 24"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H10l-5 4v-4H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/></svg>
             <span class="badge" id="chatBadge" hidden></span>
