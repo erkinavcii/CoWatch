@@ -107,3 +107,99 @@ def test_a_graphics_card_encoder_that_fails_falls_back_to_the_cpu(sample, monkey
         session.stop()
 
     asyncio.run(run())
+
+
+@pytest.fixture(scope="module")
+def hdr_sample(tmp_path_factory):
+    """6 s of 10-bit H.264 marked as HDR10 (PQ, BT.2020): stands in for an HDR film."""
+    path = tmp_path_factory.mktemp("hdr") / "Hdr.Film.2160p.HDR.mkv"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24", "-t", "6",
+        "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p10le",
+        "-x264-params", "colorprim=bt2020:transfer=smpte2084:colormatrix=bt2020nc", str(path),
+    ], check=True)
+    return path
+
+
+def test_hdr_kind_reads_the_transfer_and_dolby_vision():
+    from server.media import ProbeInfo, hdr_kind, tonemap_for
+
+    def info(video):
+        return ProbeInfo(duration=1, size=1, start_time=0, format_name="", bitrate_kbps=1, video=video, audio=[])
+
+    assert hdr_kind(info({"color_transfer": "smpte2084"})) == "pq"
+    assert hdr_kind(info({"color_transfer": "arib-std-b67"})) == "hlg"
+    dovi = info({"side_data_list": [{"side_data_type": "DOVI configuration record", "dv_profile": 5}]})
+    assert hdr_kind(dovi) == "dovi"
+    assert hdr_kind(info({"color_transfer": "bt709"})) is None
+    # zscale cannot read a Dolby Vision-only picture; libplacebo can.
+    assert tonemap_for(dovi, "zscale") is None and tonemap_for(dovi, "libplacebo") == "libplacebo"
+    assert tonemap_for(info({"color_transfer": "bt709"}), "libplacebo") is None
+
+
+def test_the_command_decodes_on_the_card_and_converts_hdr_only_when_converting(hdr_sample):
+    from pathlib import PurePath
+
+    from server.media import build_command
+
+    cfg = get_settings()
+
+    async def run():
+        info = await probe(cfg, str(hdr_sample))
+        cmd = build_command(cfg, str(hdr_sample), PurePath("out"), 0, "transcode", info, None, "libx264",
+                            "cuda", "libplacebo")
+        assert cmd.index("-hwaccel") < cmd.index("-i") and cmd[cmd.index("-hwaccel") + 1] == "cuda"
+        assert "vulkan=vk" in cmd and cmd[cmd.index("-vf") + 1].startswith("libplacebo=")
+        zs = build_command(cfg, str(hdr_sample), PurePath("out"), 0, "transcode", info, None, "libx264", None, "zscale")
+        assert "-hwaccel" not in zs and "vulkan=vk" not in zs and "tonemap=tonemap=hable" in zs[zs.index("-vf") + 1]
+        copy = build_command(cfg, str(hdr_sample), PurePath("out"), 0, "copy", info, None, "libx264", "cuda", "zscale")
+        assert "-hwaccel" not in copy and "-vf" not in copy
+
+    asyncio.run(run())
+
+
+def test_a_decoder_that_fails_falls_back_to_the_cpu(sample, monkeypatch):
+    from server import media
+
+    cfg = get_settings()
+    monkeypatch.setattr(media, "pick_encoder", lambda _cfg: "libx264")
+    monkeypatch.setattr(media, "pick_hwaccel", lambda _cfg, _enc: "no_such_decoder")
+
+    async def run():
+        info = await probe(cfg, str(sample))
+        source = MediaSource(kind="file", url=str(sample), title=sample.name, size=info.size, media_key="k")
+        session = MediaSession(cfg, source, info)
+        session.mode = "transcode"
+        await session.start_at(0)
+        assert session.hwaccel is None and session.public()["decoder"] is None
+        assert session.encoder == "libx264"
+        session.stop()
+
+    asyncio.run(run())
+
+
+def test_an_hdr_film_is_converted_and_a_failing_filter_gives_way(hdr_sample, monkeypatch):
+    from server import media
+
+    cfg = get_settings()
+    monkeypatch.setattr(media, "pick_encoder", lambda _cfg: "libx264")
+    monkeypatch.setattr(media, "pick_hwaccel", lambda _cfg, _enc: None)
+    monkeypatch.setattr(media, "pick_tonemap", lambda _cfg: "libplacebo")
+    # libplacebo cannot start (no such device): zscale takes over if this ffmpeg has it.
+    monkeypatch.setattr(media, "_tonemap_device",
+                        lambda kind: ["-init_hw_device", "no_such_device=x"] if kind == "libplacebo" else [])
+
+    async def run():
+        info = await probe(cfg, str(hdr_sample))
+        assert media.hdr_kind(info) == "pq" and decide_mode(info, cfg)[0] == "transcode"
+        source = MediaSource(kind="file", url=str(hdr_sample), title=hdr_sample.name, size=info.size, media_key="k")
+        session = MediaSession(cfg, source, info)
+        await session.start_at(0)
+        assert session.tonemap == ("zscale" if media.tonemap_works(cfg.ffmpeg, "zscale") else None)
+        assert session.public()["hdr"] == "pq" and session.public()["toneMap"] == session.tonemap
+        await _wait_finished(session)
+        assert session.stream.ended()
+        session.stop()
+
+    asyncio.run(run())

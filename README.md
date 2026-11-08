@@ -140,6 +140,8 @@ Required upload ≈ the file's bitrate × 1.3. If you don't know the bitrate: fo
 
 Multiply by two for two viewers. With a slow upload, choose "Limit by hand" under Settings → Picture quality (e.g. 6 Mbps; `MAX_COPY_KBPS=6000` in `.env`): heavier files are then converted automatically. Videos that are not H.264 (HEVC/x265, 10-bit) are always converted. Converting uses the graphics card when one works (NVIDIA, Intel or AMD; tried for a moment at start, the CPU otherwise); the media card says which. In one measurement NVENC used a third of the CPU time of `libx264` and took half as long. `VIDEO_ENCODER` names one by hand.
 
+The graphics card also decodes the source when it can (NVIDIA's decoder with an NVIDIA card, Windows' D3D11 decoder otherwise, VideoToolbox on a Mac; Linux decodes on the CPU). This matters most for 4K HEVC 10-bit films: in one measurement the CPU time for 20 s of 4K HEVC went from 30 s to 6.7 s. HDR films (HDR10, HLG, Dolby Vision) are converted to normal colours, otherwise they look grey and washed out on an ordinary screen and in the browser: on the graphics card with libplacebo (Vulkan; it also reads Dolby Vision), or on the CPU with zscale when there is no Vulkan card (about 2–3 CPU cores busy for a 1080p picture). With the card doing all of it, a 4K Dolby Vision film was converted at 4× real time using about a fifth of one CPU core. Everything is tried once at start; if the card fails on a real film, that film falls back to the CPU by itself. The media card shows "HDR → normal colours". `HW_DECODE` and `HDR_TONEMAP` turn these off or pick one by hand.
+
 ## Settings (.env)
 
 Most of these are on the settings page. `.env` is for developers and for the rest; a variable set there wins over the page.
@@ -164,6 +166,8 @@ Most of these are on the settings page. `.env` is for developers and for the res
 | `MAX_COPY_KBPS` | 0 (5500 on Funnel) | H.264 files above this are converted, 0 = always original |
 | `TRANSCODE_KBPS` | 5000 (4500 on Funnel) | Target bitrate of a converted stream |
 | `VIDEO_ENCODER` | auto | Encoder used for conversion: `auto` = the graphics card's if one works (`h264_nvenc`, `h264_qsv`, `h264_amf`), else `libx264` |
+| `HW_DECODE` | auto | Decoding the source when converting: `auto` = on the graphics card if it works (`cuda`, `d3d11va`, `videotoolbox`), `off` = on the CPU, or an ffmpeg `-hwaccel` name |
+| `HDR_TONEMAP` | auto | HDR films to normal colours: `auto` = `libplacebo` (graphics card) if it works, else `zscale` (CPU); `off` sends them unconverted |
 | `MAX_HEIGHT` | 1080 | Maximum height when converting |
 | `AUDIO_FILTER` | dynaudnorm | Evens out loud and quiet parts; leave empty to turn off |
 | `OPENSUBTITLES_API_KEY` | – | Get one at [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) |
@@ -174,7 +178,7 @@ Once ffmpeg is more than 10 minutes ahead of playback, the torrent download slow
 ## Known limitations
 
 - One room, one film. The room is protected by the link key.
-- HDR videos look washed out once converted (no tone mapping).
+- A Dolby Vision-only film (profile 5, with no HDR10 base) gets the right colours only with libplacebo (a Vulkan graphics card); on the CPU it is sent unconverted. Prefer an HDR10 release then.
 - On iPhone, subtitles do not show in fullscreen (Safari can only make the video itself fullscreen); watch in landscape without fullscreen.
 - DRM platforms (Netflix etc.) are not supported in this mode; a browser extension for them is on the roadmap.
 - `data/torrents` grows with downloaded films; clean it up by hand.

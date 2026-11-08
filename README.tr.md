@@ -140,6 +140,8 @@ Gereken upload ≈ dosyanın bitrate'i × 1,3. Dosyanın bitrate'ini bilmiyorsan
 
 İki izleyici varsa ikiyle çarp. Upload'un düşükse Ayarlar → Görüntü kalitesi'nde "Elle sınır"ı seç (ör. 6 Mbps; `.env`'de `MAX_COPY_KBPS=6000`): bundan ağır dosyalar otomatik dönüştürülür. H.264 olmayan (HEVC/x265, 10-bit) videolar zaten her zaman dönüştürülür. Dönüştürme, çalışan bir ekran kartı varsa onunla yapılır (NVIDIA, Intel ya da AMD; açılışta bir an denenir, yoksa işlemci); hangisinin kullanıldığını film kartı söyler. Bir ölçümde NVENC, `libx264`'ün üçte biri kadar işlemci zamanı harcadı ve yarı sürede bitirdi. `VIDEO_ENCODER` elle seçtirir.
 
+Kaynağı çözmeyi de mümkünse ekran kartı yapar (NVIDIA kartta NVIDIA'nın çözücüsü, diğerlerinde Windows'un D3D11 çözücüsü, Mac'te VideoToolbox; Linux'ta işlemci). En çok 4K HEVC 10-bit filmlerde işe yarar: bir ölçümde 20 saniyelik 4K HEVC'nin işlemci zamanı 30 saniyeden 6,7 saniyeye indi. HDR filmler (HDR10, HLG, Dolby Vision) normal renklere çevrilir; yoksa sıradan ekranda ve tarayıcıda gri ve soluk görünürler. Çeviri ekran kartında libplacebo ile yapılır (Vulkan; Dolby Vision'ı da okur), Vulkan'lı kart yoksa işlemcide zscale ile (1080p görüntü için 2–3 işlemci çekirdeği meşgul olur). Hepsini kart yapınca 4K Dolby Vision bir film, bir işlemci çekirdeğinin beşte biri kadar yükle gerçek zamanın 4 katı hızda dönüştürüldü. Hepsi açılışta bir kez denenir; kart gerçek bir filmde hata verirse o film kendiliğinden işlemciye döner. Film kartında "HDR → normal renkler" yazar. `HW_DECODE` ve `HDR_TONEMAP` bunları kapatır ya da elle seçtirir.
+
 ## Ayarlar (.env)
 
 Bunların çoğu ayarlar sayfasında. `.env` geliştiriciler ve geri kalanlar için; orada verilen bir değişken sayfadakini geçer.
@@ -164,6 +166,8 @@ Bunların çoğu ayarlar sayfasında. `.env` geliştiriciler ve geri kalanlar i�
 | `MAX_COPY_KBPS` | 0 (Funnel'da 5500) | Bunun üstündeki H.264 dosyalar dönüştürülür, 0 = hep orijinal |
 | `TRANSCODE_KBPS` | 5000 (Funnel'da 4500) | Dönüştürülen akışın hedef bitrate'i |
 | `VIDEO_ENCODER` | auto | Dönüştürme encoder'ı: `auto` = çalışıyorsa ekran kartınınki (`h264_nvenc`, `h264_qsv`, `h264_amf`), yoksa `libx264` |
+| `HW_DECODE` | auto | Dönüştürürken kaynağı çözme: `auto` = çalışıyorsa ekran kartında (`cuda`, `d3d11va`, `videotoolbox`), `off` = işlemcide, ya da bir ffmpeg `-hwaccel` adı |
+| `HDR_TONEMAP` | auto | HDR filmleri normal renklere çevirme: `auto` = çalışıyorsa `libplacebo` (ekran kartı), yoksa `zscale` (işlemci); `off` çevirmeden gönderir |
 | `MAX_HEIGHT` | 1080 | Dönüştürmede en fazla yükseklik |
 | `AUDIO_FILTER` | dynaudnorm | Ses dengeleme; boş bırakırsan kapanır |
 | `OPENSUBTITLES_API_KEY` | – | [opensubtitles.com/consumers](https://www.opensubtitles.com/consumers) adresinden alınır |
@@ -174,7 +178,7 @@ Torrent, ffmpeg playback'in 10 dakikadan fazla önüne geçince indirmeyi kendil
 ## Bilinen sınırlar
 
 - Tek oda, tek film. Odayı link anahtarı korur.
-- HDR videolar dönüştürülünce renkler soluk görünür (ton eşleme yok).
+- Sadece Dolby Vision olan bir film (profil 5, HDR10 tabanı yok) doğru renkleri sadece libplacebo ile (Vulkan'lı ekran kartı) alır; işlemcide çevrilmeden gönderilir. O durumda HDR10 sürümünü seç.
 - iPhone'da tam ekranda altyazı görünmez (Safari sadece videoyu tam ekran yapabiliyor); yatay modda tam ekransız izle.
 - DRM'li platformlar (Netflix vb.) bu modda yok; yol haritasında tarayıcı eklentisi olarak duruyor.
 - `data/torrents` indirilen filmlerle büyür; işin bitince elle temizle.

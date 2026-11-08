@@ -235,6 +235,8 @@ class Settings:
     ffmpeg: str
     ffprobe: str
     video_encoder: str
+    hw_decode: str  # auto | off | an ffmpeg -hwaccel name (media.pick_hwaccel)
+    hdr_tonemap: str  # auto | libplacebo | zscale | off (media.pick_tonemap)
     transcode_kbps: int
     max_copy_kbps: int  # 0 = always copy H.264
     max_height: int
@@ -369,6 +371,8 @@ def get_settings() -> Settings:
         ffmpeg=_str(v, "FFMPEG", "ffmpeg"),
         ffprobe=_str(v, "FFPROBE", "ffprobe"),
         video_encoder=_str(v, "VIDEO_ENCODER", "auto"),  # auto: the graphics card's if one works (media.pick_encoder)
+        hw_decode=_str(v, "HW_DECODE", "auto").lower(),
+        hdr_tonemap=_str(v, "HDR_TONEMAP", "auto").lower(),
         transcode_kbps=_int(v, "TRANSCODE_KBPS", FUNNEL_TRANSCODE_KBPS if auto else 5000),
         max_copy_kbps=_int(v, "MAX_COPY_KBPS", FUNNEL_COPY_KBPS if auto else 0),
         max_height=_int(v, "MAX_HEIGHT", 1080),

@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -46,6 +47,22 @@ SOFTWARE_ENCODER = "libx264"
 HARDWARE_ENCODERS = ("h264_videotoolbox",) if sys.platform == "darwin" else ("h264_nvenc", "h264_qsv", "h264_amf")
 _encoders: dict[str, str] = {}  # ffmpeg -> the encoder chosen for it
 _encoders_lock = threading.Lock()
+
+# Decoding on the graphics card. A 4K HEVC 10-bit film took 30 s of CPU time per 20 s of film to
+# decode in software, 6.7 s with NVIDIA's decoder (cuda) and 11.5 s with Windows' own (d3d11va).
+# Asked for by name, a decoder ffmpeg cannot open stops ffmpeg with an error (it does not fall
+# back by itself): the test at start and the fallback in MediaSession.start_at rely on that. A
+# card that opens but cannot decode one particular film's profile is fine: ffmpeg decodes that
+# film in software.
+HW_DECODE_CODECS = {"h264", "hevc", "av1", "vp9"}
+_hwaccels: dict[tuple[str, str], Optional[str]] = {}  # (ffmpeg, encoder) -> decoder, None = CPU
+
+# HDR films converted to SDR (normal colours), else they look grey and washed out on an ordinary
+# screen. "libplacebo" does it on the graphics card through Vulkan, also scales there, and reads
+# Dolby Vision; "zscale" does it on the CPU (2.4 cores busy for a 1080p picture here), and gets
+# only HDR10 and HLG right, not a Dolby Vision-only film (profile 5).
+HDR_TRANSFERS = {"smpte2084", "arib-std-b67"}  # PQ (HDR10, Dolby Vision 8.1) and HLG
+_tonemaps: dict[str, Optional[str]] = {}  # ffmpeg -> "libplacebo" | "zscale" | None
 
 
 class MediaError(Exception):
@@ -164,6 +181,129 @@ def give_up_on(cfg: Settings, encoder: str) -> None:
             _encoders[cfg.ffmpeg] = SOFTWARE_ENCODER
 
 
+def hwaccel_candidates(encoder: str) -> list[str]:
+    if sys.platform == "darwin":
+        return ["videotoolbox"]
+    if os.name == "nt":
+        return (["cuda"] if encoder == "h264_nvenc" else []) + ["d3d11va"]
+    return []  # Linux: VAAPI wants a device path; left to the CPU
+
+
+def hwaccel_works(ffmpeg: str, hwaccel: str, encoder: str, timeout: float = 20) -> bool:
+    """Twelve frames made with the working encoder, decoded with `hwaccel`."""
+    extra, pix_fmt = ENCODER_PRESETS.get(encoder, ([], "yuv420p"))
+    with tempfile.TemporaryDirectory(prefix="cowatch-hw-") as tmp:
+        sample = str(Path(tmp) / "sample.mp4")
+        make = [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24",
+                "-frames:v", "12", "-vf", f"format={pix_fmt}", "-c:v", encoder, *extra, "-b:v", "1000k", sample]
+        decode = [ffmpeg, "-hide_banner", "-loglevel", "error", "-hwaccel", hwaccel, "-i", sample, "-f", "null", "-"]
+        try:
+            return _run(make, timeout).returncode == 0 and _run(decode, timeout).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+
+def pick_hwaccel(cfg: Settings, encoder: str) -> Optional[str]:
+    """HW_DECODE: "auto" (the default) tries the candidates for this encoder once per ffmpeg;
+    "off" (or "cpu") decodes in software; anything else is passed to ffmpeg's -hwaccel as is."""
+    choice = cfg.hw_decode
+    if choice in ("off", "cpu", "none", "0"):
+        return None
+    if choice != "auto":
+        return choice
+    key = (cfg.ffmpeg, encoder)
+    with _encoders_lock:
+        if key not in _hwaccels:
+            _hwaccels[key] = next((h for h in hwaccel_candidates(encoder) if hwaccel_works(cfg.ffmpeg, h, encoder)), None)
+            log.info("video decoder: %s", _hwaccels[key] or "CPU")
+        return _hwaccels[key]
+
+
+def give_up_on_hwaccel(cfg: Settings, encoder: str) -> None:
+    with _encoders_lock:
+        if cfg.hw_decode == "auto":
+            _hwaccels[(cfg.ffmpeg, encoder)] = None
+
+
+def hdr_kind(info: ProbeInfo) -> Optional[str]:
+    """"pq" or "hlg" for an HDR picture, "dovi" for Dolby Vision without an HDR10 base, else None."""
+    transfer = info.video.get("color_transfer")
+    if transfer == "smpte2084":
+        return "pq"
+    if transfer == "arib-std-b67":
+        return "hlg"
+    for side in info.video.get("side_data_list") or []:
+        if side.get("side_data_type") == "DOVI configuration record":
+            return "dovi"
+    return None
+
+
+def _tonemap_filter(kind: str, hlg: bool, max_height: int, pix_fmt: str) -> str:
+    height = f"'min({max_height},ih)'"
+    if kind == "libplacebo":
+        return (f"libplacebo=w=-2:h={height}:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:"
+                f"format={pix_fmt}:tonemapping=auto")
+    # zscale needs the input's colours spelled out: frames often reach the filter without them.
+    trc = "arib-std-b67" if hlg else "smpte2084"
+    return (f"scale=-2:{height},setparams=color_primaries=bt2020:color_trc={trc}:colorspace=bt2020nc:range=tv,"
+            "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=tonemap=hable:desat=0,"
+            f"zscale=t=bt709:m=bt709:r=tv,format={pix_fmt}")
+
+
+def tonemap_works(ffmpeg: str, kind: str, timeout: float = 30) -> bool:
+    """A few PQ frames through the filter: the filter may be missing from this ffmpeg build, or
+    (libplacebo) there may be no Vulkan graphics card."""
+    vf = "format=yuv420p10le," + _tonemap_filter(kind, False, 360, "yuv420p")
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", *_tonemap_device(kind),
+           "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24", "-frames:v", "3", "-vf", vf, "-f", "null", "-"]
+    try:
+        return _run(cmd, timeout).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _tonemap_device(kind: Optional[str]) -> list[str]:
+    return ["-init_hw_device", "vulkan=vk", "-filter_hw_device", "vk"] if kind == "libplacebo" else []
+
+
+def pick_tonemap(cfg: Settings) -> Optional[str]:
+    """HDR_TONEMAP: "auto" (the default) takes libplacebo if it works here, else zscale;
+    "libplacebo" or "zscale" names one; "off" sends HDR films unconverted."""
+    choice = cfg.hdr_tonemap
+    if choice in ("off", "none", "0"):
+        return None
+    if choice in ("libplacebo", "zscale"):
+        return choice
+    with _encoders_lock:
+        if cfg.ffmpeg not in _tonemaps:
+            _tonemaps[cfg.ffmpeg] = next((k for k in ("libplacebo", "zscale") if tonemap_works(cfg.ffmpeg, k)), None)
+            log.info("HDR tone mapping: %s", _tonemaps[cfg.ffmpeg] or "none")
+        return _tonemaps[cfg.ffmpeg]
+
+
+def give_up_on_tonemap(cfg: Settings, kind: str) -> Optional[str]:
+    """libplacebo failed on a real film: zscale from now on (if it works). Returns the next one."""
+    nxt = "zscale" if kind == "libplacebo" and tonemap_works(cfg.ffmpeg, "zscale") else None
+    with _encoders_lock:
+        if cfg.hdr_tonemap == "auto" and _tonemaps.get(cfg.ffmpeg) == kind:
+            _tonemaps[cfg.ffmpeg] = nxt
+    return nxt
+
+
+def prepare_converting(cfg: Settings) -> None:
+    """At start, in the background: find the encoder, the decoder for it and the HDR filter."""
+    pick_hwaccel(cfg, pick_encoder(cfg))
+    pick_tonemap(cfg)
+
+
+def tonemap_for(info: ProbeInfo, kind: Optional[str]) -> Optional[str]:
+    """The filter this film gets: none for SDR; zscale cannot read a Dolby Vision-only picture."""
+    hdr = hdr_kind(info)
+    if hdr is None or kind is None or (hdr == "dovi" and kind != "libplacebo"):
+        return None
+    return kind
+
+
 def decide_mode(info: ProbeInfo, cfg: Settings) -> tuple[str, str]:
     codec = info.video_codec
     if codec != "h264":
@@ -176,15 +316,18 @@ def decide_mode(info: ProbeInfo, cfg: Settings) -> tuple[str, str]:
     return "copy", "H.264 source, sent without re-encoding"
 
 
-def _video_args(cfg: Settings, mode: str, encoder: str = SOFTWARE_ENCODER) -> list[str]:
+def _video_args(cfg: Settings, mode: str, encoder: str = SOFTWARE_ENCODER, info: Optional[ProbeInfo] = None,
+                tonemap: Optional[str] = None) -> list[str]:
     if mode == "copy":
         return ["-c:v", "copy"]
     extra, pix_fmt = ENCODER_PRESETS.get(encoder, ([], "yuv420p"))
     kbps = max(500, cfg.transcode_kbps)
+    vf = (_tonemap_filter(tonemap, info is not None and hdr_kind(info) == "hlg", cfg.max_height, pix_fmt) if tonemap
+          else f"scale=-2:'min({cfg.max_height},ih)',format={pix_fmt}")
     return [
         "-c:v", encoder, *extra,
         "-b:v", f"{kbps}k", "-maxrate", f"{int(kbps * 1.25)}k", "-bufsize", f"{kbps * 2}k",
-        "-vf", f"scale=-2:'min({cfg.max_height},ih)',format={pix_fmt}",
+        "-vf", vf,
         # A keyframe at least every segment; -copyts means t does not start at 0.
         "-force_key_frames", f"expr:if(isnan(prev_forced_t),1,gte(t,prev_forced_t+{cfg.hls_time}))",
     ]
@@ -208,8 +351,13 @@ def _ffmpeg_out(path: PurePath) -> str:
 def build_command(
     cfg: Settings, source: str, out_dir: PurePath, start: float, mode: str,
     info: ProbeInfo, audio: Optional[dict], encoder: str = SOFTWARE_ENCODER,
+    hwaccel: Optional[str] = None, tonemap: Optional[str] = None,
 ) -> list[str]:
     cmd = [cfg.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning", "-y"]
+    if mode == "transcode":
+        cmd += _tonemap_device(tonemap)
+        if hwaccel and info.video_codec in HW_DECODE_CODECS:
+            cmd += ["-hwaccel", hwaccel]
     if source.startswith(("http://", "https://")):
         cmd += ["-reconnect", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "10"]
     if start > 0.001:
@@ -218,7 +366,7 @@ def build_command(
     if audio is not None:
         cmd += ["-map", f"0:{audio['index']}"]
     cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"]
-    cmd += _video_args(cfg, mode, encoder)
+    cmd += _video_args(cfg, mode, encoder, info, tonemap if mode == "transcode" else None)
     if audio is not None:
         cmd += _audio_args(cfg)
     cmd += [
@@ -241,9 +389,12 @@ class HlsStream:
     """One ffmpeg run that writes an EVENT playlist starting at `start` seconds."""
 
     def __init__(self, cfg: Settings, source: str, out_dir: Path, start: float, mode: str,
-                 info: ProbeInfo, audio: Optional[dict], encoder: str = SOFTWARE_ENCODER):
+                 info: ProbeInfo, audio: Optional[dict], encoder: str = SOFTWARE_ENCODER,
+                 hwaccel: Optional[str] = None, tonemap: Optional[str] = None):
         self.cfg = cfg
         self.encoder = encoder
+        self.hwaccel = hwaccel
+        self.tonemap = tonemap
         self.source = source
         self.out_dir = out_dir
         self.id = out_dir.name
@@ -262,9 +413,11 @@ class HlsStream:
     def start_process(self) -> None:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         cmd = build_command(self.cfg, self.source, self.out_dir, self.start, self.mode, self.info, self.audio,
-                            self.encoder)
+                            self.encoder, self.hwaccel, self.tonemap)
+        how = ", ".join(x for x in (self.hwaccel and f"decode {self.hwaccel}", self.encoder,
+                                     self.tonemap and f"HDR {self.tonemap}") if x)
         log.info("ffmpeg start=%.1f mode=%s%s -> %s", self.start, self.mode,
-                 f" ({self.encoder})" if self.mode == "transcode" else "", self.out_dir.name)
+                 f" ({how})" if self.mode == "transcode" else "", self.out_dir.name)
         self._log_file = open(self.out_dir / "ffmpeg.log", "w", encoding="utf-8", errors="replace")
         self._log_file.write(" ".join(cmd) + "\n\n")
         self._log_file.flush()
@@ -414,6 +567,8 @@ class MediaSession:
         self.lock = asyncio.Lock()
         self.auto_restarts = 0
         self.encoder: Optional[str] = None  # converting: the encoder in use, picked at the first start
+        self.hwaccel: Optional[str] = None  # converting: the graphics card decoder, None = the CPU
+        self.tonemap: Optional[str] = None  # converting an HDR film: the filter making it SDR
 
     @property
     def duration(self) -> float:
@@ -428,10 +583,14 @@ class MediaSession:
             self.stream.stop()
         if self.mode == "transcode" and self.encoder is None:
             self.encoder = await asyncio.to_thread(pick_encoder, self.cfg)
+            if self.info.video_codec in HW_DECODE_CODECS:
+                self.hwaccel = await asyncio.to_thread(pick_hwaccel, self.cfg, self.encoder)
+            if hdr_kind(self.info):
+                self.tonemap = tonemap_for(self.info, await asyncio.to_thread(pick_tonemap, self.cfg))
         while True:
             out_dir = self.cfg.hls_dir / uuid.uuid4().hex[:12]
             stream = HlsStream(self.cfg, self.source.url, out_dir, target, self.mode, self.info, self.audio,
-                               self.encoder or SOFTWARE_ENCODER)
+                               self.encoder or SOFTWARE_ENCODER, self.hwaccel, self.tonemap)
             stream.start_process()
             try:
                 await stream.wait_ready(timeout=240)
@@ -445,8 +604,19 @@ class MediaSession:
                 stream.stop()
                 tail = stream.log_tail(3)
                 shutil.rmtree(out_dir, ignore_errors=True)
-                # A graphics card encoder can still fail on a real film (a size or format it
-                # does not take): once more on the CPU.
+                # The graphics card can still fail on a real film (a size or format it does not
+                # take): once more without its decoder, then with the next HDR filter, then
+                # encoding on the CPU.
+                if self.mode == "transcode" and self.hwaccel:
+                    log.warning("decoding with %s failed, on the CPU instead: %s", self.hwaccel, tail)
+                    give_up_on_hwaccel(self.cfg, self.encoder or SOFTWARE_ENCODER)
+                    self.hwaccel = None
+                    continue
+                if self.mode == "transcode" and self.tonemap:
+                    nxt = await asyncio.to_thread(give_up_on_tonemap, self.cfg, self.tonemap)
+                    log.warning("HDR with %s failed, %s instead: %s", self.tonemap, nxt or "unconverted", tail)
+                    self.tonemap = tonemap_for(self.info, nxt)
+                    continue
                 if self.mode != "transcode" or self.encoder in (None, SOFTWARE_ENCODER):
                     raise
                 log.warning("%s failed, converting with %s instead: %s", self.encoder, SOFTWARE_ENCODER, tail)
@@ -497,6 +667,9 @@ class MediaSession:
             "mode": self.mode,
             "modeReason": self.mode_reason,
             "encoder": self.encoder if self.mode == "transcode" else None,
+            "decoder": self.hwaccel if self.mode == "transcode" else None,
+            "toneMap": self.tonemap if self.mode == "transcode" else None,
+            "hdr": hdr_kind(self.info),
             "videoCodec": self.info.video_codec,
             "width": self.info.video.get("width"),
             "height": self.info.video.get("height"),
