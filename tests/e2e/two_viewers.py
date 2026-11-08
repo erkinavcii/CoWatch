@@ -233,6 +233,21 @@ def run(headed: bool) -> None:
             time.sleep(4)
             ta, tb = film_time(a), film_time(b)
             check("both windows play the same moment", ta > 2 and abs(ta - tb) < 0.3, f"{ta:.2f} s vs {tb:.2f} s")
+
+            # ---- a decoder that stops giving frames while the time goes on (a friend's black screen)
+            b.evaluate("""() => { const v = document.querySelector('#video'); const real = v.getVideoPlaybackQuality.bind(v);
+              const frozen = real().totalVideoFrames;
+              v.getVideoPlaybackQuality = () => ({ totalVideoFrames: frozen }); }""")
+            b.wait_for_function(f"() => {DBG}.frameWatch.fixes === 1", timeout=12000)
+            b.evaluate("() => { delete document.querySelector('#video').getVideoPlaybackQuality; }")
+            time.sleep(1.5)
+            ta, tb = film_time(a), film_time(b)
+            log_path = tmp / "data" / "playback.log"
+            logged = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+            check("frames stop in one window: it seeks to the room by itself, alone, and the host's log says so",
+                  abs(ta - tb) < 0.5 and "Masha [frames_stalled]" in logged
+                  and a.evaluate(f"() => {DBG}.frameWatch.fixes") == 0 and a.evaluate(f"() => {DBG}.room.playing"),
+                  f"{ta:.2f} s vs {tb:.2f} s; {logged.strip()[:160]}")
             blur(b)
             b.keyboard.press("Space")
             a.wait_for_function(f"() => !{DBG}.room.playing")

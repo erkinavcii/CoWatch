@@ -25,6 +25,7 @@ magnet ──> torrent yardımcısı (Node, webtorrent) ──┴──> ffmpeg 
 
 - Herkes aynı HLS akışını kendi tarayıcısında oynatır; ekran paylaşımı yok, kalite kaybı yok.
 - Sunucu tek doğru kaynaktır: `playing`, `position`, `updatedAt`. İstemci farkı 1 sn'yi aşarsa seek yapar, 0,1–1 sn arasında hızı %5 oynatarak yakalar.
+- Film ilerlerken bir izleyicinin tarayıcısı yeni kare göstermeyi bırakırsa (siyah ekran), 4 saniye sonra sadece o izleyici odanın olduğu yere sarar; bir dakika içinde yine olursa akış baştan yüklenir. Karanlık bir sahne sayılmaz, o da saniyede 24 kare. Her izleyicinin tarayıcısındaki oynatıcı hataları, adı ve filmin zamanıyla host'un bilgisayarındaki `data/playback.log`'a yazılır.
 - Biri takılırsa (buffer) oda onun durduğu yerde bekler, en az 4 sn'lik tampon oluşunca herkes birlikte devam eder. 20 sn'den uzun takılan izleyici odayı tutamaz.
 - Altyazılar videoya gömülmez: her tarayıcı seçtiği altyazıyı filmin saniyesine göre kendisi çizer (`film zamanı = video.currentTime + streamStart`). Kaydırma (±ms), boyut ve yükseklik kişiye özeldir.
 - Altyazılar dosyanın OpenSubtitles hash'ine göre saklanır; aynı film tekrar açılınca (torrent ya da yerel dosya fark etmez) hazır gelir.

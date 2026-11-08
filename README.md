@@ -25,6 +25,7 @@ magnet ──> torrent helper (Node, webtorrent) ──┴──> ffmpeg (video 
 
 - Everyone plays the same HLS stream in their own browser: no screen sharing, no quality loss.
 - The server is the single source of truth: `playing`, `position`, `updatedAt`. A client that drifts more than 1 s seeks; between 0.1 and 1 s it catches up by changing playback speed by 5%.
+- If a viewer's browser stops showing new frames while the film goes on (a black picture), that viewer alone seeks back to where the room is after 4 seconds; if it happens again within a minute, the stream is loaded afresh. A dark scene does not count: it is still 24 frames a second. Player errors from every viewer's browser go to `data/playback.log` on the host's computer, with the name and the film time.
 - If someone stalls (buffering), the room waits where they stopped, and everyone continues together once they have at least 4 s buffered. A viewer stuck for more than 20 s no longer holds the room.
 - Subtitles are never burned into the video: each browser draws its chosen subtitles against the film's clock (`film time = video.currentTime + streamStart`). Offset (±ms), size and height are personal.
 - Subtitles are stored by the file's OpenSubtitles hash, so they are ready when the same film is opened again, whether from a torrent or a local file.

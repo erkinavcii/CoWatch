@@ -377,12 +377,22 @@
         maxMaxBufferLength: 120,
         backBufferLength: 60,
       });
+      const mediaErrors = [];
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (!data.fatal) return;
+        report('hls_error', `${data.type} ${data.details}${data.error ? `: ${data.error.message || data.error}` : ''}`);
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
           setTimeout(() => { if (S.hls === hls) hls.startLoad(); }, 1500);
         } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          // The first time a plain recovery; again within 20 s with the audio codec swapped; a
+          // third time the stream is loaded afresh. Each one goes back to where the room is.
+          const now = performance.now();
+          while (mediaErrors.length && now - mediaErrors[0] > 20000) mediaErrors.shift();
+          mediaErrors.push(now);
+          if (mediaErrors.length >= 3) { loadStream(S.media); return; }
+          if (mediaErrors.length === 2) hls.swapAudioCodec();
           hls.recoverMediaError();
+          setTimeout(() => { if (S.hls === hls && S.media) seekFilm(expectedPosition()); }, 300);
         } else {
           console.error('hls fatal error', data);
           setTimeout(() => { if (S.hls === hls && S.media) loadStream(S.media); }, 2000);
@@ -451,6 +461,63 @@
     S.bufferingSent = value;
     send(value ? { type: 'buffering', value, position: filmTime() } : { type: 'buffering', value });
   }
+  // ---- a picture that stops while the film goes on
+  // A friend's screen went black with the time running and came back after a seek: the browser's
+  // video decoder had stopped giving frames. The watch counts the frames the decoder gives
+  // (getVideoPlaybackQuality), not the colour of the picture: a black scene is still 24 frames a
+  // second. When the film time moves on for FRAME_STALL_S with no new frame, this viewer alone
+  // seeks to where the room is (what a manual seek did); if that does not hold for a minute, the
+  // stream is loaded afresh; after that it only reports, for two minutes. A hidden tab is left
+  // alone (the browser may stop its picture on purpose), and so is the first while after it shows again.
+  const FRAME_STALL_S = 4;
+  const frameWatch = { frames: -1, time: 0, stalled: 0, lastFix: 0, step: 0, calmUntil: 0, fixes: 0, reloads: 0 };
+  function watchFrames () {
+    const now = performance.now();
+    const quality = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+    const watching = S.joined && S.media && S.media.width && S.streamId && !video.paused && !video.seeking &&
+      video.readyState >= 3 && (!!PIP.win || !document.hidden) && !el.stage.classList.contains('sharing');
+    if (!quality || !watching || now < frameWatch.calmUntil) { frameWatch.frames = -1; frameWatch.stalled = 0; return; }
+    const frames = quality.totalVideoFrames;
+    const time = video.currentTime;
+    if (frameWatch.frames < 0 || frames !== frameWatch.frames) frameWatch.stalled = 0;
+    else if (time > frameWatch.time) frameWatch.stalled += time - frameWatch.time;
+    frameWatch.frames = frames;
+    frameWatch.time = time;
+    if (frameWatch.stalled < FRAME_STALL_S) return;
+    frameWatch.frames = -1;
+    frameWatch.stalled = 0;
+    if (now - frameWatch.lastFix > 60000) frameWatch.step = 0; // the last fix held: start again gently
+    frameWatch.lastFix = now;
+    frameWatch.step += 1;
+    const detail = `no new frame for ${FRAME_STALL_S} s at ${frames} frames`;
+    if (frameWatch.step === 1) {
+      frameWatch.fixes += 1;
+      report('frames_stalled', `${detail}; seeking`);
+      seekFilm(expectedPosition());
+    } else if (frameWatch.step === 2) {
+      frameWatch.reloads += 1;
+      report('reloaded', `${detail} again; loading the stream afresh`);
+      loadStream(S.media);
+    } else {
+      report('frames_stalled', `${detail}; nothing helped, waiting 2 minutes`);
+      frameWatch.calmUntil = now + 120000;
+    }
+  }
+  setInterval(watchFrames, 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) frameWatch.calmUntil = Math.max(frameWatch.calmUntil, performance.now() + 5000);
+  });
+  video.addEventListener('error', () => {
+    const err = video.error;
+    if (!err || !S.media || /empty src/i.test(err.message || '')) return; // destroyPlayer empties it on purpose
+    report('video_error', `code ${err.code}${err.message ? `: ${err.message}` : ''}`);
+  });
+  // What went wrong in this browser goes to the host's data/playback.log, with the film time.
+  function report (kind, detail) {
+    console.warn('[cowatch]', kind, detail);
+    send({ type: 'report', kind, detail, ua: navigator.userAgent, position: S.media ? filmTime() : undefined });
+  }
+
   video.addEventListener('waiting', () => {
     clearTimeout(S.waitTimer);
     S.waitTimer = setTimeout(() => {
@@ -3728,6 +3795,7 @@
     filmTime: filmTime(), expected: expectedPosition(), drift: filmTime() - expectedPosition(),
     room: S.room, media: S.media, clockOffset: S.clock.offset, rate: video.playbackRate,
     readyState: video.readyState, primary: S.primary, secondary: S.secondary,
+    frameWatch: { fixes: frameWatch.fixes, reloads: frameWatch.reloads },
     screen: {
       owner: screen.owner, pending: screen.pending, mine: !!screen.stream,
       showing: !el.screenVideo.hidden && el.screenVideo.videoWidth > 0 && !el.screenVideo.paused,

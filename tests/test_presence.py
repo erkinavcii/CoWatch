@@ -1,8 +1,10 @@
 from fastapi.testclient import TestClient
 
 from server.main import app
-from server.presence import (CHAT_BURST, CHAT_HISTORY, CHAT_MAX_CHARS, MAX_ERASE, MAX_POINTS, PALETTE, Bucket, chat_text,
-                             erase_message, pick_color, point, stroke_message)
+from server.main import PLAYBACK_LOG, cfg
+from server.presence import (CHAT_BURST, CHAT_HISTORY, CHAT_MAX_CHARS, MAX_ERASE, MAX_POINTS, PALETTE, REPORT_BURST,
+                             REPORT_MAX_CHARS, Bucket, chat_text, erase_message, pick_color, playback_report, point,
+                             stroke_message)
 
 KEY = "test-key"
 
@@ -168,3 +170,29 @@ def test_chat_reaches_everyone_and_waits_for_those_who_join_later():
                 history = _next(c, {"welcome"})["chat"]
                 assert [m["text"] for m in history] == ["hi all"] + [f"m{n}" for n in range(CHAT_BURST)]
                 assert len(history) <= CHAT_HISTORY
+
+
+def test_playback_report_keeps_a_known_kind_and_short_text():
+    assert playback_report({"kind": "rm -rf"}) is None
+    assert playback_report({"kind": "frames_stalled", "detail": "a\nb", "position": 12.345, "ua": "Chrome"}) == {
+        "kind": "frames_stalled", "detail": "a b", "position": 12.3, "ua": "Chrome"}
+    long = playback_report({"kind": "hls_error", "detail": "x" * 1000, "position": float("nan")})
+    assert len(long["detail"]) == REPORT_MAX_CHARS and "position" not in long
+    assert "position" not in playback_report({"kind": "hls_error", "position": True})
+
+
+def test_player_reports_go_to_the_playback_log():
+    path = cfg.data_dir / PLAYBACK_LOG
+    path.unlink(missing_ok=True)
+    with TestClient(app, cookies={"cw_key": KEY}) as client:
+        with client.websocket_connect("/ws") as ws:
+            _next(ws, {"welcome"})
+            ws.send_json({"type": "hello", "name": "Uzak"})
+            for n in range(REPORT_BURST + 3):  # more than the limit: the rest are dropped
+                ws.send_json({"type": "report", "kind": "frames_stalled", "detail": f"n{n}", "position": 61})
+            ws.send_json({"type": "report", "kind": "nonsense"})
+            ws.send_json({"type": "ping", "t0": 1})
+            _next(ws, {"pong"})  # every message before it has been handled
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == REPORT_BURST
+    assert "Uzak [frames_stalled]" in lines[0] and "@ 61.0s: n0" in lines[0]

@@ -12,7 +12,7 @@ from typing import Optional
 
 from starlette.websockets import WebSocket
 
-from .presence import CHAT_HISTORY, Bucket
+from .presence import CHAT_HISTORY, REPORT_BURST, REPORT_REFILL_S, Bucket
 
 log = logging.getLogger("cowatch.room")
 
@@ -38,6 +38,7 @@ class Client:
         self.cam = False
         self.last_poke = 0.0
         self.chat_bucket = Bucket()
+        self.report_bucket = Bucket(REPORT_BURST, REPORT_REFILL_S)
         self.buffering_since: Optional[float] = None
         self.alive = True
         self._lock = asyncio.Lock()

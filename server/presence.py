@@ -99,6 +99,13 @@ CHAT_HISTORY = 100  # kept in memory for those who join later; gone when the ser
 CHAT_BURST = 5  # messages in a row before the limit applies
 CHAT_REFILL_S = 1.0  # then one message per this many seconds
 
+# A viewer's player tells the server what went wrong in their browser (`report`): written to
+# data/playback.log, so a black screen on a friend's side can be read afterwards.
+REPORT_KINDS = {"hls_error", "video_error", "frames_stalled", "reloaded"}
+REPORT_MAX_CHARS = 300
+REPORT_BURST = 5
+REPORT_REFILL_S = 10.0
+
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]+")  # line breaks, direction overrides
 
 
@@ -126,3 +133,19 @@ class Bucket:
             return False
         self.tokens -= 1
         return True
+
+
+def playback_report(msg: dict) -> Optional[dict]:
+    """A player report from a browser, checked: a known kind, short one-line texts, a film time."""
+    kind = msg.get("kind")
+    if kind not in REPORT_KINDS:
+        return None
+    out: dict = {"kind": kind}
+    for field, limit in (("detail", REPORT_MAX_CHARS), ("ua", 200)):
+        text = chat_text(msg.get(field))
+        if text:
+            out[field] = text[:limit]
+    position = msg.get("position")
+    if isinstance(position, (int, float)) and not isinstance(position, bool) and math.isfinite(position) and position >= 0:
+        out["position"] = round(float(position), 1)
+    return out

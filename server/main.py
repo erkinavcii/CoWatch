@@ -36,7 +36,8 @@ from . import filepicker, library, stremio, tailscale, translate
 from .stremio import StremioError
 from .media import MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, pick_encoder, probe
 from .oshash import CHUNK, hash_file, hash_from_chunks
-from .presence import ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, erase_message, pick_color, point, stroke_message
+from .presence import (ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, erase_message, pick_color, playback_report, point,
+                       stroke_message)
 from .room import Client, Room, now_ms
 from .signaling import ice_servers, rtc_data
 from .subtitles import (
@@ -54,6 +55,8 @@ from .net import tls
 from .torrent_client import HelperError, TorrentHelper
 
 log = logging.getLogger("cowatch")
+PLAYBACK_LOG = "playback.log"
+PLAYBACK_LOG_MAX = 1_000_000
 
 COOKIE = "cw_key"
 VIEWER_COOKIE = "cw_viewer"  # one per browser, so the host's trust survives a reconnect
@@ -222,6 +225,21 @@ class Controller:
         client.mic, client.cam = mic, cam
         return changed
 
+    def log_report(self, client: Client, report: dict) -> None:
+        """A viewer's player trouble: to the console and to data/playback.log (1 MB, then .old)."""
+        title = self.session.source.title if self.session else "-"
+        at = f"{report['position']:.1f}s" if "position" in report else "-"
+        line = f"{client.name} [{report['kind']}] {title} @ {at}: {report.get('detail', '')} | {report.get('ua', '')}"
+        log.warning("player: %s", line)
+        path = cfg.data_dir / PLAYBACK_LOG
+        try:
+            if path.exists() and path.stat().st_size > PLAYBACK_LOG_MAX:
+                path.replace(path.with_suffix(".old.log"))
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + line + "\n")
+        except OSError as exc:
+            log.warning("could not write %s: %s", path, exc)
+
     # ---- websocket commands ---------------------------------------------------------
     async def handle(self, client: Client, msg: dict) -> None:
         kind = msg.get("type")
@@ -263,6 +281,10 @@ class Controller:
                    "color": client.color, "text": text, "ts": now_ms()}
             self.room.chat.append(out)
             self._relay(None, out)
+        elif kind == "report":
+            report = playback_report(msg)
+            if report is not None and client.report_bucket.take(time.monotonic()):
+                self.log_report(client, report)
         elif kind == "color":  # the colour, the animal, or both
             changed = False
             color = str(msg.get("color", "")).lower()
