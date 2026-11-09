@@ -13,7 +13,7 @@ Builds the Windows installer: dist\CoWatch-Setup-<version>.exe
 Needs: the project's .venv, Inno Setup 6, and torrent-helper's npm packages.
 #>
 param(
-    [string]$Version = "0.1.0",
+    [string]$Version = "0.2.0",
     [string]$FfmpegZip = "ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip",
     [string]$NodeVersion = ""  # default: the version of the node on PATH
 )
