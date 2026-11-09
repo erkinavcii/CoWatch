@@ -692,8 +692,9 @@
     pressAt = { x: e.clientX, y: e.clientY, ui: isUi(e.target) };
   });
 
-  // On a touch screen one tap only shows the controls; a quick double tap seeks 10 s on the
-  // sides (a quarter each) and goes fullscreen, or back, in the large middle. More taps on the
+  // On a touch screen one tap only shows the controls. A quick double tap in the small picture
+  // goes fullscreen, wherever it is (its sides are too narrow to aim at); in fullscreen it seeks
+  // 10 s on the sides (a quarter each) and goes back in the large middle. More taps on the
   // same side right after add up (+10, +20…), and the room gets one seek once they stop, so the
   // stream does not start again for everyone on every tap.
   const TAP = { gapMs: 300, slop: 40, side: 0.25, step: 10, moreMs: 800, sendMs: 600 };
@@ -728,7 +729,7 @@
     if (e.pointerType !== 'touch' || !press || press.ui || isUi(e.target) || S.penMode) return;
     if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > TAP.slop) return; // a swipe
     const now = performance.now();
-    const side = tapSide(e.clientX);
+    const side = stageFull() ? tapSide(e.clientX) : 'mid';
     const seeks = side !== 'mid' && S.media && !screen.owner;
     if (seeks && tap.run && tap.run.side === side && now - tap.run.last < TAP.moreMs) { tapSeek(side); return; }
     const quick = now - tap.at < TAP.gapMs && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < TAP.slop;

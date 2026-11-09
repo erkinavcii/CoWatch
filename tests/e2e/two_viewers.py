@@ -506,19 +506,31 @@ def run(headed: bool) -> None:
             check("on the short picture the drawing toolbar lies in a row, clear of the seek bar",
                   tools["row"] and tools["bottom"] <= tools["seek"], str(tools))
 
-            # ---- taps: one shows the controls, a quick double tap seeks on the sides, the middle
-            # goes fullscreen (here: fills the window)
+            # ---- taps: one shows the controls; in the small picture a quick double tap anywhere goes
+            # fullscreen (here: fills the window); there it seeks on the sides and the middle comes back
             phone.evaluate("() => { const s = document.querySelector('#seekBar'); s.max = '30'; s.value = '12'; s.dispatchEvent(new Event('change')); }")
             phone.wait_for_function(f"() => Math.abs({DBG}.room.position - 12) < 0.5", timeout=10000)
-            box = phone.eval_on_selector("#stage", "s => { const r = s.getBoundingClientRect(); return {x: r.left, y: r.top, w: r.width, h: r.height}; }")
-            y = box["y"] + box["h"] * 0.45
-            at = lambda f: (box["x"] + box["w"] * f, y)  # noqa: E731
+            stage_box = "s => { const r = s.getBoundingClientRect(); return {x: r.left, y: r.top + r.height * 0.45, w: r.width}; }"
+            box = phone.eval_on_selector("#stage", stage_box)
+            at = lambda f: (box["x"] + box["w"] * f, box["y"])  # noqa: E731
             seq = phone.evaluate(f"() => {DBG}.room.seq")
             playing = phone.evaluate(f"() => {DBG}.room.playing")
             phone.touchscreen.tap(*at(0.9))
             time.sleep(0.8)
             check("on a touch screen one tap neither seeks nor pauses",
                   phone.evaluate(f"() => {DBG}.room.seq") == seq and phone.evaluate(f"() => {DBG}.room.playing") == playing)
+
+            def double_tap(f):
+                phone.touchscreen.tap(*at(f))
+                time.sleep(0.1)
+                phone.touchscreen.tap(*at(f))
+
+            double_tap(0.9)
+            phone.wait_for_function("() => document.querySelector('#stage').classList.contains('fill')", timeout=3000)
+            time.sleep(0.8)
+            check("in the small picture a double tap, even on a side, only goes fullscreen",
+                  phone.evaluate(f"() => {DBG}.room.seq") == seq, str(phone.evaluate(f"() => {DBG}.room")))
+            box = phone.eval_on_selector("#stage", stage_box)
 
             def seek_by(f, taps):
                 start = phone.evaluate(f"() => {DBG}.expected")
@@ -532,22 +544,14 @@ def run(headed: bool) -> None:
                 return start, phone.evaluate(f"() => ({{pos: {DBG}.room.position, seq: {DBG}.room.seq - {before}}})"), hint
 
             start, after, hint = seek_by(0.9, 2)
-            check("a double tap on the right goes 10 s on, for the room",
+            check("in fullscreen a double tap on the right goes 10 s on, for the room",
                   abs(after["pos"] - (start + 10)) < 1 and after["seq"] == 1 and hint == "10 sn ⏩", f"{start} {after} {hint}")
             start, after, hint = seek_by(0.1, 3)
             check("taps in a row on the left add up, and the room gets one seek",
                   abs(after["pos"] - (start - 20)) < 1 and after["seq"] == 1 and hint == "⏪ 20 sn", f"{start} {after} {hint}")
-            phone.touchscreen.tap(*at(0.5))
-            time.sleep(0.1)
-            phone.touchscreen.tap(*at(0.5))
-            phone.wait_for_function("() => document.querySelector('#stage').classList.contains('fill')", timeout=3000)
-            box = phone.eval_on_selector("#stage", "s => { const r = s.getBoundingClientRect(); return {x: r.left, y: r.top, w: r.width, h: r.height}; }")
-            y = box["y"] + box["h"] * 0.45
-            phone.touchscreen.tap(*at(0.5))
-            time.sleep(0.1)
-            phone.touchscreen.tap(*at(0.5))
+            double_tap(0.5)
             phone.wait_for_function("() => !document.querySelector('#stage').classList.contains('fill')", timeout=3000)
-            check("a double tap in the middle fills the window and another one brings it back", True)
+            check("a double tap in the middle brings the small picture back", True)
             time.sleep(0.4)
             phone.tap("#fsBtn")
             fill = phone.evaluate("""() => { const s = document.querySelector('#stage').getBoundingClientRect();
