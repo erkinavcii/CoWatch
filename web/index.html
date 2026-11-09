@@ -36,6 +36,7 @@
       <canvas class="draw" id="drawCanvas"></canvas>
       <div class="cursors" id="cursors"></div>
       <div class="center-msg" id="centerMsg" hidden></div>
+      <div class="tap-seek" id="tapSeek" hidden></div>
       <div class="loader" id="loader" hidden>
         <span class="spinner"></span>
         <div class="loader-text" id="loaderText"></div>
@@ -290,16 +291,9 @@
           <label class="field"><span data-i18n="subs_primary"></span><select id="primarySel"></select></label>
           <label class="field"><span data-i18n="subs_secondary"></span><select id="secondarySel"></select></label>
         </div>
-        <div class="field">
+        <div class="field" id="offsetField" hidden>
           <span data-i18n="subs_offset"></span>
-          <div class="offset-row">
-            <button type="button" data-off="-500">−0.5</button>
-            <button type="button" data-off="-100">−0.1</button>
-            <output id="offsetOut">0.0 s</output>
-            <button type="button" data-off="100">+0.1</button>
-            <button type="button" data-off="500">+0.5</button>
-            <button type="button" data-off="reset" class="ghost">0</button>
-          </div>
+          <div class="offset-rows" id="offsetRows"></div>
           <p class="hint" data-i18n="offset_hint"></p>
         </div>
         <div class="grid2">

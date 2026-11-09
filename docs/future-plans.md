@@ -180,9 +180,53 @@ En güvenli başlangıç: sunucu öneri yapar ("Bu filmin aynısı sende var, ke
 4. **Kipi kim seçer:** yukarıdaki açık soruya göre; önce sunucunun önerisi ve izleyicinin onayı.
 5. **Sonra, isteğe bağlı:** misafir kipinde torrent yardımcısı ve yerel ffmpeg; dağıtım planındaki kurulum dosyasıyla birlikte.
 
+## Altyazıyı otomatik hizalama (9 Kasım fikri)
+
+Elle hizalamanın ([altyazi-hizalama-plani.md](altyazi-hizalama-plani.md)) bir sonraki adımı: kaymış altyazıyı kullanıcı satır aramadan, program kendisi oturtsun. Elle hizalama önce gelir: otomatik yöntem müzikli ya da az konuşmalı filmlerde yanılabilir, o zaman elle düzeltmek gerekir.
+
+### İki kaynak
+
+1. **Başka bir altyazıya göre (önce bu):** "Bunu şu altyazıya hizala". Satırların zamanlarının deseni (ne zaman konuşuluyor, ne zaman susuluyor) dilden bağımsız olduğu için Rusça bir altyazı Türkçe bir altyazıya göre hizalanabilir. Referans:
+   - Dosyanın içindeki bir altyazı (`source: "embedded"`): dosyayla tam uyumlu olduğu bilinir, en iyi referans. Anime ve dizi sürümlerinde sık.
+   - Dosyanın hash'iyle eşleşen bir OpenSubtitles altyazısı (`hashMatch`).
+   - Kişinin elle hizaladığı bir altyazı (hizalama uygulanmış hâliyle gönderilir).
+   
+   8 Kasım'daki durum böyle çözülürdü: Türkçeyi elle hizala, Rusçayı Türkçeye otomatik hizala. Hemen çalışır: filmin kendisine dokunmaz, saniyeler sürer, torrent'in inmesini beklemez.
+2. **Filmin sesine göre:** ffmpeg sesi çıkarır, konuşma olan aralıklar bulunur (ses etkinliği tespiti), altyazının satırlarıyla en iyi örtüşen kayma ve hız aranır. Referans altyazı olmayan durumlar için. Bütün sesi okuduğu için dosyanın içindeki altyazılarla aynı kural: yerel dosyada hemen, torrent'te dosya tamamen inince, eklentinin web akışında yok. 2 saatlik filmin sesini çıkarmak ve işlemek ≈ 20–60 sn (ölçülecek).
+
+### Hazır araçlar (yeniden yazmak yerine)
+
+| Araç | Ne yapar | Lisans | Not |
+| --- | --- | --- | --- |
+| `alass` | Altyazıyı bir videoya ya da başka bir altyazıya hizalar; kare hızı farkını ve **parçalı kaymayı** (kesilmiş sahne, reklam arası) bulur | GPL-3.0 (projenin AGPL-3.0'ıyla uyumlu) | Rust, tek çalıştırılabilir dosya; Windows ikilisi var. ffmpeg'i kendisi çağırır. Paketin `tools\` klasörüne girer |
+| `ffsubsync` | Aynısı, Python | MIT | numpy, webrtcvad gibi bağımlılıklar; paketi büyütür. Parçalı kaymayı yapmaz |
+
+Öneri: `alass`. Tek dosya, parçalı kaymayı da çözüyor, README'de ve altyazı çevirisi planında zaten adı geçiyor. İkilinin son sürümünün ve komut satırı seçeneklerinin bugünkü hâli başlamadan doğrulanacak.
+
+### Kullanıcının göreceği
+
+- Hizalama panelinde ve altyazı listesinde her altyazının yanında **"Otomatik hizala"**: referans seçimi (dosyanın içindeki altyazılar, hash'le eşleşenler, hizalanmış olanlar, "Filmin sesi"). En iyi referans önceden seçili.
+- İş sunucuda yapılır (`POST /api/subtitles/{id}/align`, `reference`: bir altyazı kimliği ya da `audio`). Çeviri gibi herkese tek bir ilerleme bildirimi.
+- Sonuç odadaki herkesin listesine **yeni bir altyazı** olarak düşer: "Rusça · OpenSubtitles #1 · hizalı" (`source: "aligned"`, `fromTrack`, `reference`). Elle hizalamadan farkı bu: kişiye özel değil, herkes için daha doğru bir altyazı. Eskisi silinmez. Parçalı hizalama tek bir kayma ve hızla anlatılamadığı için de yeni altyazı olması gerekiyor.
+- Aynı altyazı aynı referansa ikinci kez hizalanmaz.
+- `alass` kaymanın ne kadar olduğunu ve kaç parçaya bölündüğünü yazar; bildirim bunu gösterir ("+2,4 sn, 25 → 23,976, 2 parça"). Sonuç tuhafsa (çok parça, büyük kayma) "Elle kontrol et" uyarısı.
+
+### Adımlar (öneri)
+
+1. Paket ve geliştirme ortamına `alass` (`tools\`, `ALASS_PATH`); yoksa düğme görünmez.
+2. Altyazıdan altyazıya hizalama: sunucu iki altyazıyı geçici SRT'lere yazar, `alass`'ı çalıştırır, çıktıyı yeni altyazı olarak saklar. pytest: kaydırılmış ve hızlandırılmış bir SRT'nin aslına dönmesi.
+3. Sesten hizalama: önce ffmpeg'le sesi tek kanala, düşük örnekleme hızına çıkarmak (hızlı), sonra `alass`'a vermek. Gerçek bir filmle süre ölçümü.
+4. Yapay zekâ çevirisinden önce kaynağı otomatik hizalama önerisi ([altyazi-ceviri-plani.md](altyazi-ceviri-plani.md), "Bağlantılı iş").
+
+### Bilinenler ve riskler
+
+- Konuşmanın az, müziğin çok olduğu filmlerde sesten hizalama yanılabilir; altyazıdan altyazıya daha güvenilir.
+- İki altyazı farklı yerlerde satır bölüyorsa (biri uzun satırı ikiye ayırmış) desen yine benzer kalır; `alass` buna dayanıklı olmalı, gerçek örnekle denenecek.
+- İşlemci: `alass` birkaç saniye, ses çıkarma ffmpeg'in bir geçişi. Film oynarken yapılırsa dönüştürmeyle yarışır; düşük öncelikle çalıştırılır.
+
 ## Diğer gelecek işler
 
-- **Faz 2, altyazı otomasyonu:** dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi (README'deki "Sonraki fazlar"). Çevirinin ayrıntılı planı: [altyazi-ceviri-plani.md](altyazi-ceviri-plani.md) (3 Kasım).
+- **Faz 2, altyazı otomasyonu:** dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi (README'deki "Sonraki fazlar"). Çevirinin ayrıntılı planı: [altyazi-ceviri-plani.md](altyazi-ceviri-plani.md) (3 Kasım); hizalamanınki yukarıda ve [altyazi-hizalama-plani.md](altyazi-hizalama-plani.md) (9 Kasım).
 - **Faz 3, sadece link:** film parçaları da eşler arası (WebRTC DataChannel), doğrudan bağlantı olmazsa Cloudflare TURN. Funnel'ın bant sınırını ve host'un Tailscale bağımlılığını kaldırır. Gerekenler: sayfa sabit bir HTTPS adresinde (GitHub Pages ya da kendi alan adı), iki tarafı tanıştıran küçük bir sinyal sunucusu (proje sahibinin P2P mesajlaşma uygulamasındaki sinyal ve şifreleme kısmı uyarlanabilir), hls.js'e parçaları kanaldan isteyen bir yükleyici, gönderen tarafta host'un sekmesi ya da `aiortc`. Darboğazlar: host'un upload'u (her izleyiciye ayrı kopya; ~30 Mbps'te 5 Mbps'lik filmle 4–5 kişi), iki taraf da katı NAT arkasındaysa TURN (bütün trafik oradan; kendi VPS'inde coturn ucuz, hazır servislerde iki saatlik film izleyici başına ~4–5 GB), DataChannel'da akış kontrolü ve ileri sarmada gecikme.
 - **Yavaş bağlantılıya düşük kalite (5 Kasım fikri):** Bugün sunucu filmi tek kalitede hazırlıyor, herkes aynısını indiriyor; bağlantısı yavaş olan takılıyor ve "biri takılırsa herkes bekler" kuralıyla herkesi durduruyor. Kamera ve ses için sorun yok: WebRTC her bağlantıda bit hızını kendisi düşürüyor (`SENDER_LIMITS` sadece üst sınır). Film için iki yol:
   - *Tam çözüm:* ffmpeg aynı filmi iki üç kalitede (örneğin 1080p, 720p, 480p) üretir, bir ana playlist hepsini listeler; hls.js herkesin hızını ölçüp kendine uyanı seçer, hız düşünce daha küçüğe geçer. Senkron kaliteden bağımsız (film zamanı aynı). Bedeli: dönüştürme iki üç katı iş (NVENC kaldırır, işlemciyle zor) ve disk; kopya kipinde (dönüştürme yokken) düşük kaliteler ayrıca kodlanmalı. Bütün parçalar aynı anahtar karelerde bölünmeli.

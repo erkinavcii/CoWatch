@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -47,7 +48,8 @@ def run(headed: bool) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="cowatch-e2e-file-"))
     video = make_video(tmp)
     port = free_port()
-    server = start_server(port, tmp / "data")
+    # A port with no torrent helper, even if one runs on this computer.
+    server = start_server(port, tmp / "data", {"HELPER_PORT": str(free_port())})
     base = f"http://127.0.0.1:{port}"
     errors: list[str] = []
     try:
@@ -86,10 +88,52 @@ def run(headed: bool) -> None:
                   and "Türkçe · dosyanın içinden ✓" in options
                   and any(o == "İngilizce · dosyanın içinden ✓" for o in options), str(options))
             a.select_option("#primarySel", tr["id"])
-            a.evaluate("() => { const s = document.querySelector('#seekBar'); s.value = '2'; s.dispatchEvent(new Event('change')); }")
+            a.evaluate("() => { const s = document.querySelector('#seekBar'); s.max = '8'; s.value = '2'; s.dispatchEvent(new Event('change')); }")
             a.wait_for_function(f"() => Math.abs({DBG}.filmTime - 2) < 0.3", timeout=20000)
             a.wait_for_function("() => document.querySelector('#subPrimary').textContent.includes('Güzel')", timeout=5000)
             check("picked as the main subtitle, the Turkish one shows on the film", True)
+
+            # ---- each subtitle its own timing, for me only
+            en = next(t for t in tracks if t["lang"] == "en")
+            a.select_option("#secondarySel", en["id"])
+            a.wait_for_function("() => document.querySelector('#subSecondary').textContent.includes('Good')", timeout=5000)
+            rows = a.eval_on_selector_all("#offsetRows .offset-label", "ls => ls.map(l => l.textContent)")
+            a.evaluate("""() => { const b = document.querySelector('#offsetRows [data-slot=secondary] [data-off="500"]');
+              for (let i = 0; i < 10; i++) b.click(); }""")
+            a.evaluate("() => { const s = document.querySelector('#seekBar'); s.max = '8'; s.value = '2'; s.dispatchEvent(new Event('change')); }")
+            a.wait_for_function(f"() => Math.abs({DBG}.filmTime - 2) < 0.3", timeout=20000)
+            time.sleep(0.3)
+            shown = a.evaluate("""() => ({primary: document.querySelector('#subPrimary').textContent,
+              secondary: document.querySelector('#subSecondary').textContent,
+              out: [...document.querySelectorAll('#offsetRows output')].map(o => o.textContent)})""")
+            align = a.evaluate(f"() => {DBG}.align")
+            check("each subtitle has its own offset: five seconds on the second leaves the main one where it was",
+                  len(rows) == 2 and rows[0].startswith("Ana altyazı · Türkçe") and rows[1].startswith("İkinci altyazı · İngilizce")
+                  and "Güzel" in shown["primary"] and not shown["secondary"] and shown["out"] == ["0,0 s", "+5,0 s"]
+                  and align.get(en["id"], {}).get("offset") == 5000 and tr["id"] not in align,
+                  f"{rows} {shown} {align}")
+            check("an offset is only the one viewer's",
+                  b.evaluate(f"() => Object.keys({DBG}.align).length") == 0)
+            a.evaluate("() => document.querySelector('#offsetRows [data-slot=secondary] button.ghost').click()")
+            a.wait_for_function("() => document.querySelector('#subSecondary').textContent.includes('Good')", timeout=5000)
+            check("0 puts that subtitle back", a.evaluate(f"() => !({en['id']!r} in {DBG}.align)"))
+
+            # The one offset of before, for both subtitles, becomes each chosen subtitle's own.
+            b.evaluate("""() => { const p = JSON.parse(localStorage.getItem('cowatch.prefs.v1') || '{}');
+              Object.assign(p, {offsetMs: 1500, primaryLang: 'tr', secondaryLang: 'en'}); delete p.align;
+              localStorage.setItem('cowatch.prefs.v1', JSON.stringify(p)); }""")
+            b.reload()
+            b.click("#joinForm button[type=submit]")
+            b.wait_for_function(f"() => {DBG}.primary && {DBG}.secondary && Object.keys({DBG}.align).length === 2", timeout=20000)
+            moved = b.evaluate(f"""() => ({{align: Object.values({DBG}.align).map(a => a.offset),
+              old: 'offsetMs' in JSON.parse(localStorage.getItem('cowatch.prefs.v1'))}})""")
+            check("the old single offset becomes the chosen subtitles' own, and is gone",
+                  moved["align"] == [1500, 1500] and not moved["old"], str(moved))
+            b.reload()
+            b.click("#joinForm button[type=submit]")
+            b.wait_for_function(f"() => {DBG}.primary", timeout=20000)
+            check("and it stays after reloading the page",
+                  b.evaluate(f"() => document.querySelector('#offsetRows output').textContent") == "+1,5 s")
 
             # ---- the sound track, for everyone
             a.evaluate("() => window.scrollTo(0, 0)")

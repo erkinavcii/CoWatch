@@ -8,7 +8,7 @@
   const el = {
     video: $('#video'), stage: $('#stage'), subPrimary: $('#subPrimary'), subSecondary: $('#subSecondary'),
     empty: $('#empty'), centerMsg: $('#centerMsg'), controls: $('#controls'), seekBar: $('#seekBar'),
-    produced: $('#produced'), playBtn: $('#playBtn'), backBtn: $('#backBtn'), fwdBtn: $('#fwdBtn'),
+    produced: $('#produced'), playBtn: $('#playBtn'), backBtn: $('#backBtn'), fwdBtn: $('#fwdBtn'), tapSeek: $('#tapSeek'),
     timeLabel: $('#timeLabel'), muteBtn: $('#muteBtn'), volume: $('#volume'), fsBtn: $('#fsBtn'),
     filmTitle: $('#filmTitle'), members: $('#members'), conn: $('#conn'), uiLang: $('#uiLang'),
     magnetForm: $('#magnetForm'), magnetInput: $('#magnetInput'), fileList: $('#fileList'),
@@ -20,7 +20,7 @@
     screenQualityHint: $('#screenQualityHint'), screenStats: $('#screenStats'),
     peerStopShare: $('#peerStopShare'), mediaLockHint: $('#mediaLockHint'),
     mediaInfo: $('#mediaInfo'), torrentInfo: $('#torrentInfo'), closeMedia: $('#closeMedia'),
-    primarySel: $('#primarySel'), secondarySel: $('#secondarySel'), offsetOut: $('#offsetOut'),
+    primarySel: $('#primarySel'), secondarySel: $('#secondarySel'), offsetField: $('#offsetField'), offsetRows: $('#offsetRows'),
     sizeRange: $('#sizeRange'), bottomRange: $('#bottomRange'), searchForm: $('#searchForm'),
     searchLangs: $('#searchLangs'), osOff: $('#osOff'), uploadForm: $('#uploadForm'), subFile: $('#subFile'),
     subLang: $('#subLang'), trackList: $('#trackList'), joinOverlay: $('#joinOverlay'), joinForm: $('#joinForm'),
@@ -79,10 +79,11 @@
   // ---------------------------------------------------------------- preferences
   const PREFS_KEY = 'cowatch.prefs.v1';
   const DEFAULT_PREFS = {
-    name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '', offsetMs: 0,
+    name: '', uiLang: detectUiLang(), primaryLang: '', secondaryLang: '',
     fontSize: 100, bottom: 8, searchLangs: '', volume: 1, muted: false, color: '', sfx: true,
     micDevice: '', duck: true, peerVolume: {}, micHintShown: false, camDevice: '', showSelf: true, showCams: true,
     camCorner: 'tr', camsSmall: false, browseCatalog: '', chatDock: true, eraseWhole: false, screenQuality: 'auto',
+    align: {}, // each subtitle's own timing, by its id: {offset (ms), scale, used}
   };
   const prefs = (() => {
     try { return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return { ...DEFAULT_PREFS }; }
@@ -675,6 +676,7 @@
   el.pipReturn.addEventListener('click', () => { if (PIP.win) PIP.win.close(); });
   el.stage.addEventListener('dblclick', (e) => {
     clearTimeout(clickTimer);
+    if (lastPointer === 'touch') return; // a double tap is handled below
     if (!isUi(e.target) && !S.penMode) toggleFullscreen();
   });
   // A click on the picture plays or pauses for everyone, and pokes the others too (see
@@ -684,7 +686,57 @@
   // camera tile or a pen stroke over the picture is not a click.
   let clickTimer = null;
   let pressAt = null;
-  el.stage.addEventListener('pointerdown', (e) => { pressAt = { x: e.clientX, y: e.clientY, ui: isUi(e.target) }; });
+  let lastPointer = 'mouse';
+  el.stage.addEventListener('pointerdown', (e) => {
+    lastPointer = e.pointerType;
+    pressAt = { x: e.clientX, y: e.clientY, ui: isUi(e.target) };
+  });
+
+  // On a touch screen one tap only shows the controls; a quick double tap seeks 10 s on the
+  // sides (a quarter each) and goes fullscreen, or back, in the large middle. More taps on the
+  // same side right after add up (+10, +20…), and the room gets one seek once they stop, so the
+  // stream does not start again for everyone on every tap.
+  const TAP = { gapMs: 300, slop: 40, side: 0.25, step: 10, moreMs: 800, sendMs: 600 };
+  const tap = { at: 0, x: 0, y: 0, run: null, timer: null, hide: null };
+  function tapSide (x) {
+    const r = el.stage.getBoundingClientRect();
+    const f = (x - r.left) / r.width;
+    return f < TAP.side ? 'back' : f > 1 - TAP.side ? 'fwd' : 'mid';
+  }
+  function showTapSeek (side, total) {
+    el.tapSeek.className = `tap-seek ${side}`;
+    el.tapSeek.textContent = side === 'back' ? `⏪ ${t('tap_seconds', { n: total })}` : `${t('tap_seconds', { n: total })} ⏩`;
+    el.tapSeek.hidden = false;
+    clearTimeout(tap.hide);
+    tap.hide = setTimeout(() => { el.tapSeek.hidden = true; }, TAP.sendMs + 500);
+  }
+  function tapSeek (side) {
+    const now = performance.now();
+    if (!tap.run || tap.run.side !== side) tap.run = { side, base: expectedPosition(), total: 0 };
+    tap.run.total += TAP.step;
+    tap.run.last = now;
+    showTapSeek(side, tap.run.total);
+    clearTimeout(tap.timer);
+    tap.timer = setTimeout(() => {
+      const run = tap.run;
+      tap.run = null;
+      if (run) seekTo(run.base + (run.side === 'back' ? -run.total : run.total));
+    }, TAP.sendMs);
+  }
+  el.stage.addEventListener('pointerup', (e) => {
+    const press = pressAt;
+    if (e.pointerType !== 'touch' || !press || press.ui || isUi(e.target) || S.penMode) return;
+    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > TAP.slop) return; // a swipe
+    const now = performance.now();
+    const side = tapSide(e.clientX);
+    const seeks = side !== 'mid' && S.media && !screen.owner;
+    if (seeks && tap.run && tap.run.side === side && now - tap.run.last < TAP.moreMs) { tapSeek(side); return; }
+    const quick = now - tap.at < TAP.gapMs && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) < TAP.slop;
+    if (!quick) { Object.assign(tap, { at: now, x: e.clientX, y: e.clientY }); return; }
+    tap.at = 0;
+    if (side === 'mid') toggleFullscreen();
+    else if (seeks) tapSeek(side);
+  });
   el.stage.addEventListener('click', (e) => {
     if (isUi(e.target)) return;
     if (S.autoplayBlocked) { video.play().catch(() => {}); return; }
@@ -1044,7 +1096,9 @@
     el.eraserModes.hidden = !S.eraser;
     el.stage.classList.toggle('erase-whole', S.eraser && !!prefs.eraseWhole);
     if (!S.eraser) return;
-    el.eraserModes.style.top = `${el.eraserBtn.offsetTop + el.eraserBtn.offsetHeight / 2}px`;
+    const row = el.stage.classList.contains('tools-row'); // under the button, or beside it
+    el.eraserModes.style.top = row ? '' : `${el.eraserBtn.offsetTop + el.eraserBtn.offsetHeight / 2}px`;
+    el.eraserModes.style.left = row ? `${el.eraserBtn.offsetLeft + el.eraserBtn.offsetWidth / 2}px` : '';
     for (const btn of el.eraserModes.querySelectorAll('button')) {
       btn.classList.toggle('sel', (btn.dataset.mode === 'whole') === !!prefs.eraseWhole);
     }
@@ -1809,7 +1863,16 @@
     for (const other of side.children) if (other !== el.camsBox && other.offsetHeight) room -= other.offsetHeight + 10;
     el.camsBox.style.setProperty('--cam-fit', `${Math.max(64, Math.floor((room / n) * 16 / 9))}px`);
   }
-  new ResizeObserver(fitCams).observe(el.stage);
+  // A short picture (a phone, upright or on its side): the toolbar as a column would hang over
+  // the seek bar, so it lies in a row instead.
+  function fitToolbar () {
+    const was = el.stage.classList.contains('tools-row');
+    el.stage.classList.remove('tools-row');
+    const row = !!el.toolbar.offsetHeight && el.toolbar.offsetHeight > el.toolbar.parentNode.clientHeight;
+    el.stage.classList.toggle('tools-row', row);
+    if (row !== was && S.eraser) renderEraserModes();
+  }
+  new ResizeObserver(() => { fitToolbar(); fitCams(); }).observe(el.stage);
   el.camsSizeBtn.addEventListener('click', () => { prefs.camsSmall = !prefs.camsSmall; savePrefs(); placeCams(); });
 
   let camDrag = null; let dragEndedAt = 0;
@@ -2248,12 +2311,69 @@
   el.primarySel.addEventListener('change', () => selectTrack('primary', el.primarySel.value));
   el.secondarySel.addEventListener('change', () => selectTrack('secondary', el.secondarySel.value));
 
-  document.querySelectorAll('[data-off]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      prefs.offsetMs = btn.dataset.off === 'reset' ? 0 : prefs.offsetMs + Number(btn.dataset.off);
-      savePrefs(); renderSubStyle();
-    });
-  });
+  // ---- timing: every subtitle has its own, for me only (another version of the film puts the
+  // Russian one 2 s early and the Turkish one 1 s late). Kept by the subtitle's id, which the
+  // server keeps with the film's subtitles; at most ALIGN_KEEP, the least recently used go.
+  // A subtitle's time for a film time: (film − offset) / scale; scale (another frame rate)
+  // comes with the alignment panel.
+  const ALIGN_KEEP = 300;
+  const OFFSET_STEPS = [-500, -100, 100, 500];
+  const alignOf = (id) => (id && prefs.align[id]) || { offset: 0, scale: 1 };
+  const subTime = (id, film) => { const a = alignOf(id); return (film - a.offset / 1000) / (a.scale || 1); };
+  function setAlign (id, change) {
+    const next = { ...alignOf(id), ...change, used: Date.now() };
+    if (!next.offset && next.scale === 1) delete prefs.align[id]; else prefs.align[id] = next;
+    const ids = Object.keys(prefs.align);
+    if (ids.length > ALIGN_KEEP) {
+      ids.sort((a, b) => (prefs.align[a].used || 0) - (prefs.align[b].used || 0));
+      for (const old of ids.slice(0, ids.length - ALIGN_KEEP)) delete prefs.align[old];
+    }
+    savePrefs();
+  }
+  // The one offset of before, for both subtitles, becomes the chosen ones' own.
+  function adoptOldOffset () {
+    if (!prefs.offsetMs || !(S.primary || S.secondary)) return;
+    for (const id of new Set([S.primary, S.secondary].filter(Boolean))) {
+      if (!prefs.align[id]) setAlign(id, { offset: prefs.offsetMs });
+    }
+    delete prefs.offsetMs;
+    savePrefs();
+  }
+  const fmtOffset = (ms) => `${ms > 0 ? '+' : ''}${(ms / 1000).toFixed(1).replace('.', t('decimal_sep'))} s`;
+  function renderOffsets () {
+    adoptOldOffset();
+    const slots = [['primary', S.primary], ['secondary', S.secondary !== S.primary ? S.secondary : '']].filter(([, id]) => id);
+    el.offsetField.hidden = !slots.length;
+    el.offsetRows.replaceChildren(...slots.map(([slot, id]) => {
+      const track = S.tracks.find((tr) => tr.id === id);
+      const box = document.createElement('div');
+      box.dataset.slot = slot;
+      const label = document.createElement('div');
+      label.className = 'offset-label';
+      label.textContent = `${t(slot === 'primary' ? 'subs_primary' : 'subs_secondary')}${track ? ` · ${trackLabel(track)}` : ''}`;
+      label.title = label.textContent;
+      const row = document.createElement('div');
+      row.className = 'offset-row';
+      const out = document.createElement('output');
+      const show = () => { out.textContent = fmtOffset(alignOf(id).offset); };
+      const step = (ms) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.dataset.off = String(ms);
+        b.textContent = ms ? `${ms > 0 ? '+' : '−'}${(Math.abs(ms) / 1000).toFixed(1).replace('.', t('decimal_sep'))}` : '0';
+        if (!ms) b.className = 'ghost';
+        b.addEventListener('click', () => {
+          setAlign(id, { offset: ms ? Math.round(alignOf(id).offset + ms) : 0, ...(ms ? {} : { scale: 1 }) });
+          show();
+        });
+        return b;
+      };
+      row.append(step(OFFSET_STEPS[0]), step(OFFSET_STEPS[1]), out, step(OFFSET_STEPS[2]), step(OFFSET_STEPS[3]), step(0));
+      show();
+      box.append(label, row);
+      return box;
+    }));
+  }
   el.sizeRange.addEventListener('input', () => { prefs.fontSize = Number(el.sizeRange.value); savePrefs(); renderSubStyle(); });
   el.bottomRange.addEventListener('input', () => { prefs.bottom = Number(el.bottomRange.value); savePrefs(); renderSubStyle(); });
 
@@ -3422,6 +3542,38 @@
   // Where the column fits: beside the film on a wide screen, under it on a phone held upright.
   const dockScreen = window.matchMedia('(min-width: 1100px), (max-width: 640px)');
 
+  // Web addresses in a message become links (new tab, no referrer); everything else stays plain
+  // text, built node by node, never as HTML. Only http and https: "javascript:" stays text.
+  const LINK_RE = /\bhttps?:\/\/[^\s<>"]+/gi;
+  const LINK_SHOW = 60;
+  function chatLink (raw) {
+    let end = raw.replace(/[.,;:!?'"]+$/, '');
+    if (end.endsWith(')') && !end.includes('(')) end = end.slice(0, -1); // "(see https://…)"
+    let url;
+    try { url = new URL(end); } catch { return null; }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+    const a = document.createElement('a');
+    a.className = 'chat-link';
+    a.href = url.href;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.title = url.href;
+    a.textContent = end.length > LINK_SHOW ? end.slice(0, LINK_SHOW - 16) + '…' + end.slice(-15) : end;
+    return { a, used: end.length };
+  }
+  function chatPieces (textIn) {
+    const out = [];
+    let at = 0;
+    for (const m of String(textIn).matchAll(LINK_RE)) {
+      const link = chatLink(m[0]);
+      if (!link) continue;
+      if (m.index > at) out.push(textIn.slice(at, m.index));
+      out.push(link.a);
+      at = m.index + link.used;
+    }
+    if (at < textIn.length) out.push(textIn.slice(at));
+    return out;
+  }
   function chatLine (msg) {
     const li = document.createElement('li');
     li.className = 'chat-msg';
@@ -3429,7 +3581,7 @@
     const name = document.createElement('b');
     name.textContent = msg.name;
     const text = document.createElement('span');
-    text.textContent = msg.text;
+    text.append(...chatPieces(msg.text));
     li.append(name, text);
     li.title = new Date(msg.ts).toLocaleTimeString(prefs.uiLang, { hour: '2-digit', minute: '2-digit' });
     return li;
@@ -3771,6 +3923,7 @@
       }
       select.value = current || '';
     }
+    renderOffsets();
     el.trackList.replaceChildren();
     if (!S.tracks.length) {
       const li = document.createElement('li');
@@ -3810,8 +3963,6 @@
     }
     el.sizeRange.value = prefs.fontSize;
     el.bottomRange.value = prefs.bottom;
-    const sec = prefs.offsetMs / 1000;
-    el.offsetOut.textContent = `${sec > 0 ? '+' : ''}${sec.toFixed(1)} s`;
   }
 
   let lastUi = 0;
@@ -3831,9 +3982,9 @@
     animateBalls(now, g);
     renderStrokes(now, g);
     if (S.media) {
-      const time = filmTime() - prefs.offsetMs / 1000;
-      setSubText(el.subPrimary, S.primary ? activeText(S.primary, time) : '');
-      setSubText(el.subSecondary, S.secondary && S.secondary !== S.primary ? activeText(S.secondary, time) : '');
+      const film = filmTime();
+      setSubText(el.subPrimary, S.primary ? activeText(S.primary, subTime(S.primary, film)) : '');
+      setSubText(el.subSecondary, S.secondary && S.secondary !== S.primary ? activeText(S.secondary, subTime(S.secondary, film)) : '');
     } else {
       setSubText(el.subPrimary, '');
       setSubText(el.subSecondary, '');
@@ -3864,7 +4015,7 @@
   window.cowatchDebug = () => ({
     filmTime: filmTime(), expected: expectedPosition(), drift: filmTime() - expectedPosition(),
     room: S.room, media: S.media, clockOffset: S.clock.offset, rate: video.playbackRate,
-    readyState: video.readyState, primary: S.primary, secondary: S.secondary,
+    readyState: video.readyState, primary: S.primary, secondary: S.secondary, align: prefs.align,
     frameWatch: { fixes: frameWatch.fixes, reloads: frameWatch.reloads },
     screen: {
       owner: screen.owner, pending: screen.pending, mine: !!screen.stream,

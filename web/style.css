@@ -219,6 +219,16 @@ button.busy:disabled::before, .loading::before {
 }
 @keyframes ripple { from { transform: scale(.2); opacity: .95; } to { transform: scale(1.6); opacity: 0; } }
 
+/* A double tap on a touch screen: no page zoom, and the seek it makes shows on its side. */
+.stage { touch-action: manipulation; }
+.tap-seek {
+  position: absolute; z-index: 7; top: 50%; transform: translateY(-50%); pointer-events: none;
+  padding: 8px 14px; border-radius: 999px; background: rgba(10, 11, 14, .72); color: #fff;
+  font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; animation: peek-in .15s ease;
+}
+.tap-seek.back { left: 8%; }
+.tap-seek.fwd { right: 8%; }
+
 /* ---- right side: camera tiles on top, the drawing toolbar right under them ---- */
 .side {
   position: absolute; z-index: 7; right: 10px; top: 10px; bottom: 84px;
@@ -250,6 +260,7 @@ button.busy:disabled::before, .loading::before {
 @media (hover: none) {
   .cams-size { opacity: .9; }
   .stage.idle .toolbar { opacity: 0; pointer-events: none; } /* a tap brings it back with the controls */
+  #screenGroup.no-share { display: none; } /* a phone on its side is wider than the phone rule */
 }
 .cam {
   position: relative; flex: none; width: min(var(--cam-w), var(--cam-fit, 100vw)); aspect-ratio: 16 / 9; border-radius: 10px; overflow: hidden;
@@ -378,6 +389,10 @@ button.busy:disabled::before, .loading::before {
   display: grid; grid-template-columns: repeat(4, 38px); justify-items: center; gap: 8px; padding: 10px;
   background: rgba(10, 11, 14, .88); border: 1px solid var(--line); border-radius: 12px;
 }
+/* A short picture: the toolbar in a row (fitToolbar), its pop-ups under it. */
+.stage.tools-row .toolbar { flex-direction: row; }
+.stage.tools-row .palette { right: 0; top: calc(100% + 8px); transform: none; }
+.stage.tools-row .eraser-modes { right: auto; top: calc(100% + 8px); transform: translateX(-50%); }
 /* The eraser's two kinds, beside it while it is on. */
 .eraser-modes {
   position: absolute; right: calc(100% + 8px); transform: translateY(-50%); display: flex; gap: 4px; padding: 4px;
@@ -419,6 +434,8 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .hint { font-size: 12.5px; color: var(--muted); margin: 4px 0; }
 .info { font-size: 13px; color: var(--muted); margin-top: 6px; overflow-wrap: anywhere; }
 .info b { color: var(--text); font-weight: 600; }
+.offset-rows { display: grid; gap: 10px; }
+.offset-label { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-bottom: 4px; }
 .offset-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .offset-row button { padding: 5px 9px; font-variant-numeric: tabular-nums; }
 .offset-row output { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
@@ -582,6 +599,9 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .chat-log > :first-child { margin-top: auto; } /* the newest sit right above the box, as in any chat */
 .chat-msg { font-size: 13.5px; line-height: 1.35; overflow-wrap: anywhere; }
 .chat-msg b { color: var(--c, var(--text)); margin-right: 6px; }
+.chat-link { color: #8ab4ff; text-decoration: underline; text-underline-offset: 2px; }
+.chat-link:hover { color: #b3ccff; }
+.chat-link:visited { color: #c4a5ff; }
 .chat-form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--line); }
 .chat-form input { flex: 1; min-width: 0; }
 .chat-form button { padding: 5px 10px; }

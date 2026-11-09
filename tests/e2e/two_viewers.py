@@ -452,6 +452,27 @@ def run(headed: bool) -> None:
             b.click("#chatLog")
             time.sleep(0.6)
             check("a click in the panel over the picture neither pauses nor pokes", b.evaluate(f"() => {DBG}.room.playing") == playing)
+            # ---- web addresses become links (http and https only), opening in a new tab
+            long_path = "x" * 80
+            b.click("#chatInput")
+            b.keyboard.type(f"bak http://127.0.0.1:9/a_(b). ve javascript:alert(1) (http://127.0.0.1:9/{long_path})")
+            b.keyboard.press("Enter")
+            a.wait_for_function("() => document.querySelector('#chatLog .chat-msg:last-child a')", timeout=3000)
+            links = a.evaluate("""() => [...document.querySelectorAll('#chatLog .chat-msg:last-child a')].map(l =>
+              ({href: l.href, text: l.textContent, target: l.target, rel: l.rel, title: l.title}))""")
+            whole = a.evaluate("() => document.querySelector('#chatLog .chat-msg:last-child span').textContent")
+            check("addresses in a message are links that open in a new tab; javascript: and the closing marks stay text",
+                  len(links) == 2 and links[0]["href"] == "http://127.0.0.1:9/a_(b)" and links[0]["text"] == "http://127.0.0.1:9/a_(b)"
+                  and all(l["target"] == "_blank" and "noopener" in l["rel"] and "noreferrer" in l["rel"] for l in links)
+                  and links[1]["title"] == f"http://127.0.0.1:9/{long_path}" and "…" in links[1]["text"] and len(links[1]["text"]) == 60
+                  and whole.endswith(".") is False and "javascript:alert(1)" in whole and whole.endswith(")"), str(links) + " " + whole)
+            playing = b.evaluate(f"() => {DBG}.room.playing")
+            with b.context.expect_page() as opened:
+                b.click("#chatLog .chat-msg:last-child a")
+            opened.value.close()
+            time.sleep(0.6)
+            check("clicking a link opens it in a new tab and leaves the film alone", b.evaluate(f"() => {DBG}.room.playing") == playing)
+
             b.click("#chatInput")
             b.keyboard.press("Escape")
             check("Escape closes the panel", b.evaluate("() => document.querySelector('#chatBox').hidden"))
@@ -478,6 +499,56 @@ def run(headed: bool) -> None:
                   layout["docked"] and layout["open"] and layout["under"] and layout["log"], str(layout))
             check("on a phone the header stays one line and nothing is wider than the screen",
                   layout["header"] < 60 and layout["wide"] <= 390, str(layout))
+            tools = phone.evaluate("""() => { const t = document.querySelector('#toolbar').getBoundingClientRect();
+              const s = document.querySelector('#seekBar').getBoundingClientRect();
+              return {row: document.querySelector('#stage').classList.contains('tools-row'), bottom: t.bottom, seek: s.top,
+                      share: getComputedStyle(document.querySelector('#screenGroup')).display}; }""")
+            check("on the short picture the drawing toolbar lies in a row, clear of the seek bar",
+                  tools["row"] and tools["bottom"] <= tools["seek"], str(tools))
+
+            # ---- taps: one shows the controls, a quick double tap seeks on the sides, the middle
+            # goes fullscreen (here: fills the window)
+            phone.evaluate("() => { const s = document.querySelector('#seekBar'); s.max = '30'; s.value = '12'; s.dispatchEvent(new Event('change')); }")
+            phone.wait_for_function(f"() => Math.abs({DBG}.room.position - 12) < 0.5", timeout=10000)
+            box = phone.eval_on_selector("#stage", "s => { const r = s.getBoundingClientRect(); return {x: r.left, y: r.top, w: r.width, h: r.height}; }")
+            y = box["y"] + box["h"] * 0.45
+            at = lambda f: (box["x"] + box["w"] * f, y)  # noqa: E731
+            seq = phone.evaluate(f"() => {DBG}.room.seq")
+            playing = phone.evaluate(f"() => {DBG}.room.playing")
+            phone.touchscreen.tap(*at(0.9))
+            time.sleep(0.8)
+            check("on a touch screen one tap neither seeks nor pauses",
+                  phone.evaluate(f"() => {DBG}.room.seq") == seq and phone.evaluate(f"() => {DBG}.room.playing") == playing)
+
+            def seek_by(f, taps):
+                start = phone.evaluate(f"() => {DBG}.expected")
+                before = phone.evaluate(f"() => {DBG}.room.seq")
+                for _ in range(taps):
+                    phone.touchscreen.tap(*at(f))
+                    time.sleep(0.12)
+                hint = phone.evaluate("() => document.querySelector('#tapSeek').hidden ? '' : document.querySelector('#tapSeek').textContent")
+                phone.wait_for_function(f"() => {DBG}.room.seq !== {before}", timeout=5000)
+                time.sleep(0.4)
+                return start, phone.evaluate(f"() => ({{pos: {DBG}.room.position, seq: {DBG}.room.seq - {before}}})"), hint
+
+            start, after, hint = seek_by(0.9, 2)
+            check("a double tap on the right goes 10 s on, for the room",
+                  abs(after["pos"] - (start + 10)) < 1 and after["seq"] == 1 and hint == "10 sn ⏩", f"{start} {after} {hint}")
+            start, after, hint = seek_by(0.1, 3)
+            check("taps in a row on the left add up, and the room gets one seek",
+                  abs(after["pos"] - (start - 20)) < 1 and after["seq"] == 1 and hint == "⏪ 20 sn", f"{start} {after} {hint}")
+            phone.touchscreen.tap(*at(0.5))
+            time.sleep(0.1)
+            phone.touchscreen.tap(*at(0.5))
+            phone.wait_for_function("() => document.querySelector('#stage').classList.contains('fill')", timeout=3000)
+            box = phone.eval_on_selector("#stage", "s => { const r = s.getBoundingClientRect(); return {x: r.left, y: r.top, w: r.width, h: r.height}; }")
+            y = box["y"] + box["h"] * 0.45
+            phone.touchscreen.tap(*at(0.5))
+            time.sleep(0.1)
+            phone.touchscreen.tap(*at(0.5))
+            phone.wait_for_function("() => !document.querySelector('#stage').classList.contains('fill')", timeout=3000)
+            check("a double tap in the middle fills the window and another one brings it back", True)
+            time.sleep(0.4)
             phone.tap("#fsBtn")
             fill = phone.evaluate("""() => { const s = document.querySelector('#stage').getBoundingClientRect();
               return {fill: document.querySelector('#stage').classList.contains('fill'), w: s.width, h: s.height,
