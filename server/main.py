@@ -39,6 +39,7 @@ from .media import (MediaError, MediaSession, MediaSource, clean_title, clear_hl
 from .oshash import CHUNK, hash_file, hash_from_chunks
 from .presence import (ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, erase_message, pick_color, playback_report, point,
                        stroke_message)
+from .presence import REPAIR_INTERVAL_S, LumaTrack, black_viewers, describe_luma, luma_sample, number
 from .room import Client, Room, now_ms
 from .signaling import ice_servers, rtc_data
 from .subtitles import (
@@ -127,6 +128,7 @@ class Controller:
         self.opening_hash: Optional[str] = None  # its torrent, for the progress shown while it opens
         self.embedded_tried: set[str] = set()  # films whose own subtitles were read (or tried) this run
         self.briefs: dict[tuple[str, str], str] = {}  # (film, source subtitle) -> its brief, for the next language
+        self.luma: dict[str, LumaTrack] = {}  # client id -> brightness samples, for the black picture check
 
     # ---- messages -------------------------------------------------------------
     @property
@@ -262,6 +264,47 @@ class Controller:
         except OSError as exc:
             log.warning("could not write %s: %s", path, exc)
 
+    # ---- black picture and buffering, for playback.log ----------------------------------------
+    def note_luma(self, client: Client, msg: dict) -> None:
+        """A brightness sample from a playing page (see `presence.black_viewers`). Whoever sees
+        black while someone else is bright at the same film moment gets a log line and `repair`."""
+        sample = luma_sample(msg)
+        now = time.monotonic()
+        track = self.luma.setdefault(client.id, LumaTrack())
+        if sample is None or not track.bucket.take(now):
+            return
+        track.samples.append((now, sample["t"], sample["luma"]))
+        track.diag = sample
+        for gone in [cid for cid in self.luma if cid not in self.room.clients]:
+            del self.luma[gone]
+        stream = self.session.stream.id if self.session and self.session.stream else None
+        for cid in black_viewers({cid: list(tr.samples) for cid, tr in self.luma.items()}, now):
+            tr, target = self.luma[cid], self.room.clients.get(cid)
+            if target is None or now - tr.last_repair < REPAIR_INTERVAL_S:
+                continue
+            tr.last_repair = now
+            tr.samples.clear()  # the next alarm needs new dark samples
+            self.log_report(target, {"kind": "black_picture", "position": tr.diag["t"],
+                                     "detail": describe_luma(tr.diag, stream)})
+            self._relay_to(target, {"type": "repair"})
+
+    def log_buffering(self, client: Client, msg: dict, since: Optional[float], released: bool = False) -> None:
+        """A wait starts or ends: who, where, how long, and how much film they had in hand."""
+        report: dict = {"kind": "buffering" if client.buffering else "buffered"}
+        position = number(msg.get("position"), 0, 1e6)
+        if position is not None:
+            report["position"] = round(position, 1)
+        parts = []
+        if since is not None and not client.buffering:
+            parts.append(f"waited {time.monotonic() - since:.1f} s")
+        if released:
+            parts.append("the room went on without them")
+        ahead = number(msg.get("ahead"), 0, 3600)
+        if ahead is not None:
+            parts.append(f"{ahead:.1f} s in hand")
+        report["detail"] = "; ".join(parts) or "waiting"
+        self.log_report(client, report)
+
     # ---- websocket commands ---------------------------------------------------------
     async def handle(self, client: Client, msg: dict) -> None:
         kind = msg.get("type")
@@ -307,6 +350,8 @@ class Controller:
             report = playback_report(msg)
             if report is not None and client.report_bucket.take(time.monotonic()):
                 self.log_report(client, report)
+        elif kind == "luma" and client.joined:
+            self.note_luma(client, msg)
         elif kind == "color":  # the colour, the animal, or both
             changed = False
             color = str(msg.get("color", "")).lower()
@@ -376,7 +421,9 @@ class Controller:
             await self.check_remote()
         elif kind == "buffering":
             value = bool(msg.get("value"))
+            since = client.buffering_since
             if self.room.set_buffering(client, value):
+                self.log_buffering(client, msg, since)
                 if value:
                     # Pause everyone where the slow viewer stopped, so they miss nothing
                     # (at most 10 s back, in case the reported position is off).
@@ -875,7 +922,9 @@ class Controller:
                 await self.room.broadcast(self.room.screen_msg())
             for client in self.room.expired_buffering():
                 log.info("ignoring buffering client %s", client.name)
+                since = client.buffering_since
                 if self.room.release_buffering(client):
+                    self.log_buffering(client, {}, since, released=True)
                     await self.broadcast_state()
                     await self.room.broadcast(self.room.members_msg())
 

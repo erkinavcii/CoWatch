@@ -479,3 +479,82 @@ def test_more_friends_over_funnel_ask_the_host_to_re_encode(monkeypatch, tmp_pat
                 assert session.stream.kbps == 3000
                 again = client.post("/api/media/retune", headers=host_headers).json()
                 assert again["restarted"] is False  # made for them already
+
+
+def _luma_room(stack, client, names):
+    """Joined pages of one room, each with its own browser cookie (one TestClient: see CLAUDE.md)."""
+    opened = []
+    for name in names:
+        ws = stack.enter_context(client.websocket_connect(
+            "/ws", headers={"cookie": f"cw_key={KEY}; cw_viewer=luma-{name}"}))
+        next_of(ws, "welcome")
+        ws.send_json({"type": "hello", "name": name})
+        opened.append(ws)
+    return opened
+
+
+def _log_lines(kind):
+    from server.main import PLAYBACK_LOG, cfg
+    path = cfg.data_dir / PLAYBACK_LOG
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    return [line for line in lines if f"[{kind}]" in line]
+
+
+def _clear_log():
+    from server.main import PLAYBACK_LOG, cfg
+    (cfg.data_dir / PLAYBACK_LOG).unlink(missing_ok=True)
+
+
+def _luma_rounds(opened, lumas, rounds, start=100.0):
+    for r in range(rounds):
+        for ws, luma in zip(opened, lumas):
+            ws.send_json({"type": "luma", "t": start + 3 * r, "luma": luma, "ready": 4, "ahead": 0,
+                          "paused": False, "frames": 10 * r, "dropped": 0, "stateMs": 1500, "reconnects": 2})
+    repaired = []  # which pages were told to repair before their pong
+    for n, ws in enumerate(opened):  # every sample before the pong has been handled
+        ws.send_json({"type": "ping", "t0": 1})
+        while (msg := ws.receive_json())["type"] != "pong":
+            if msg["type"] == "repair":
+                repaired.append(n)
+    return repaired
+
+
+def test_a_black_picture_on_one_page_is_logged_and_repaired():
+    from contextlib import ExitStack
+    _clear_log()
+    with TestClient(app) as client, ExitStack() as stack:
+        black, bright, other = _luma_room(stack, client, ["Kara", "Bir", "Iki"])
+        if 0 not in _luma_rounds([black, bright, other], [1, 120, 90], 2):
+            next_of(black, "repair")  # sent on its way after the pong
+        lines = _log_lines("black_picture")
+        assert len(lines) == 1 and "Kara [black_picture]" in lines[0] and "@ 103.0s" in lines[0]
+        assert "readyState 4" in lines[0] and "no stream" in lines[0] and "reconnects 2" in lines[0]
+        # Still black: no second repair within REPAIR_INTERVAL_S.
+        assert _luma_rounds([black, bright, other], [1, 120, 90], 2, start=106.0) == []
+        assert len(_log_lines("black_picture")) == 1
+
+
+def test_a_dark_scene_is_not_a_black_picture():
+    from contextlib import ExitStack
+    _clear_log()
+    with TestClient(app) as client, ExitStack() as stack:
+        opened = _luma_room(stack, client, ["Bir", "Iki", "Uc"])
+        _luma_rounds(opened, [2, 4, 0], 2)
+        _luma_rounds(opened[:1], [0], 2, start=110.0)  # dark at a moment nobody else has seen
+        assert _log_lines("black_picture") == []
+
+
+def test_buffering_goes_to_the_playback_log():
+    _clear_log()
+    with TestClient(app, cookies={"cw_key": KEY}) as client:
+        with client.websocket_connect("/ws") as ws:
+            next_of(ws, "welcome")
+            ws.send_json({"type": "hello", "name": "Yavas"})
+            ws.send_json({"type": "buffering", "value": True, "position": 42.5, "ahead": 0.2})
+            next_of(ws, "state")
+            ws.send_json({"type": "buffering", "value": False, "position": 42.6, "ahead": "x"})
+            next_of(ws, "state")
+    started, ended = _log_lines("buffering"), _log_lines("buffered")
+    assert len(started) == 1 and "Yavas [buffering]" in started[0] and "@ 42.5s" in started[0]
+    assert "0.2 s in hand" in started[0]
+    assert len(ended) == 1 and "waited " in ended[0] and "in hand" not in ended[0]

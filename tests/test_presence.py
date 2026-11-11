@@ -196,3 +196,35 @@ def test_player_reports_go_to_the_playback_log():
     lines = path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == REPORT_BURST
     assert "Uzak [frames_stalled]" in lines[0] and "@ 61.0s: n0" in lines[0]
+
+
+def test_luma_samples_are_checked_field_by_field():
+    from server.presence import luma_sample
+    assert luma_sample({"t": 12.345, "luma": 80}) == {"t": 12.35, "luma": 80.0}
+    for bad in ({"t": -1, "luma": 5}, {"t": 5, "luma": 256}, {"t": "5", "luma": 5}, {"t": True, "luma": 5},
+                {"t": float("nan"), "luma": 5}, {"luma": 5}):
+        assert luma_sample(bad) is None
+    full = luma_sample({"t": 61, "luma": 0, "ready": 4, "ahead": 12.34, "paused": False, "frames": 1500,
+                        "dropped": 3, "stream": "0123456789ab", "streamOk": True, "stateMs": 2100, "reconnects": 1})
+    assert full == {"t": 61.0, "luma": 0.0, "ready": 4, "ahead": 12.3, "paused": False, "frames": 1500, "dropped": 3,
+                    "stream": "0123456789ab", "streamOk": True, "stateMs": 2100, "reconnects": 1}
+    odd = luma_sample({"t": 1, "luma": 1, "ready": 9, "ahead": -2, "paused": "no", "frames": 1.5e12,
+                       "stream": "../../etc", "streamOk": 1, "stateMs": None, "reconnects": False})
+    assert odd == {"t": 1.0, "luma": 1.0}  # each wrong field dropped on its own
+
+
+def test_black_viewers_needs_a_bright_page_at_the_same_moment():
+    from server.presence import LUMA_KEEP_S, black_viewers
+    now = 100.0
+
+    def rounds(luma, offset=0.0):
+        return [(now - 3, 50.0 + offset, luma), (now, 53.0 + offset, luma)]
+    bright, dark = rounds(120), rounds(2)
+    assert black_viewers({"a": dark, "b": bright, "c": bright}, now) == ["a"]
+    assert black_viewers({"a": dark, "b": rounds(3), "c": rounds(5)}, now) == []  # a dark scene
+    assert black_viewers({"a": dark}, now) == []  # alone: nothing to compare with
+    assert black_viewers({"a": dark, "b": rounds(120, offset=1.4)}, now) == ["a"]  # sampled at another phase
+    assert black_viewers({"a": dark, "b": rounds(120, offset=2.0)}, now) == []  # another film moment
+    assert black_viewers({"a": dark[-1:], "b": bright}, now) == []  # one dark sample: a fade-out at a cut
+    assert black_viewers({"a": [(now - 3, 50, 120), (now, 53, 2)], "b": bright}, now) == []
+    assert black_viewers({"a": dark, "b": bright}, now + LUMA_KEEP_S + 1) == []  # old samples are forgotten

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections import deque
 from typing import Optional
 
 # Bright enough for dark text on top, distinct enough to tell people apart.
@@ -101,7 +102,7 @@ CHAT_REFILL_S = 1.0  # then one message per this many seconds
 
 # A viewer's player tells the server what went wrong in their browser (`report`): written to
 # data/playback.log, so a black screen on a friend's side can be read afterwards.
-REPORT_KINDS = {"hls_error", "video_error", "frames_stalled", "reloaded"}
+REPORT_KINDS = {"hls_error", "video_error", "frames_stalled", "reloaded", "repaired"}
 REPORT_MAX_CHARS = 300
 REPORT_BURST = 5
 REPORT_REFILL_S = 10.0
@@ -149,3 +150,101 @@ def playback_report(msg: dict) -> Optional[dict]:
     if isinstance(position, (int, float)) and not isinstance(position, bool) and math.isfinite(position) and position >= 0:
         out["position"] = round(float(position), 1)
     return out
+
+
+def number(value, low: float, high: float) -> Optional[float]:
+    """A plain finite number from a browser within [low, high], or None (booleans are not numbers)."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+        return None
+    return float(value) if low <= value <= high else None
+
+
+# ---- black picture ---------------------------------------------------------------
+# Every few seconds each playing page tells how bright its picture is (`luma`, 0-255, from a
+# tiny copy of the video) and at which film time. A dark scene is dark for everyone; a picture
+# that is black on one page while another is bright at the same film moment is that page's
+# trouble: it is written to data/playback.log with what the page knew, and the page is told to
+# repair itself (`repair`). Two dark samples in a row, both matched, so that a fade-out next to a
+# scene cut does not count.
+LUMA_DARK = 10  # below: black
+LUMA_BRIGHT = 30  # above: someone else clearly sees a picture
+LUMA_MATCH_S = 1.5  # film times this close count as the same moment (pages sample 3 s apart)
+LUMA_KEEP_S = 10.0  # samples older than this (server clock) are forgotten
+LUMA_DARK_SAMPLES = 2
+LUMA_BURST = 4
+LUMA_REFILL_S = 2.0
+REPAIR_INTERVAL_S = 30.0  # at most one repair per viewer in this time
+_STREAM_ID = re.compile(r"^[a-f0-9]{12}$")
+_LUMA_INTS = (("ready", 4), ("frames", 1e9), ("dropped", 1e9), ("stateMs", 1e9), ("reconnects", 1e6))
+
+
+def luma_sample(msg: dict) -> Optional[dict]:
+    """A brightness sample, checked: film time and brightness, and whatever of the player's
+    numbers are valid (each one dropped on its own if not)."""
+    t, luma = number(msg.get("t"), 0, 1e6), number(msg.get("luma"), 0, 255)
+    if t is None or luma is None:
+        return None
+    out: dict = {"t": round(t, 2), "luma": round(luma, 1)}
+    for field, high in _LUMA_INTS:
+        value = number(msg.get(field), 0, high)
+        if value is not None:
+            out[field] = int(value)
+    ahead = number(msg.get("ahead"), 0, 3600)
+    if ahead is not None:
+        out["ahead"] = round(ahead, 1)
+    for field in ("paused", "streamOk"):
+        if isinstance(msg.get(field), bool):
+            out[field] = msg[field]
+    stream = msg.get("stream")
+    if isinstance(stream, str) and _STREAM_ID.match(stream):
+        out["stream"] = stream
+    return out
+
+
+class LumaTrack:
+    """One viewer's latest samples (server time, film time, brightness) and player numbers."""
+
+    def __init__(self) -> None:
+        self.samples: deque[tuple[float, float, float]] = deque(maxlen=4)
+        self.bucket = Bucket(LUMA_BURST, LUMA_REFILL_S)
+        self.last_repair = -math.inf
+        self.diag: dict = {}
+
+
+def black_viewers(samples: dict[str, list[tuple[float, float, float]]], now: float) -> list[str]:
+    """Who sees a black picture while someone else sees the same film moment bright."""
+    fresh = {cid: [s for s in items if now - s[0] <= LUMA_KEEP_S] for cid, items in samples.items()}
+    out = []
+    for cid, items in fresh.items():
+        last = items[-LUMA_DARK_SAMPLES:]
+        if len(last) < LUMA_DARK_SAMPLES or any(s[2] >= LUMA_DARK for s in last):
+            continue
+        bright = [s[1] for other, theirs in fresh.items() if other != cid for s in theirs if s[2] > LUMA_BRIGHT]
+        if all(any(abs(t - s[1]) <= LUMA_MATCH_S for t in bright) for s in last):
+            out.append(cid)
+    return out
+
+
+def describe_luma(diag: dict, server_stream: Optional[str]) -> str:
+    """The player's numbers in one short line for the playback log."""
+    parts = [f"luma {diag.get('luma', '?')}"]
+    if "ready" in diag:
+        parts.append(f"readyState {diag['ready']}")
+    if "ahead" in diag:
+        parts.append(f"ahead {diag['ahead']} s")
+    if "paused" in diag:
+        parts.append("paused" if diag["paused"] else "playing")
+    if "frames" in diag:
+        parts.append(f"frames {diag['frames']} (dropped {diag.get('dropped', '?')})")
+    stream = diag.get("stream")
+    if stream is None:
+        parts.append("no stream")
+    else:
+        parts.append("stream current" if stream == server_stream else f"stream old {stream}")
+    if diag.get("streamOk") is False:
+        parts.append("player behind its media")
+    if "stateMs" in diag:
+        parts.append(f"last state {diag['stateMs'] / 1000:.1f} s ago")
+    if "reconnects" in diag:
+        parts.append(f"reconnects {diag['reconnects']}")
+    return ", ".join(parts)

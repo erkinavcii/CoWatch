@@ -270,6 +270,7 @@
       case 'welcome':
         // A new connection means a new id: connections to the others were made for the old one.
         closeAllPeers();
+        lumaWatch.welcomes += 1; lumaWatch.stateAt = performance.now();
         S.clientId = msg.clientId;
         S.iceServers = Array.isArray(msg.iceServers) ? msg.iceServers : [];
         S.clock.samples = [];
@@ -293,7 +294,9 @@
         break;
       case 'pong': onPong(msg); break;
       case 'kicked': onKicked(); break;
+      case 'repair': onRepair(); break;
       case 'state': {
+        lumaWatch.stateAt = performance.now();
         const wasRunning = roomRunning();
         S.room = msg;
         // What the server holds is the truth: after 20 s it lets the room go on without me (and
@@ -528,7 +531,8 @@
   function reportBuffering (value) {
     if (value) noteStall();
     S.bufferingSent = value;
-    send(value ? { type: 'buffering', value, position: filmTime() } : { type: 'buffering', value });
+    // The film time and what is in hand go to the playback log; the server pauses the room at the position.
+    send({ type: 'buffering', value, position: filmTime(), ahead: bufferedAhead() });
   }
   // ---- a picture that stops while the film goes on
   // A friend's screen went black with the time running and came back after a seek: the browser's
@@ -585,6 +589,80 @@
   function report (kind, detail) {
     console.warn('[cowatch]', kind, detail);
     send({ type: 'report', kind, detail, ua: navigator.userAgent, position: S.media ? filmTime() : undefined });
+  }
+
+  // ---- a black picture on this page only
+  // Every LUMA_EVERY_MS while the room runs and the film is shown, the picture is copied into a
+  // 32×18 canvas and its mean brightness goes to the server with the film time and the player's
+  // numbers (`luma`). The server compares the pages: black here while another page is bright at
+  // the same film moment means trouble on this page (a dark scene is dark for everyone), and it
+  // sends `repair`: first a seek to where the room is, again within a minute a fresh stream,
+  // after that only a report. A video with no picture at all draws nothing and counts as black.
+  // A canvas the browser will not read (tainted) sends nothing.
+  const LUMA_EVERY_MS = 3000;
+  const lumaWatch = { canvas: null, ctx: null, stateAt: 0, welcomes: 0, calmUntil: 0, lastRepair: 0, step: 0 };
+  function pictureLuma () {
+    if (!lumaWatch.ctx) {
+      lumaWatch.canvas = document.createElement('canvas');
+      lumaWatch.canvas.width = 32; lumaWatch.canvas.height = 18;
+      lumaWatch.ctx = lumaWatch.canvas.getContext('2d', { willReadFrequently: true });
+    }
+    const ctx = lumaWatch.ctx;
+    try {
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, 32, 18);
+      ctx.drawImage(video, 0, 0, 32, 18);
+      const data = ctx.getImageData(0, 0, 32, 18).data;
+      let sum = 0;
+      for (let i = 0; i < data.length; i += 4) sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+      return sum / (data.length / 4);
+    } catch { return null; }
+  }
+  function sampleLuma () {
+    const now = performance.now();
+    const showing = S.joined && S.media && S.media.width && roomRunning() && !video.seeking &&
+      (!!PIP.win || !document.hidden) && !el.stage.classList.contains('sharing');
+    if (!showing || now < lumaWatch.calmUntil) return;
+    const luma = pictureLuma();
+    if (luma === null) return;
+    const quality = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+    send({
+      type: 'luma',
+      t: video.readyState >= 1 ? filmTime() : expectedPosition(),
+      luma: Math.round(luma * 10) / 10,
+      ready: video.readyState,
+      ahead: Math.round(bufferedAhead() * 10) / 10,
+      paused: video.paused,
+      frames: quality ? quality.totalVideoFrames : undefined,
+      dropped: quality ? quality.droppedVideoFrames : undefined,
+      stream: S.streamId || undefined,
+      streamOk: S.streamId === S.media.streamId,
+      stateMs: lumaWatch.stateAt ? Math.round(now - lumaWatch.stateAt) : undefined,
+      reconnects: Math.max(0, lumaWatch.welcomes - 1),
+    });
+  }
+  setInterval(sampleLuma, LUMA_EVERY_MS);
+  // A new stream (destroyPlayer empties the video) has no picture until its first part arrives.
+  video.addEventListener('emptied', () => { lumaWatch.calmUntil = Math.max(lumaWatch.calmUntil, performance.now() + 10000); });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) lumaWatch.calmUntil = Math.max(lumaWatch.calmUntil, performance.now() + 5000);
+  });
+  function onRepair () {
+    if (!S.media) return;
+    const now = performance.now();
+    if (now - lumaWatch.lastRepair > 60000) lumaWatch.step = 0; // the last repair held: start again gently
+    lumaWatch.lastRepair = now;
+    lumaWatch.step += 1;
+    lumaWatch.calmUntil = now + 4000; // give the fix a moment before the next sample
+    if (lumaWatch.step === 1) {
+      report('repaired', 'black picture while others see the film; seeking');
+      seekFilm(expectedPosition());
+    } else if (lumaWatch.step === 2) {
+      report('repaired', 'black picture again; loading the stream afresh');
+      loadStream(S.media);
+    } else {
+      report('repaired', 'black picture again; nothing more to try');
+    }
   }
 
   video.addEventListener('waiting', () => {
@@ -4134,6 +4212,7 @@
     room: S.room, media: S.media, clockOffset: S.clock.offset, rate: video.playbackRate,
     readyState: video.readyState, primary: S.primary, secondary: S.secondary, align: prefs.align,
     frameWatch: { fixes: frameWatch.fixes, reloads: frameWatch.reloads },
+    lumaWatch: { step: lumaWatch.step, luma: pictureLuma() },
     resumeAhead: resumeAhead(), bufferingSent: S.bufferingSent,
     screen: {
       owner: screen.owner, pending: screen.pending, mine: !!screen.stream,

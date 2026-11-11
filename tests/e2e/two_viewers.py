@@ -265,6 +265,29 @@ def run(headed: bool) -> None:
                   abs(ta - tb) < 0.5 and "Masha [frames_stalled]" in logged
                   and a.evaluate(f"() => {DBG}.frameWatch.fixes") == 0 and a.evaluate(f"() => {DBG}.room.playing"),
                   f"{ta:.2f} s vs {tb:.2f} s; {logged.strip()[:160]}")
+
+            # ---- a picture black on one page only (frames or not): Masha's copies of the video
+            # come out black, Erkin's do not. The server compares the two at the same film moment,
+            # logs it with Masha's player numbers and tells her page to repair (seek to the room).
+            b.evaluate("""() => { const proto = CanvasRenderingContext2D.prototype; const real = proto.drawImage;
+              window.__cwDrawImage = real;
+              proto.drawImage = function (src, ...rest) {
+                if (!(src instanceof HTMLVideoElement)) return real.call(this, src, ...rest);
+                this.fillStyle = '#000'; this.fillRect(0, 0, this.canvas.width, this.canvas.height);
+              }; }""")
+            b.wait_for_function(f"() => {DBG}.lumaWatch.step === 1", timeout=25000)
+            b.evaluate("() => { CanvasRenderingContext2D.prototype.drawImage = window.__cwDrawImage; }")
+            time.sleep(1.5)
+            ta, tb = film_time(a), film_time(b)
+            logged = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+            black_line = next((line for line in logged.splitlines() if "[black_picture]" in line), "")
+            erkin_luma = a.evaluate(f"() => {DBG}.lumaWatch")
+            check("a black picture on one page only: the host's log says so with its player numbers, it seeks by itself",
+                  "Masha [black_picture]" in black_line and "readyState 4" in black_line and "stream current" in black_line
+                  and "Masha [repaired]" in logged and "Erkin [black_picture]" not in logged
+                  and erkin_luma["step"] == 0 and erkin_luma["luma"] > 30
+                  and abs(ta - tb) < 0.5 and a.evaluate(f"() => {DBG}.room.playing"),
+                  f"{ta:.2f} s vs {tb:.2f} s; Erkin {erkin_luma}; {black_line[:200]}")
             blur(b)
             b.keyboard.press("Space")
             a.wait_for_function(f"() => !{DBG}.room.playing")
