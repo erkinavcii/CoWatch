@@ -29,7 +29,8 @@
     colorBtn: $('#colorBtn'), palette: $('#palette'), clearBtn: $('#clearBtn'), sfxBtn: $('#sfxBtn'),
     eraserBtn: $('#eraserBtn'), eraserModes: $('#eraserModes'), camBig: $('#camBig'), camBigVideo: $('#camBig video'), camBigName: $('#camBigName'),
     micBtn: $('#micBtn'), micMenuBtn: $('#micMenuBtn'), micMenu: $('#micMenu'), micDevice: $('#micDevice'),
-    duckCheck: $('#duckCheck'), peerPop: $('#peerPop'), peerPopName: $('#peerPopName'), peerVol: $('#peerVol'),
+    duckCheck: $('#duckCheck'), peerPop: $('#peerPop'), peerNet: $('#peerNet'),
+    speedTestBtn: $('#speedTestBtn'), speedTestOut: $('#speedTestOut'), speedTestBox: $('#speedTestBox'), peerPopName: $('#peerPopName'), peerVol: $('#peerVol'),
     voices: $('#voices'), camBtn: $('#camBtn'), camMenuBtn: $('#camMenuBtn'), camMenu: $('#camMenu'),
     camDevice: $('#camDevice'), selfCheck: $('#selfCheck'), camsCheck: $('#camsCheck'), cams: $('#cams'),
     preview: $('#preview'), previewVideo: $('#previewVideo'), previewMeter: $('#previewMeter'),
@@ -309,7 +310,8 @@
         break;
       }
       case 'members':
-        S.members = msg.members || []; onMembers(); renderMembers(); renderCenter(); renderScreen();
+        S.members = msg.members || []; for (const m of S.members) if (m.net) netSpeed.set(m.id, m.net);
+        onMembers(); renderMembers(); renderCenter(); renderScreen();
         if (!el.joinOverlay.hidden) renderLook();
         break;
       case 'screen': onScreen(msg); break;
@@ -327,6 +329,8 @@
         break;
       case 'rtc': onRtc(msg); break;
       case 'chat': onChat(msg); break;
+      case 'netstat': onNetstat(msg); break;
+      case 'net_hint': onNetHint(msg); break;
       default: break;
     }
   }
@@ -451,6 +455,7 @@
           setTimeout(() => { if (S.hls === hls && S.media) loadStream(S.media); }, 2000);
         }
       });
+      hls.on(Hls.Events.FRAG_LOADED, (_event, data) => noteFragment(data));
       hls.on(Hls.Events.INIT_PTS_FOUND, (_event, data) => {
         console.debug('[cowatch] initPTS', data.initPTS / data.timescale, 'streamStart', media.streamStart);
       });
@@ -663,6 +668,98 @@
     } else {
       report('repaired', 'black picture again; nothing more to try');
     }
+  }
+
+  // ---- connection panel: how fast this viewer's film segments arrive
+  // From hls.js's statistics for each segment: bytes over the time from the first byte to the
+  // last (the wait before the first byte is mostly the server making a converted segment). Over
+  // the last NET.window segments, sent every 10 s; the people chips show it next to the film's
+  // bitrate, and the host hears about a viewer who keeps stalling (server/netpanel.py).
+  const NET = { window: 8, samples: [], mbps: null, every: 10000, slowBelow: 1.2 };
+  const netSpeed = new Map(); // client id -> {mbps, ahead}, from the server
+  function noteFragment (data) {
+    const st = (data.frag && data.frag.stats) || data.stats;
+    if (!st || !st.loaded || !st.loading) return;
+    const ms = st.loading.end - (st.loading.first || st.loading.start);
+    if (!(ms >= 0)) return;
+    NET.samples.push({ bytes: st.loaded, ms: Math.max(ms, 1) });
+    while (NET.samples.length > NET.window) NET.samples.shift();
+    const bytes = NET.samples.reduce((a, x) => a + x.bytes, 0);
+    const time = NET.samples.reduce((a, x) => a + x.ms, 0);
+    NET.mbps = Math.min(1000, (bytes * 8) / time / 1000);
+  }
+  setInterval(() => {
+    if (S.joined && S.media && NET.mbps != null) {
+      send({ type: 'netstat', mbps: Math.round(NET.mbps * 100) / 100, bufferedAhead: Math.round(bufferedAhead() * 10) / 10 });
+    }
+  }, NET.every);
+  function onNetstat (msg) {
+    netSpeed.set(msg.id, { mbps: msg.mbps, ahead: msg.ahead });
+    renderNet(msg.id);
+  }
+  const fmtMbps = (mbps) => (mbps >= 100 ? String(Math.round(mbps)) : mbps.toFixed(1).replace('.', t('decimal_sep')));
+  const filmMbps = () => (S.media && S.media.streamKbps ? S.media.streamKbps / 1000 : null);
+  // "3,1 Mbps · film 4,7 Mbps", and whether that link is too slow for this film.
+  function netInfo (id) {
+    const net = netSpeed.get(id) || (memberById(id) || {}).net;
+    if (!net || typeof net.mbps !== 'number') return null;
+    const film = filmMbps();
+    const text = film ? t('net_speed_film', { mbps: fmtMbps(net.mbps), film: fmtMbps(film) }) : t('net_speed', { mbps: fmtMbps(net.mbps) });
+    return { text, slow: !!film && net.mbps < film * NET.slowBelow };
+  }
+  function renderNet (id) {
+    const chip = el.members.querySelector(`[data-id="${id}"]`);
+    if (chip) {
+      const info = netInfo(id);
+      chip.classList.toggle('net-slow', !!(info && info.slow));
+      chip.title = [...(chip.dataset.titles ? chip.dataset.titles.split('\n') : []), info ? info.text : ''].filter(Boolean).join(' · ');
+    }
+    if (popFor === id && !el.peerPop.hidden) renderPeerNet(id);
+  }
+  function renderPeerNet (id) {
+    const info = netInfo(id);
+    el.peerNet.hidden = !info;
+    el.peerNet.textContent = info ? info.text : '';
+    el.peerNet.classList.toggle('slow', !!(info && info.slow));
+  }
+  // The host's notice: someone keeps waiting, how fast their link is, and what can be done.
+  function onNetHint (msg) {
+    const film = msg.filmKbps ? fmtMbps(msg.filmKbps / 1000) : null;
+    const params = { name: msg.name, n: msg.stalls, minutes: msg.minutes, mbps: msg.mbps != null ? fmtMbps(msg.mbps) : '', film: film || '' };
+    const key = msg.mbps != null && film ? 'net_hint' : film ? 'net_hint_film' : 'net_hint_plain';
+    const actions = [];
+    if (S.isHost) {
+      actions.push({ label: t('net_hint_quality'), run: () => openSettingsAt('quality') });
+      if (msg.funnel) actions.push({ label: t('net_hint_serve'), run: () => openSettingsAt('connection', t('net_hint_serve_note')) });
+    }
+    actionToast(t(key, params), actions);
+  }
+  function actionToast (text, actions, ms = 30000) {
+    const node = toast(text, 'info', ms);
+    node.classList.add('with-actions');
+    if (!actions.length) return node;
+    const row = document.createElement('div');
+    row.className = 'toast-actions';
+    for (const a of actions) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'ghost'; b.textContent = a.label;
+      b.addEventListener('click', () => { node.remove(); a.run(); });
+      row.appendChild(b);
+    }
+    node.appendChild(row);
+    return node;
+  }
+  async function openSettingsAt (key, note) {
+    await openSettings();
+    if (el.settingsOverlay.hidden) return;
+    const field = el.settingsForm.querySelector(`[data-key="${key}"]`);
+    if (!field) return;
+    field.scrollIntoView({ block: 'center' });
+    field.classList.add('pointed');
+    setTimeout(() => field.classList.remove('pointed'), 4000);
+    if (key === 'quality' && radio('quality') !== 'manual') { setRadio('quality', 'manual'); renderQuality(); }
+    if (key === 'quality') el.qualityMbps.focus();
+    if (note) toast(note, 'info', 9000);
   }
 
   video.addEventListener('waiting', () => {
@@ -2170,6 +2267,7 @@
     el.peerStopShare.hidden = !(amTrusted() && screen.owner === m.id);
     el.peerKick.hidden = !(S.isHost && !m.host);
     el.peerVol.hidden = !m.joined; // still on the join screen: nothing to hear yet
+    renderPeerNet(m.id);
     const r = anchor.getBoundingClientRect();
     const beside = anchor.classList.contains('cam'); // a tile: to its left; a name: below it
     el.peerPop.style.top = `${beside ? r.top : r.bottom + 6}px`;
@@ -2793,6 +2891,7 @@
   async function loadShare () {
     try { SH.data = await api('/api/share'); } catch { return; }
     renderShare();
+    if (!el.settingsOverlay.hidden) renderSpeedTest();
   }
   function startShare () {
     if (SH.timer) return;
@@ -2972,9 +3071,35 @@
     renderDirs();
     renderQuality();
     renderAiKey();
+    renderSpeedTest();
     el.settingsOverlay.hidden = false;
   }
   function closeSettings () { el.settingsOverlay.hidden = true; }
+
+  // ---- the Funnel speed test: the server downloads from its own public link, through the relay
+  const SPEED_HEADROOM = 1.2; // a film needs a little more than its bitrate to stay ahead
+  function renderSpeedTest () {
+    const d = SH.data || {};
+    const funnel = d.connection === 'funnel' && /^https:/.test(d.friendLink || '');
+    el.speedTestBtn.hidden = !funnel;
+    if (!el.speedTestBtn.classList.contains('busy')) {
+      el.speedTestOut.textContent = t(funnel ? 'speedtest_hint' : 'speedtest_needs_funnel');
+      el.speedTestOut.classList.remove('slow');
+    }
+  }
+  el.speedTestBtn.addEventListener('click', async () => {
+    el.speedTestBtn.disabled = true; el.speedTestBtn.classList.add('busy');
+    el.speedTestOut.textContent = t('speedtest_running');
+    try {
+      const r = await api('/api/speedtest/run', { method: 'POST' });
+      const film = (n) => fmtMbps(r.mbps / n / SPEED_HEADROOM);
+      el.speedTestOut.textContent = t('speedtest_result', { mbps: fmtMbps(r.mbps), one: film(1), two: film(2) }) +
+        (r.relay ? '' : ` ${t('speedtest_direct')}`);
+    } catch (err) {
+      el.speedTestOut.textContent = errorText(err);
+    }
+    el.speedTestBtn.disabled = false; el.speedTestBtn.classList.remove('busy');
+  });
 
   function renderQuality () {
     el.qualityMbps.closest('.field').hidden = radio('quality') !== 'manual';
@@ -3969,8 +4094,9 @@
         chip.insertAdjacentHTML('beforeend', MIC_OFF_ICON);
         titles.push(t('mic_muted'));
       }
-      chip.title = titles.join(' · ');
+      chip.dataset.titles = titles.join('\n');
       el.members.appendChild(chip);
+      renderNet(m.id);
     }
   }
 

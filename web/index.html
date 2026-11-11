@@ -388,6 +388,10 @@
         <label class="choice"><input type="radio" name="connection" value="http">
           <span><b data-i18n="conn_http"></b><small data-i18n="conn_http_hint"></small></span></label>
       </fieldset>
+      <div class="speed-test" id="speedTestBox">
+        <button type="button" id="speedTestBtn" data-i18n="speedtest_btn" hidden></button>
+        <p class="hint" id="speedTestOut"></p>
+      </div>
 
       <fieldset data-key="quality">
         <legend data-i18n="set_quality"></legend>
@@ -501,6 +505,7 @@
     <button type="button" id="peerGrant" class="ghost" hidden></button>
     <button type="button" id="peerStopShare" class="ghost" data-i18n="screen_stop_theirs" hidden></button>
     <p class="hint" id="peerGrantHint" data-i18n="grant_hint" hidden></p>
+    <p class="hint net" id="peerNet" hidden></p>
     <button type="button" id="peerKick" class="ghost danger" data-i18n="peer_kick" hidden></button>
   </div>
   <div id="voices" hidden></div>

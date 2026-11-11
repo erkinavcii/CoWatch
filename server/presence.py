@@ -248,3 +248,29 @@ def describe_luma(diag: dict, server_stream: Optional[str]) -> str:
     if "reconnects" in diag:
         parts.append(f"reconnects {diag['reconnects']}")
     return ", ".join(parts)
+
+
+# ---- connection panel --------------------------------------------------------------
+# Each player measures how fast its film segments arrive (hls.js fragment statistics) and
+# says so every ten seconds (`netstat`): next to the film's bitrate, it tells who is on a link
+# that cannot keep up. The host also hears when someone keeps stalling (main.Controller.note_stall).
+NETSTAT_BURST = 3
+NETSTAT_REFILL_S = 5.0
+NETSTAT_MAX_MBPS = 1000.0  # a page on this computer measures a lot; more says nothing more
+NETSTAT_MAX_AHEAD_S = 600.0
+
+
+def _number(value, top: float) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        return None
+    return min(float(value), top)
+
+
+def netstat_values(msg: dict) -> Optional[dict]:
+    """A player's measured download speed (Mbps) and the film it has in hand (s), checked.
+    None when the speed is missing: the buffer alone says nothing about the link."""
+    mbps = _number(msg.get("mbps"), NETSTAT_MAX_MBPS)
+    if mbps is None:
+        return None
+    ahead = _number(msg.get("bufferedAhead"), NETSTAT_MAX_AHEAD_S)
+    return {"mbps": round(mbps, 2), "ahead": round(ahead, 1) if ahead is not None else None}

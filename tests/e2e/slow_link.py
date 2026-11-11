@@ -8,6 +8,9 @@ the browser's own network emulation (CDP `Network.emulateNetworkConditions`).
   after 20 s of waiting; in the 60 s after that the slow viewer must not stop it again.
 - Every half second each page's picture is drawn into a 32 x 18 canvas: while the room runs,
   no picture may be black.
+- Connection panel: the slow viewer's chip on the host's page shows a measured speed below the
+  film's (red), and after its third stall in five minutes the host gets one notice with a
+  "lower the quality" button.
 
 Takes about six minutes; the film is made once (about a minute) and kept in the temp folder.
 
@@ -54,6 +57,29 @@ SAMPLE = f"""(probe) => {{
 }}"""
 
 
+# The host's notice (an action toast) and the chips' measured speeds.
+HINT = """() => {
+  const n = document.querySelector('.toast.with-actions');
+  return n ? n.textContent + ' | ' + [...n.querySelectorAll('button')].map(b => b.textContent).join(', ') : null;
+}"""
+CHIP = """(id) => {
+  const c = document.querySelector(`#members [data-id="${id}"]`);
+  return c ? {title: c.title, slow: c.classList.contains('net-slow')} : null;
+}"""
+
+
+def check_panel(case: str, watch: "Watch", pages: dict, slow_id: str) -> None:
+    chip = pages["host"].evaluate(CHIP, slow_id)
+    print(f"{case}: the slow viewer's chip: {chip}; notices: {watch.hints}", flush=True)
+    check(f"{case}: the host sees the slow viewer's measured speed below the film's",
+          bool(chip) and "film" in chip["title"] and chip["slow"], str(chip))
+    stalls = sum(1 for s in watch.stops if slow_id in s["who"])
+    if stalls >= 3:
+        check(f"{case}: after repeated stalls the host gets one notice with a button",
+              len(watch.hints) == 1 and "Mbps" in watch.hints[0] and "Kaliteyi düşür" in watch.hints[0],
+              f"{stalls} stalls; {watch.hints}")
+
+
 def make_film() -> Path:
     """~5 Mbps 1080p H.264 with 4 s keyframes (the server copies it, 4 s segments). Kept between runs."""
     path = Path(tempfile.gettempdir()) / f"cowatch-e2e-slow-{FILM_S}s-v1.mkv"
@@ -93,6 +119,7 @@ class Watch:
         self.black: list[str] = []
         self.samples = 0
         self.last: dict = {}
+        self.hints: list[str] = []  # the host's notices about someone who keeps waiting
 
     def now(self) -> float:
         return time.monotonic() - self.start
@@ -101,6 +128,9 @@ class Watch:
         samples = {name: page.evaluate(SAMPLE, True) for name, page in self.pages.items()}
         self.last = samples
         self.samples += 1
+        hint = self.pages["host"].evaluate(HINT)
+        if hint and hint not in self.hints:
+            self.hints.append(hint)
         room = samples["host"]["room"]
         waiting = room.get("waiting") or []
         t = self.now()
@@ -162,6 +192,7 @@ def open_room(browser, base: str, film: Path, viewers: list[tuple[str, int | Non
 
 def case_a(browser, base: str, film: Path, errors: list[str]) -> None:
     pages = open_room(browser, base, film, [("host", None), ("slow", 3000)], errors)
+    slow_id = pages["slow"].evaluate(f"() => {DBG}.clientId")
     watch = Watch(pages)
     watch.run_for(120)
     played = watch.last["host"]["filmTime"]
@@ -173,6 +204,7 @@ def case_a(browser, base: str, film: Path, errors: list[str]) -> None:
     check("A: the film still moves on", played > 40, f"{played:.0f} s")
     check("A: no black picture while the room runs", not watch.black and watch.samples > 200,
           "; ".join(watch.black[:5]) or f"{watch.samples} samples")
+    check_panel("A", watch, pages, slow_id)
     for page in pages.values():
         page.context.close()
 
@@ -199,6 +231,7 @@ def case_b(browser, base: str, film: Path, errors: list[str]) -> None:
     check("B: the others played on", watch.last["host"]["filmTime"] - watch.last["third"]["filmTime"] < 2
           and watch.last["host"]["room"]["playing"], f"slow is {behind:.0f} s behind")
     check("B: no black picture while the room runs", not watch.black, "; ".join(watch.black[:5]))
+    check_panel("B", watch, pages, slow_id)
     for page in pages.values():
         page.context.close()
 

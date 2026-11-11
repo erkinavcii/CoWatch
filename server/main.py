@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import httpx
 from pydantic import BaseModel, Field
@@ -32,13 +32,13 @@ from starlette.websockets import WebSocketState
 
 from .addons import AddonError, AddonStore, episode_label, magnet, subtitle_key, subtitle_lang
 from .config import AI_PRESETS, CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
-from . import filepicker, library, stremio, tailscale, translate
+from . import filepicker, library, netpanel, stremio, tailscale, translate
 from .stremio import StremioError
 from .media import (MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, extract_subtitles,
                     prepare_converting, probe)
 from .oshash import CHUNK, hash_file, hash_from_chunks
-from .presence import (ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, erase_message, pick_color, playback_report, point,
-                       stroke_message)
+from .presence import (ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, erase_message, netstat_values, pick_color,
+                       playback_report, point, stroke_message)
 from .presence import REPAIR_INTERVAL_S, LumaTrack, black_viewers, describe_luma, luma_sample, number
 from .room import Client, Room, now_ms
 from .signaling import ice_servers, rtc_data
@@ -129,6 +129,8 @@ class Controller:
         self.embedded_tried: set[str] = set()  # films whose own subtitles were read (or tried) this run
         self.briefs: dict[tuple[str, str], str] = {}  # (film, source subtitle) -> its brief, for the next language
         self.luma: dict[str, LumaTrack] = {}  # client id -> brightness samples, for the black picture check
+        self.net_noticed: dict[str, float] = {}  # viewer -> when the host last heard they keep stalling
+        self.last_jump = -math.inf  # monotonic: the last seek, after which everyone loads for a moment
 
     # ---- messages -------------------------------------------------------------
     @property
@@ -136,7 +138,31 @@ class Controller:
         return self.session is not None and self.session.stream is not None
 
     def media_public(self) -> Optional[dict]:
-        return self.session.public() if self.ready else None
+        if not self.ready:
+            return None
+        public = self.session.public()
+        return {**public, "streamKbps": netpanel.stream_kbps(public, cfg.audio_kbps)}
+
+    # ---- connection panel (netpanel.py) ---------------------------------------------------
+    def on_netstat(self, client: Client, msg: dict) -> None:
+        values = netstat_values(msg)
+        if values is None or not client.netstat_bucket.take(time.monotonic()):
+            return
+        client.net = values
+        self._relay(None, {"type": "netstat", "id": client.id, **values})
+
+    def note_stall(self, client: Client) -> None:
+        """A viewer reported a stall while the film ran: the third in five minutes tells the
+        host and co-hosts why and what to do (netpanel.stall_notice)."""
+        now = time.monotonic()
+        if not self.room.playing or self.room.loading or now - self.last_jump < netpanel.STALL_CALM_AFTER_SEEK_S:
+            return
+        public = self.media_public()
+        notice = netpanel.stall_notice(client, now, self.net_noticed, public and public["streamKbps"],
+                                       cfg.connection == "funnel")
+        if notice is not None:
+            for target in self.room.approvers(exclude=client):
+                self._relay_to(target, notice)
 
     def tracks(self) -> list[dict]:
         if not self.session:
@@ -419,8 +445,12 @@ class Controller:
             client.color = pick_color(msg.get("color"), taken)
             await self.room.broadcast(self.room.members_msg())
             await self.check_remote()
+        elif kind == "netstat":
+            self.on_netstat(client, msg)
         elif kind == "buffering":
             value = bool(msg.get("value"))
+            if value:
+                self.note_stall(client)
             since = client.buffering_since
             if self.room.set_buffering(client, value):
                 self.log_buffering(client, msg, since)
@@ -472,6 +502,7 @@ class Controller:
         if session is None:
             return
         target = max(0.0, min(target, max(0.0, session.duration - 0.5)))
+        self.last_jump = time.monotonic()
         self.room.seek(target)
         if self.restart_task and not self.restart_task.done():
             self.restart_target = target  # picked up when the current restart finishes
@@ -1448,6 +1479,38 @@ async def api_share(request: Request):
         "tailscale": await asyncio.to_thread(tailscale.status) if cfg.connection != "http" else None,
         "canRestart": launcher is not None,
     }
+
+
+# ---- the Funnel speed test (netpanel.py) ---------------------------------------------------------
+@app.get("/api/speedtest", include_in_schema=False)
+async def api_speedtest(bytes: int = 0):
+    """Random bytes for the speed test, which the server downloads from its own public link.
+    Behind the room key like all of /api; 32 MB at most, one download at a time."""
+    size = netpanel.speedtest_bytes(bytes)
+    if not netpanel.speedtest.take_serving():
+        raise HTTPException(429, detail="speedtest_busy")
+    return StreamingResponse(netpanel.random_body(size), media_type="application/octet-stream",
+                             headers={"Content-Length": str(size), "Cache-Control": "no-store"})
+
+
+@app.post("/api/speedtest/run")
+async def api_speedtest_run(request: Request):
+    """The host measures the friends' link: only with Funnel, where it goes through Tailscale's
+    relay as it does for every friend (with Serve each friend has a path of their own)."""
+    require_local(request)
+    link = launcher.friend_link if launcher is not None else None
+    if cfg.connection != "funnel" or not link or not link.startswith("https://"):
+        raise HTTPException(409, detail="speedtest_no_funnel")
+    if netpanel.speedtest.measuring:
+        raise HTTPException(429, detail="speedtest_busy")
+    netpanel.speedtest.measuring = True
+    try:
+        return await netpanel.measure(link, cfg.access_key, netpanel.SPEEDTEST_DEFAULT_BYTES)
+    except httpx.HTTPError as exc:
+        log.warning("speed test failed: %s", exc)
+        raise HTTPException(502, detail="speedtest_failed") from None
+    finally:
+        netpanel.speedtest.measuring = False
 
 
 def _torrents_in_use() -> list[str]:

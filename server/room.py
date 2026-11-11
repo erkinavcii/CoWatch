@@ -12,9 +12,15 @@ from typing import Callable, Optional
 
 from starlette.websockets import WebSocket
 
-from .presence import CHAT_HISTORY, REPORT_BURST, REPORT_REFILL_S, Bucket
+from .presence import CHAT_HISTORY, NETSTAT_BURST, NETSTAT_REFILL_S, REPORT_BURST, REPORT_REFILL_S, Bucket
 
 log = logging.getLogger("cowatch.room")
+
+# A viewer who stalls STALL_COUNT times within STALL_WINDOW_S: the host hears why, once per
+# STALL_NOTICE_EVERY_S for that viewer (main.Controller.note_stall).
+STALL_COUNT = 3
+STALL_WINDOW_S = 300.0
+STALL_NOTICE_EVERY_S = 600.0
 
 BUFFER_TIMEOUT_S = 20.0  # a viewer waited for longer no longer holds the room (`main.watchdog_loop`)
 # ...and its stalls do not stop the room for this long after that: it used to stall again a few
@@ -43,6 +49,11 @@ class Client:
         self.last_poke = 0.0
         self.chat_bucket = Bucket()
         self.report_bucket = Bucket(REPORT_BURST, REPORT_REFILL_S)
+        # Connection panel: the speed this viewer's player measured ({mbps, ahead}), and when
+        # it stalled lately (monotonic), for the host's notice (main.Controller.note_stall).
+        self.net: Optional[dict] = None
+        self.netstat_bucket = Bucket(NETSTAT_BURST, NETSTAT_REFILL_S)
+        self.stalls: deque[float] = deque(maxlen=STALL_COUNT)
         self.buffering_since: Optional[float] = None
         self.buffering_ignored_until = 0.0  # monotonic; see BUFFER_GRACE_S
         self.alive = True
@@ -237,7 +248,7 @@ class Room:
             "members": [
                 {"id": c.id, "name": c.name, "color": c.color, "buffering": c.buffering,
                  "joined": c.joined, "mic": c.mic, "cam": c.cam, "animal": c.animal,
-                 "host": c.host, "cohost": self.is_cohost(c.viewer)}
+                 "host": c.host, "cohost": self.is_cohost(c.viewer), "net": c.net}
                 for c in self.clients.values()
             ],
         }
