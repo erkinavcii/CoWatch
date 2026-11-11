@@ -1435,7 +1435,7 @@
     const peer = {
       id, pc, audioEl, polite: S.clientId > id, makingOffer: false, ignoreOffer: false,
       audioTx: null, videoTx: null, videoStream: null, screenTx: null, screenAudioTx: null, screenStream: null,
-      queue: Promise.resolve(),
+      queue: Promise.resolve(), limiting: Promise.resolve(), // see limitSenders
       badSince: performance.now(), restarted: false, // see peerWatch
     };
     peers.set(id, peer);
@@ -1466,6 +1466,7 @@
       audioEl.srcObject = new MediaStream([track]);
       audioEl.play().catch(() => {});
     };
+    pc.onsignalingstatechange = () => { if (pc.signalingState === 'stable') limitSenders(peer); };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'connected') limitSenders(peer);
       else if (pc.connectionState === 'failed' && !peer.restarted) { peer.restarted = true; pc.restartIce(); }
@@ -1543,12 +1544,22 @@
     }
     limitSenders(peer);
   }
-  // Encodings exist only once the connection is negotiated; until then this does nothing and
-  // runs again when the connection comes up.
-  async function limitSenders (peer) {
+  // Chrome hands out encodings before the first negotiation, but with RTCP parameters (cname,
+  // reducedSize) that the negotiation then fills in; a setParameters made meanwhile is refused
+  // ("modified RTCP parameters"). So a sender is limited only once its transceiver has been
+  // negotiated and no offer is in flight; onsignalingstatechange runs this again at 'stable'.
+  // Runs for one peer go one after another, and each sender's parameters are read right before
+  // they are set.
+  function limitSenders (peer) {
+    peer.limiting = peer.limiting.then(() => applyLimits(peer));
+    return peer.limiting;
+  }
+  async function applyLimits (peer) {
     for (const [tx, limits, degradation] of [[peer.audioTx, SENDER_LIMITS.audio], [peer.videoTx, SENDER_LIMITS.video],
       [peer.screenTx, ...screenLimits()], [peer.screenAudioTx, SENDER_LIMITS.screenAudio]]) {
-      if (!tx || peer.pc.signalingState === 'closed') continue;
+      const pc = peer.pc;
+      if (pc.signalingState !== 'stable' || peer.makingOffer || !pc.currentLocalDescription) return; // runs again at stable
+      if (!tx || !tx.currentDirection || tx.currentDirection === 'stopped') continue;
       const params = tx.sender.getParameters();
       const enc = params.encodings && params.encodings[0];
       const sameDegradation = !degradation || !('degradationPreference' in params) || params.degradationPreference === degradation;
@@ -4038,7 +4049,7 @@
           screenDegradation: screenParams ? screenParams.degradationPreference || null : null,
           id: p.id, polite: p.polite, state: p.pc.connectionState, level: peerLevel(p),
           sending: !!(p.audioTx && p.audioTx.sender.track), sendingVideo: !!(p.videoTx && p.videoTx.sender.track),
-          videoMaxBitrate: enc ? enc.maxBitrate : null, transceivers: p.pc.getTransceivers().length,
+          videoMaxBitrate: enc ? enc.maxBitrate : null, videoMaxFramerate: enc ? enc.maxFramerate : null, transceivers: p.pc.getTransceivers().length,
           sendingScreen: !!(p.screenTx && p.screenTx.sender.track),
         };
       }),

@@ -110,6 +110,17 @@ def ok(text: str) -> None:
     print(f"  ok  {text}")
 
 
+SENDER_WARNINGS: list[str] = []
+
+
+def watch_console(page: Page, name: str) -> None:
+    """Collects the warnings of a rejected sender limit (setParameters) from every page."""
+    def on_console(msg) -> None:
+        if "setParameters" in msg.text:
+            SENDER_WARNINGS.append(f"{name} console: {msg.text}")
+    page.on("console", on_console)
+
+
 def debug(page: Page) -> dict:
     return page.evaluate("cowatchDebug()")
 
@@ -217,10 +228,12 @@ def check_camera(host: Page, guest: Page) -> None:
     guest.wait_for_selector(".cam.me.live", timeout=5000)
     ok("the guest's camera plays in the host's tile; the host's tile shows a ball")
 
-    peer = debug(guest)["voice"]["peers"][0]
-    assert peer["sendingVideo"] and peer["videoMaxBitrate"] == 500000, peer
-    assert peer["transceivers"] == 4 and debug(host)["voice"]["peers"][0]["transceivers"] == 4
-    ok("camera capped at 500 kbps, no new transceivers")
+    for page in (host, guest):  # the limits are set on both sides once connected, camera on or not
+        peer = debug(page)["voice"]["peers"][0]
+        assert peer["videoMaxBitrate"] == 500000 and peer["videoMaxFramerate"] == 24, peer
+        assert peer["transceivers"] == 4, peer
+    assert debug(guest)["voice"]["peers"][0]["sendingVideo"]
+    ok("camera capped at 500 kbps and 24 frames a second, no new transceivers")
 
     tile = host.locator(f".cam.others[data-id='{guest_id}']")
     tile.click()
@@ -352,6 +365,7 @@ def check_third_viewer(browser, base: str, host: Page, guest: Page) -> None:
     ctx = browser.new_context(viewport={"width": 1100, "height": 720},
                               extra_http_headers={"Tailscale-User-Login": "third@example.com"})
     third = ctx.new_page()
+    watch_console(third, "third")
     third.goto(f"{base}/?k={KEY}")
     third.fill("#nameInput", "Üçüncü")
     third.click("#preCamBtn")
@@ -404,7 +418,10 @@ def check_third_viewer(browser, base: str, host: Page, guest: Page) -> None:
     peers_connected(host, 2)
     peers_connected(third, 2)
     tile_plays(guest, third_id)
-    ok("rebuilt connections come back, picture included")
+    for page in (host, guest, third):
+        page.wait_for_function("cowatchDebug().voice.peers.every(p => p.videoMaxBitrate === 500000 && p.videoMaxFramerate === 24)",
+                               timeout=5000)
+    ok("rebuilt connections come back, picture and camera limits included")
 
     ctx.close()
     for page in (host, guest):
@@ -429,6 +446,8 @@ def run(headed: bool) -> None:
             guest_ctx = browser.new_context(viewport={"width": 900, "height": 700},
                                             extra_http_headers={"Tailscale-User-Login": "friend@example.com"})
             host, guest = host_ctx.new_page(), guest_ctx.new_page()
+            for name, page in (("host", host), ("guest", guest)):
+                watch_console(page, name)
             try:
                 join(host, base, "Host")
                 join(guest, base, "Misafir")
@@ -468,6 +487,8 @@ def run(headed: bool) -> None:
                 check_third_viewer(browser, base, host, guest)
 
                 host.click("#closeMedia")
+                assert not SENDER_WARNINGS, "\n".join(SENDER_WARNINGS[:5])
+                ok("no sender limit was rejected (setParameters) in any window")
                 print("\nall good")
             except Exception:
                 for name, page in (("host", host), ("guest", guest)):
