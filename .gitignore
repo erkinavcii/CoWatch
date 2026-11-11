@@ -9,3 +9,4 @@ samples/*.mkv
 _handoff/
 build/
 dist/
+.claude/worktrees/
