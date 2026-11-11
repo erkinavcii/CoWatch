@@ -98,6 +98,36 @@ def test_websocket_welcome_ping_and_members():
             assert ws.receive_json()["type"] == "pong"
 
 
+def test_websocket_buffering_after_the_watchdog_lets_the_room_go():
+    import time
+    from server import main
+    from server.room import BUFFER_TIMEOUT_S
+
+    def next_of(ws, kind):
+        while True:
+            msg = ws.receive_json()
+            if msg["type"] == kind:
+                return msg
+
+    with TestClient(app, cookies={"cw_key": KEY}) as client:
+        with client.websocket_connect("/ws") as ws:
+            me = ws.receive_json()["clientId"]
+            ws.send_json({"type": "buffering", "value": True})
+            assert next_of(ws, "state")["waiting"] == [me]
+            main.ctl.room.clients[me].buffering_since = time.monotonic() - BUFFER_TIMEOUT_S - 1
+            assert next_of(ws, "state")["waiting"] == []  # the watchdog let the room go
+            next_of(ws, "members")
+            ws.send_json({"type": "buffering", "value": True})  # stalls again right away: ignored
+            ws.send_json({"type": "buffering", "value": False})
+            ws.send_json({"type": "ping", "t0": 1})
+            assert ws.receive_json()["type"] == "pong"  # no state in between
+            main.ctl.room.clients[me].buffering_ignored_until = time.monotonic() - 1
+            ws.send_json({"type": "buffering", "value": True})
+            assert next_of(ws, "state")["waiting"] == [me]
+            ws.send_json({"type": "buffering", "value": False})
+            assert next_of(ws, "state")["waiting"] == []
+
+
 def test_websocket_requires_key():
     with TestClient(app) as client:
         try:

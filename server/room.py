@@ -16,7 +16,10 @@ from .presence import CHAT_HISTORY, REPORT_BURST, REPORT_REFILL_S, Bucket
 
 log = logging.getLogger("cowatch.room")
 
-BUFFER_TIMEOUT_S = 20.0
+BUFFER_TIMEOUT_S = 20.0  # a viewer waited for longer no longer holds the room (`main.watchdog_loop`)
+# ...and its stalls do not stop the room for this long after that: it used to stall again a few
+# seconds later and pause everyone again, every half minute. "Ready again" is still taken.
+BUFFER_GRACE_S = 60.0
 SHARE_ASK_TIMEOUT_S = 30.0  # a screen share request nobody answers counts as declined
 SEND_TIMEOUT_S = 10.0  # a message that takes longer to reach a viewer: that connection is dead
 
@@ -41,6 +44,7 @@ class Client:
         self.chat_bucket = Bucket()
         self.report_bucket = Bucket(REPORT_BURST, REPORT_REFILL_S)
         self.buffering_since: Optional[float] = None
+        self.buffering_ignored_until = 0.0  # monotonic; see BUFFER_GRACE_S
         self.alive = True
         self.on_dead: Optional[Callable[[], None]] = None  # called once when a send fails
         self._lock = asyncio.Lock()
@@ -152,6 +156,8 @@ class Room:
     def set_buffering(self, client: Client, value: bool) -> bool:
         if client.buffering == value:
             return False
+        if value and time.monotonic() < client.buffering_ignored_until:
+            return False  # let go a moment ago: the room goes on without it for now
         self._freeze()
         client.buffering_since = time.monotonic() if value else None
         return self._changed()
@@ -164,6 +170,7 @@ class Room:
         self.loading = False
         for client in self.clients.values():
             client.buffering_since = None
+            client.buffering_ignored_until = 0.0
         self._changed()
 
     # ---- members ------------------------------------------------------------
@@ -199,6 +206,12 @@ class Room:
 
     def screen_msg(self) -> dict:
         return {"type": "screen", "owner": self.screen, "pending": list(self.share_asks)}
+
+    def release_buffering(self, client: Client) -> bool:
+        """The room stops waiting for a viewer stuck for BUFFER_TIMEOUT_S, and does not wait for
+        it again for BUFFER_GRACE_S."""
+        client.buffering_ignored_until = time.monotonic() + BUFFER_GRACE_S
+        return self.set_buffering(client, False)
 
     def expired_buffering(self) -> list[Client]:
         limit = time.monotonic() - BUFFER_TIMEOUT_S

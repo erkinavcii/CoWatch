@@ -55,6 +55,35 @@ def test_leaving_while_buffering_releases_the_room(clock):
     assert room.current_position() == pytest.approx(2)
 
 
+def test_a_released_viewer_does_not_stop_the_room_again_for_a_while(clock):
+    import time
+    from server.room import BUFFER_GRACE_S, BUFFER_TIMEOUT_S
+    room = Room()
+    viewer, other = room.add(None), room.add(None)
+    room.play()
+    room.set_buffering(viewer, True)
+    assert room.expired_buffering() == []
+    viewer.buffering_since = time.monotonic() - BUFFER_TIMEOUT_S - 1  # waited too long
+    assert room.expired_buffering() == [viewer]
+    assert room.release_buffering(viewer) is True
+    assert room.running() and room.state_msg()["waiting"] == []
+    # It stalls again a few seconds later: the room goes on without it.
+    assert room.set_buffering(viewer, True) is False
+    assert room.running()
+    assert room.set_buffering(viewer, False) is False  # "ready again" is still fine
+    assert room.set_buffering(other, True) is True  # the others still hold the room
+    room.set_buffering(other, False)
+    # After the grace period it holds the room again.
+    assert time.monotonic() + BUFFER_GRACE_S - 1 < viewer.buffering_ignored_until
+    viewer.buffering_ignored_until = time.monotonic() - 1
+    assert room.set_buffering(viewer, True) is True
+    assert room.state_msg()["waiting"] == [viewer.id]
+    # A new film starts afresh.
+    room.release_buffering(viewer)
+    room.reset()
+    assert room.set_buffering(viewer, True) is True
+
+
 def test_seek_and_loading(clock):
     room = Room()
     room.play()

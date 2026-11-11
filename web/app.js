@@ -278,6 +278,7 @@
         S.opening = !!msg.opening;
         followOpening();
         S.room = msg.state;
+        S.bufferingSent = false; // the new id waits for nothing yet
         S.members = msg.members || [];
         if (Array.isArray(msg.palette) && msg.palette.length) S.palette = msg.palette;
         S.progress = msg.progress;
@@ -295,6 +296,11 @@
       case 'state': {
         const wasRunning = roomRunning();
         S.room = msg;
+        // What the server holds is the truth: after 20 s it lets the room go on without me (and
+        // takes no stall from me for a while), and my old "waiting" must not decide the next report.
+        const waitingForMe = (msg.waiting || []).includes(S.clientId);
+        if (waitingForMe) clearTimeout(S.waitTimer);
+        S.bufferingSent = waitingForMe;
         if (wasRunning !== roomRunning()) retimeStrokes();
         renderControls(); renderCenter();
         break;
@@ -392,6 +398,22 @@
     S.streamId = null;
   }
 
+  // Patient loading: hls.js gives up on a request with no first byte in 10 s and asks for it
+  // again from zero, throwing away what a busy link (Funnel) had half sent; every error in
+  // playback.log was one of these. 30 s for the first byte, and more tries before a fatal error.
+  const hlsPolicy = (maxLoadTimeMs, timeouts, errors) => ({
+    default: {
+      maxTimeToFirstByteMs: 30000, maxLoadTimeMs,
+      timeoutRetry: { maxNumRetry: timeouts, retryDelayMs: 0, maxRetryDelayMs: 0 },
+      errorRetry: { maxNumRetry: errors, retryDelayMs: 1000, maxRetryDelayMs: 8000 },
+    },
+  });
+  const HLS_LOAD_POLICIES = {
+    manifestLoadPolicy: hlsPolicy(60000, 4, 4),
+    playlistLoadPolicy: hlsPolicy(60000, 4, 6),
+    fragLoadPolicy: hlsPolicy(120000, 6, 8),
+  };
+
   function loadStream (media) {
     destroyPlayer();
     S.streamId = media.streamId;
@@ -402,6 +424,7 @@
         maxBufferLength: 60,
         maxMaxBufferLength: 120,
         backBufferLength: 60,
+        ...HLS_LOAD_POLICIES,
       });
       const mediaErrors = [];
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -466,12 +489,30 @@
     } else if (!running && !video.paused) {
       video.pause();
     }
-    // Resume only with a few seconds in hand, so a slow viewer does not stop the room every second.
-    if (S.bufferingSent && !video.seeking) {
-      const ahead = bufferedAhead();
-      const nearEnd = filmTime() + ahead >= S.media.duration - 0.5;
-      if (ahead >= 4 || nearEnd) reportBuffering(false);
-    }
+    if (S.bufferingSent) maybeResume();
+  }
+
+  // ---- how much film a waiting viewer gathers before the room goes on
+  // A few seconds in hand, so a slow viewer does not stop the room every second. 3.5 s, not the
+  // 4 s of a segment: after a stall at a segment's start one segment gives 3.99… s, and the room
+  // waited for a second one. A viewer who stalls again within two minutes gathers more this time
+  // (10 s, then 20 s: fewer, longer stops instead of many short ones); each two calm minutes
+  // step it back down. The server lets the room go on after 20 s of waiting anyway (room.py),
+  // so on a link slower than half the film the 20 s step ends with the room going on.
+  const RESUME = { levels: [3.5, 10, 20], level: 0, lastStall: -Infinity, repeatMs: 120000 };
+  function noteStall () {
+    const now = performance.now();
+    const calm = now - RESUME.lastStall;
+    if (calm < RESUME.repeatMs) RESUME.level = Math.min(RESUME.level + 1, RESUME.levels.length - 1);
+    else RESUME.level = Math.max(0, RESUME.level - Math.floor(calm / RESUME.repeatMs)); // a step down per calm stretch
+    RESUME.lastStall = now;
+  }
+  const resumeAhead = () => RESUME.levels[RESUME.level];
+  function maybeResume () {
+    if (!S.bufferingSent || video.seeking || !S.media) return;
+    const ahead = bufferedAhead();
+    const nearEnd = filmTime() + ahead >= S.media.duration - 0.5;
+    if (ahead >= resumeAhead() || nearEnd) reportBuffering(false);
   }
 
   function bufferedAhead () {
@@ -484,6 +525,7 @@
   }
 
   function reportBuffering (value) {
+    if (value) noteStall();
     S.bufferingSent = value;
     send(value ? { type: 'buffering', value, position: filmTime() } : { type: 'buffering', value });
   }
@@ -552,7 +594,7 @@
   });
   video.addEventListener('playing', () => {
     clearTimeout(S.waitTimer);
-    if (S.bufferingSent) reportBuffering(false);
+    maybeResume(); // with the same seconds in hand as syncTick
   });
 
   // ---------------------------------------------------------------- commands
@@ -4055,6 +4097,7 @@
     room: S.room, media: S.media, clockOffset: S.clock.offset, rate: video.playbackRate,
     readyState: video.readyState, primary: S.primary, secondary: S.secondary, align: prefs.align,
     frameWatch: { fixes: frameWatch.fixes, reloads: frameWatch.reloads },
+    resumeAhead: resumeAhead(), bufferingSent: S.bufferingSent,
     screen: {
       owner: screen.owner, pending: screen.pending, mine: !!screen.stream,
       showing: !el.screenVideo.hidden && el.screenVideo.videoWidth > 0 && !el.screenVideo.paused,

@@ -836,7 +836,7 @@ class Controller:
                 await self.room.broadcast(self.room.screen_msg())
             for client in self.room.expired_buffering():
                 log.info("ignoring buffering client %s", client.name)
-                if self.room.set_buffering(client, False):
+                if self.room.release_buffering(client):
                     await self.broadcast_state()
                     await self.room.broadcast(self.room.members_msg())
 
