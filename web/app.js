@@ -3864,7 +3864,9 @@
       `${(m.videoCodec || '').toUpperCase()} ${m.width || '?'}×${m.height || '?'}`,
       // An HDR film: converted to normal colours, or sent as it is (it looks pale then).
       m.hdr && m.mode === 'transcode' ? t(m.toneMap ? 'hdr_converted' : 'hdr_unconverted') : '',
-      m.bitrateKbps ? `${(m.bitrateKbps / 1000).toFixed(1)} Mbps` : '',
+      // Converting: the source's bitrate, then the stream's (at most twice the source's video).
+      [m.bitrateKbps ? `${(m.bitrateKbps / 1000).toFixed(1)} Mbps` : '',
+        m.targetKbps ? `${(m.targetKbps / 1000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' → '),
       m.audio ? `${(m.audio.codec || '').toUpperCase()} ${m.audio.channels || ''}ch → AAC 2.0` : '',
     ].filter(Boolean);
     const line = document.createElement('div');

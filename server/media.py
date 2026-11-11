@@ -353,12 +353,46 @@ def decide_mode(info: ProbeInfo, cfg: Settings) -> tuple[str, str]:
     return "copy", "H.264 source, sent without re-encoding"
 
 
+TRANSCODE_FLOOR_KBPS = 1500  # the least a converted stream gets when the source is small
+_BPS_TAG = re.compile(r"^BPS(-\w+)?$", re.IGNORECASE)  # MKV statistics tags: BPS, BPS-eng
+
+
+def _stream_kbps(stream: dict) -> int:
+    """A stream's bitrate: ffprobe's bit_rate, else the BPS tag MKV muxers write; 0 if unknown."""
+    rate = _float(stream.get("bit_rate"))
+    if not rate:
+        rate = next((_float(v) for k, v in (stream.get("tags") or {}).items() if _BPS_TAG.match(str(k)) and _float(v)),
+                    None)
+    return int((rate or 0) / 1000)
+
+
+def source_video_kbps(info: ProbeInfo) -> int:
+    """The source's video bitrate: the video stream's own, else the whole file's minus its
+    sound tracks; 0 if neither is known."""
+    own = _stream_kbps(info.video)
+    if own > 0:
+        return own
+    if info.bitrate_kbps <= 0:
+        return 0
+    return max(0, info.bitrate_kbps - sum(_stream_kbps(a) for a in info.audio))
+
+
+def target_kbps(cfg: Settings, info: Optional[ProbeInfo]) -> int:
+    """A converted stream's video bitrate: TRANSCODE_KBPS, but no more than twice the source
+    (at least TRANSCODE_FLOOR_KBPS), so a light x265 episode is not inflated past the uplink."""
+    kbps = max(500, cfg.transcode_kbps)
+    source = source_video_kbps(info) if info is not None else 0
+    if source <= 0:
+        return kbps
+    return min(kbps, max(TRANSCODE_FLOOR_KBPS, source * 2))
+
+
 def _video_args(cfg: Settings, mode: str, encoder: str = SOFTWARE_ENCODER, info: Optional[ProbeInfo] = None,
                 tonemap: Optional[str] = None) -> list[str]:
     if mode == "copy":
         return ["-c:v", "copy"]
     extra, pix_fmt = ENCODER_PRESETS.get(encoder, ([], "yuv420p"))
-    kbps = max(500, cfg.transcode_kbps)
+    kbps = target_kbps(cfg, info)
     vf = (_tonemap_filter(tonemap, info is not None and hdr_kind(info) == "hlg", cfg.max_height, pix_fmt) if tonemap
           else f"scale=-2:'min({cfg.max_height},ih)',format={pix_fmt}")
     return [
@@ -722,6 +756,7 @@ class MediaSession:
             "width": self.info.video.get("width"),
             "height": self.info.video.get("height"),
             "bitrateKbps": self.info.bitrate_kbps,
+            "targetKbps": target_kbps(self.cfg, self.info) if self.mode == "transcode" else None,
             "audio": {
                 "codec": audio.get("codec_name"),
                 "channels": audio.get("channels"),

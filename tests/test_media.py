@@ -305,3 +305,40 @@ def test_the_sound_track_is_chosen_by_those_who_may_change_the_film():
     with TestClient(app, cookies={"cw_key": "test-key"}) as client:
         assert client.post("/api/media/audio", json={"index": 1}).status_code == 400  # no film open
         assert client.post("/api/media/audio", json={"index": -1}).status_code == 422
+
+
+def _kbps_args(transcode_kbps, video, audio=(), bitrate_kbps=0):
+    """-b:v, -maxrate and -bufsize (in kbps) for a source with these streams."""
+    from dataclasses import replace
+
+    from server.media import ProbeInfo, _video_args
+
+    cfg = replace(get_settings(), transcode_kbps=transcode_kbps)
+    info = ProbeInfo(duration=1440, size=1, start_time=0, format_name="matroska", bitrate_kbps=bitrate_kbps,
+                     video={"codec_name": "hevc", **video}, audio=list(audio))
+    args = _video_args(cfg, "transcode", "libx264", info)
+    return tuple(int(args[args.index(flag) + 1].rstrip("k")) for flag in ("-b:v", "-maxrate", "-bufsize"))
+
+
+def test_a_light_source_is_not_inflated():
+    # A 1.1 Mbps x265 episode: twice that, not TRANSCODE_KBPS.
+    rate, maxrate, bufsize = _kbps_args(4500, {"bit_rate": "1100000"})
+    assert rate <= 2300 and rate == 2200 and maxrate == 2750 and bufsize == 4400
+    # MKV often has no bit_rate on the stream, only the BPS tag.
+    assert _kbps_args(4500, {"tags": {"BPS-eng": "1100000"}})[0] == 2200
+    assert _kbps_args(4500, {"tags": {"BPS": "1100000"}})[0] == 2200
+    # Neither: the file's total minus its sound tracks (1230 - 130 = 1100).
+    audio = [{"codec_type": "audio", "tags": {"BPS-eng": "130000"}}]
+    assert _kbps_args(4500, {}, audio, bitrate_kbps=1230)[0] == 2200
+
+
+def test_a_heavy_or_unknown_source_keeps_transcode_kbps():
+    assert _kbps_args(4500, {"bit_rate": "20000000"})[0] == 4500
+    assert _kbps_args(4500, {}, bitrate_kbps=0)[0] == 4500
+    assert _kbps_args(5000, {"tags": {"BPS-eng": "not a number"}})[0] == 5000
+
+
+def test_a_tiny_source_still_gets_the_floor():
+    assert _kbps_args(4500, {"bit_rate": "300000"})[0] == 1500
+    # TRANSCODE_KBPS below the floor wins.
+    assert _kbps_args(1000, {"bit_rate": "300000"})[0] == 1000
