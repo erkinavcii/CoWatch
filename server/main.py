@@ -62,6 +62,7 @@ PLAYBACK_LOG_MAX = 1_000_000
 COOKIE = "cw_key"
 VIEWER_COOKIE = "cw_viewer"  # one per browser, so the host's trust survives a reconnect
 KICKED_CLOSE = 4003  # the host removed this viewer: the page does not reconnect by itself
+DEAD_CLOSE = 4000  # a send to this viewer failed or timed out: the page reconnects
 LANG_RE = re.compile(r"^[a-z]{2,3}(-[a-z]{2,4})?$")
 LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
 # Set by a reverse proxy in front of us. Tailscale Serve adds Tailscale-User-Login (and drops
@@ -194,6 +195,25 @@ class Controller:
             await self.set_screen(None)
         elif self.room.share_asks.pop(client.id, None) is not None:
             await self.room.broadcast(self.room.screen_msg())
+
+    def drop_dead(self, client: Client) -> None:
+        """A send to this viewer failed or took longer than `room.SEND_TIMEOUT_S`: it would
+        hear nothing more (a zombie with an open page and no state). It leaves the room at once,
+        and its connection is closed so that the page, if it is still there, reconnects. Not on
+        the turn of whoever was sending."""
+        if client.id not in self.room.clients:
+            return  # gone already (kicked, or the connection closed)
+
+        async def drop() -> None:
+            await self.leave(client)
+            try:
+                await asyncio.wait_for(client.ws.close(code=DEAD_CLOSE), timeout=5)
+            except Exception:
+                pass
+
+        task = asyncio.create_task(drop())
+        self._relays.add(task)
+        task.add_done_callback(self._relays.discard)
 
     async def kick(self, target: Client) -> None:
         """The host removes someone, usually a ghost: a page left open on a phone, or a join
@@ -1566,6 +1586,7 @@ async def ws_endpoint(ws: WebSocket):
         return
     await ws.accept()
     client = ctl.room.add(ws, ws.cookies.get(VIEWER_COOKIE, ""), is_local(ws))
+    client.on_dead = lambda: ctl.drop_dead(client)
     await client.send(ctl.welcome(client))
     await ctl.room.broadcast(ctl.room.members_msg())
     try:

@@ -189,17 +189,44 @@
   const filmTime = () => (S.media ? video.currentTime + S.media.streamStart : 0);
 
   // ---------------------------------------------------------------- websocket
+  // A server that has gone quiet: the oldest ping with nothing at all heard since. Every ping
+  // gets a pong, so after `SILENT_MS` of silence the connection is dropped and made again (the
+  // link hiccuped, or the server gave up on this page). Measured from the ping, not from the
+  // last message, so that a background tab whose timers run once a minute is not dropped.
+  const SILENT_MS = 25000;
   let pingTimer = null;
+  let unanswered = null; // performance.now() of the first ping since the last message
   function startPings () {
     clearInterval(pingTimer);
+    unanswered = null;
     let count = 0;
     const ping = () => {
-      send({ type: 'ping', t0: performance.now() });
+      const now = performance.now();
+      if (unanswered !== null && now - unanswered > SILENT_MS) { dropSocket(S.ws); return; }
+      send({ type: 'ping', t0: now });
+      if (unanswered === null) unanswered = now;
       count += 1;
       if (count === 6) { clearInterval(pingTimer); pingTimer = setInterval(ping, 10000); }
     };
     ping();
     pingTimer = setInterval(ping, 500);
+  }
+  // No waiting for the closing handshake: on a dead link it may never come.
+  function dropSocket (ws) {
+    if (!ws || S.ws !== ws) return;
+    ws.onmessage = null;
+    ws.onclose = null;
+    try { ws.close(4000); } catch { /* closing already */ }
+    lostSocket(ws);
+  }
+  function lostSocket (ws) {
+    S.connected = false;
+    clearInterval(pingTimer);
+    if (S.ws === ws && !S.kicked) {
+      setConn('disconnected');
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connect, 2000);
+    }
   }
   function send (msg) {
     if (S.ws && S.ws.readyState === WebSocket.OPEN) S.ws.send(JSON.stringify(msg));
@@ -216,19 +243,16 @@
       startPings();
     };
     ws.onmessage = (event) => {
+      unanswered = null; // the server is there
       let msg;
       try { msg = JSON.parse(event.data); } catch { return; }
       onMessage(msg);
     };
+    // 4003: the host removed me (main.KICKED_CLOSE). Any other code, 4000 too (main.DEAD_CLOSE:
+    // the server could not reach me and let me go), means trying again.
     ws.onclose = (event) => {
-      S.connected = false;
-      clearInterval(pingTimer);
-      if (event.code === 4003) onKicked(); // the host removed me (main.KICKED_CLOSE)
-      if (S.ws === ws && !S.kicked) {
-        setConn('disconnected');
-        clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connect, 2000);
-      }
+      if (event.code === 4003) onKicked();
+      lostSocket(ws);
     };
   }
   // Back on the network (Wi-Fi again, laptop woke up): reconnect now instead of at the next try.

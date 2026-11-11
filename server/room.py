@@ -8,7 +8,7 @@ import logging
 import time
 import uuid
 from collections import deque
-from typing import Optional
+from typing import Callable, Optional
 
 from starlette.websockets import WebSocket
 
@@ -18,6 +18,7 @@ log = logging.getLogger("cowatch.room")
 
 BUFFER_TIMEOUT_S = 20.0
 SHARE_ASK_TIMEOUT_S = 30.0  # a screen share request nobody answers counts as declined
+SEND_TIMEOUT_S = 10.0  # a message that takes longer to reach a viewer: that connection is dead
 
 
 def now_ms() -> float:
@@ -41,6 +42,7 @@ class Client:
         self.report_bucket = Bucket(REPORT_BURST, REPORT_REFILL_S)
         self.buffering_since: Optional[float] = None
         self.alive = True
+        self.on_dead: Optional[Callable[[], None]] = None  # called once when a send fails
         self._lock = asyncio.Lock()
         self._waiting: dict[tuple, dict] = {}  # (type, sender) -> the newest lossy message held back
 
@@ -69,10 +71,16 @@ class Client:
     async def _send(self, msg: dict) -> bool:
         try:
             async with self._lock:
-                await asyncio.wait_for(self.ws.send_json(msg), timeout=10)
+                await asyncio.wait_for(self.ws.send_json(msg), timeout=SEND_TIMEOUT_S)
             return True
         except Exception:  # closed socket, timeout...
-            self.alive = False
+            # Nothing more goes to this viewer, so it must not stay in the room as a page that
+            # hears nothing: `on_dead` (`Controller.drop_dead`) closes the connection, and the
+            # page reconnects and gets the room afresh.
+            if self.alive:
+                self.alive = False
+                if self.on_dead is not None:
+                    self.on_dead()
             return False
 
 

@@ -217,6 +217,41 @@ def test_the_host_removes_a_ghost():
             assert ghost not in ctl.room.clients
 
 
+def test_a_viewer_that_stops_hearing_leaves_and_is_closed(monkeypatch):
+    """A send that hangs (a link gone quiet) must not leave a zombie: a page in the room that
+    receives nothing. The viewer leaves at once, the others hear it, and its connection is
+    closed with 4000 so the page reconnects."""
+    import asyncio
+
+    from starlette.websockets import WebSocketDisconnect
+
+    from server import room as room_mod
+    from server.main import DEAD_CLOSE, ctl
+    monkeypatch.setattr(room_mod, "SEND_TIMEOUT_S", 0.3)
+    host_headers = {"cookie": f"cw_key={KEY}; cw_viewer=dead-host", "host": "localhost:8000"}
+    quiet_headers = {"cookie": f"cw_key={KEY}; cw_viewer=dead-quiet", "x-forwarded-for": "100.64.0.9"}
+    with TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 5)) as client:
+        with client.websocket_connect("/ws", headers=host_headers) as hws,                 client.websocket_connect("/ws", headers=quiet_headers) as qws:
+            host = hws.receive_json()["clientId"]
+            quiet = qws.receive_json()["clientId"]
+            next_of(hws, "members", lambda m: len(m["members"]) == 2)
+
+            async def hang(msg):
+                await asyncio.sleep(3600)
+            monkeypatch.setattr(ctl.room.clients[quiet].ws, "send_json", hang)
+            hws.send_json({"type": "hello", "name": "Host"})  # a members message to everyone
+            members = next_of(hws, "members", lambda m: len(m["members"]) == 1)["members"]
+            assert [m["id"] for m in members] == [host]
+            assert quiet not in ctl.room.clients
+            try:
+                while True:
+                    qws.receive_json()
+            except WebSocketDisconnect as exc:
+                assert exc.code == DEAD_CLOSE == 4000
+            hws.send_json({"type": "ping", "t0": 1})  # the room goes on for the others
+            assert next_of(hws, "pong")["t0"] == 1
+
+
 def test_screen_share_waits_for_the_host():
     host_headers = {"cookie": f"cw_key={KEY}; cw_viewer=screen-host", "host": "localhost:8000"}
     friend_headers = {"cookie": f"cw_key={KEY}; cw_viewer=screen-friend", "x-forwarded-for": "100.64.0.8"}

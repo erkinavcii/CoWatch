@@ -54,6 +54,22 @@ COUNT_SOUNDS = """window.__sounds = 0;
 const start = OscillatorNode.prototype.start;
 OscillatorNode.prototype.start = function (...args) { window.__sounds += 1; return start.apply(this, args); };"""
 
+# `window.__cwDeafen()` makes the page's open WebSocket hear nothing more, as on a link that went
+# quiet: the messages arrive but never reach the page. A socket opened later hears again.
+DEAF_SOCKETS = """(() => {
+  const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
+  const sockets = [];
+  Object.defineProperty(WebSocket.prototype, 'onmessage', {
+    configurable: true,
+    get () { return desc.get.call(this); },
+    set (handler) {
+      if (!sockets.includes(this)) sockets.push(this);
+      desc.set.call(this, handler && ((event) => { if (!this.__deaf) handler.call(this, event); }));
+    },
+  });
+  window.__cwDeafen = () => { for (const ws of sockets) ws.__deaf = true; };
+})();"""
+
 # RGBA of the drawing canvas at a point given as a fraction of the picture.
 CANVAS_PIXEL = """([x, y]) => {
   const c = document.querySelector('#drawCanvas');
@@ -181,6 +197,7 @@ def run(headed: bool) -> None:
             for name, (width, height) in (("Erkin", (1280, 860)), ("Masha", (900, 760))):
                 ctx = browser.new_context(viewport={"width": width, "height": height}, locale="tr-TR")
                 ctx.add_init_script(COUNT_SOUNDS)
+                ctx.add_init_script(DEAF_SOCKETS)
                 page = ctx.new_page()
                 page.on("pageerror", lambda exc, n=name: errors.append(f"{n} pageerror: {exc}"))
                 page.on("console", lambda msg, n=name: on_console(msg, n))
@@ -257,6 +274,25 @@ def run(headed: bool) -> None:
             note = a.evaluate("() => { const n = document.querySelector('#centerMsg'); return n.hidden ? '' : n.textContent; }")
             check("the other window says who paused, the one who did sees nothing",
                   note == "Masha durdurdu" and b.is_hidden("#centerMsg"), repr(note))
+
+            # ---- a link that goes quiet: Masha's page hears nothing more from the server and
+            # misses a seek. It notices the silence (no pong in 25 s), reconnects by itself as a
+            # new client and comes back to where the room is.
+            old_id = b.evaluate(f"() => {DBG}.clientId")
+            started = time.monotonic()
+            b.evaluate("() => window.__cwDeafen()")
+            a.evaluate("() => { const s = document.querySelector('#seekBar'); s.value = '20'; s.dispatchEvent(new Event('change')); }")
+            a.wait_for_function(f"() => Math.abs({DBG}.filmTime - 20) < 0.3", timeout=20000)
+            time.sleep(1)
+            missed = abs(film_time(b) - 20) > 1
+            b.wait_for_function(f"() => {DBG}.clientId && {DBG}.clientId !== {json.dumps(old_id)}", timeout=60000)
+            took = time.monotonic() - started
+            b.wait_for_function(f"() => Math.abs({DBG}.filmTime - 20) < 0.5 && !{DBG}.room.playing", timeout=20000)
+            a.wait_for_function(f"() => {DBG}.members.length === 2 && {DBG}.members.some(m => m.name === 'Masha' && m.joined)",
+                                timeout=10000)
+            check("a page that stops hearing the server reconnects by itself and is back where the room is",
+                  missed and 25 < took < 50 and b.evaluate(f"() => {DBG}.room.position") == a.evaluate(f"() => {DBG}.room.position"),
+                  f"missed the seek: {missed}, reconnected after {took:.0f} s, B at {film_time(b):.2f} s")
 
             # ---- seek both to 7 s and read the subtitles each window shows
             b.evaluate("() => { const s = document.querySelector('#seekBar'); s.value = '7'; s.dispatchEvent(new Event('change')); }")
