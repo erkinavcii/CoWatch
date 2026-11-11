@@ -148,6 +148,9 @@ ENV_NAMES = {
 # files are converted so they play without stalling.
 FUNNEL_COPY_KBPS = 5500
 FUNNEL_TRANSCODE_KBPS = 4500
+# All the viewers over Funnel share its relay: on "auto", a converted stream gets this much split
+# by their number (media.funnel_share), and a file whose copies would add up to more is converted.
+FUNNEL_BUDGET_KBPS = 6000
 
 
 def load_saved(data_dir: Path) -> dict:
@@ -239,6 +242,7 @@ class Settings:
     hdr_tonemap: str  # auto | libplacebo | zscale | off (media.pick_tonemap)
     transcode_kbps: int
     max_copy_kbps: int  # 0 = always copy H.264
+    funnel_budget_kbps: int  # Funnel: the relay's total for all remote viewers, 0 = no split (media.funnel_share)
     max_height: int
     audio_kbps: int
     audio_filter: str
@@ -375,6 +379,7 @@ def get_settings() -> Settings:
         hdr_tonemap=_str(v, "HDR_TONEMAP", "auto").lower(),
         transcode_kbps=_int(v, "TRANSCODE_KBPS", FUNNEL_TRANSCODE_KBPS if auto else 5000),
         max_copy_kbps=_int(v, "MAX_COPY_KBPS", FUNNEL_COPY_KBPS if auto else 0),
+        funnel_budget_kbps=_int(v, "FUNNEL_BUDGET_KBPS", FUNNEL_BUDGET_KBPS if auto else 0) if funnel else 0,
         max_height=_int(v, "MAX_HEIGHT", 1080),
         audio_kbps=_int(v, "AUDIO_KBPS", 192),
         audio_filter=_str(v, "AUDIO_FILTER", "dynaudnorm=f=500:g=15"),

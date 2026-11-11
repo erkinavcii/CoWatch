@@ -310,7 +310,8 @@
         if (!el.joinOverlay.hidden) renderLook();
         break;
       case 'screen': onScreen(msg); break;
-      case 'media': applyMedia(msg.media); break;
+      case 'media': applyMedia(msg.media); keepRetune(); break;
+      case 'retune': onRetune(msg); break;
       case 'progress': S.progress = msg; renderMediaInfo(); break;
       case 'subtitles': applyTracks(msg.tracks || []); break;
       case 'status': onStatus(msg); break;
@@ -2247,7 +2248,41 @@
         cardButtons(card, [[t('screen_deny'), 'ghost', answer(false)], [t('screen_allow'), 'primary', answer(true)]]);
       }
     }
+    retuneCard();
     el.shareAsks.hidden = !el.shareAsks.children.length;
+  }
+
+  // Funnel's relay is shared by the friends coming over it: more of them joined than the stream
+  // was made for, and the server asks the host and co-hosts (once per new number) whether to make
+  // it again, lighter, where the room is. It never restarts by itself: everyone's film would stop.
+  const RETUNE = { ask: null };
+  function onRetune (msg) {
+    if (!S.media || !(msg.count > 0)) return;
+    RETUNE.ask = { count: msg.count, kbps: msg.kbps, mediaKey: S.media.mediaKey };
+    renderShareAsks();
+  }
+  function keepRetune () {
+    const ask = RETUNE.ask;
+    if (!ask) return;
+    // Another film, or the stream is already made for that many: nothing to ask any more.
+    if (!S.media || S.media.mediaKey !== ask.mediaKey || (S.media.funnelViewers || 0) >= ask.count) {
+      RETUNE.ask = null;
+      renderShareAsks();
+    }
+  }
+  function retuneCard () {
+    const ask = RETUNE.ask;
+    if (!ask || !amTrusted()) return;
+    const card = shareCard(t('retune_ask', { n: ask.count, mbps: ((ask.kbps || 0) / 1000).toFixed(1) }));
+    card.dataset.retune = String(ask.count);
+    const note = document.createElement('small');
+    note.textContent = t('retune_note');
+    card.appendChild(note);
+    const close = () => { RETUNE.ask = null; renderShareAsks(); };
+    cardButtons(card, [[t('retune_later'), 'ghost', close], [t('retune_now'), 'primary', () => {
+      close();
+      api('/api/media/retune', { json: {} }).catch((err) => toast(errorText(err), 'error'));
+    }]]);
   }
   el.screenBtn.addEventListener('click', toggleScreen);
 
@@ -3944,6 +3979,8 @@
       // Converting: the source's bitrate, then the stream's (at most twice the source's video).
       [m.bitrateKbps ? `${(m.bitrateKbps / 1000).toFixed(1)} Mbps` : '',
         m.targetKbps ? `${(m.targetKbps / 1000).toFixed(1)} Mbps` : ''].filter(Boolean).join(' → '),
+      // Lowered (or converted at all) because several friends share Funnel's relay.
+      m.funnelViewers ? t('funnel_for', { n: m.funnelViewers }) : '',
       m.audio ? `${(m.audio.codec || '').toUpperCase()} ${m.audio.channels || ''}ch → AAC 2.0` : '',
     ].filter(Boolean);
     const line = document.createElement('div');

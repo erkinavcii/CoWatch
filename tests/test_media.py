@@ -342,3 +342,81 @@ def test_a_tiny_source_still_gets_the_floor():
     assert _kbps_args(4500, {"bit_rate": "300000"})[0] == 1500
     # TRANSCODE_KBPS below the floor wins.
     assert _kbps_args(1000, {"bit_rate": "300000"})[0] == 1000
+
+
+# ---- Funnel's relay shared by the viewers coming over it (FUNNEL_BUDGET_KBPS)
+def _funnel(budget=6000, transcode_kbps=4500, max_copy_kbps=5500):
+    from dataclasses import replace
+    return replace(get_settings(), tailscale_funnel=True, funnel_budget_kbps=budget,
+                   transcode_kbps=transcode_kbps, max_copy_kbps=max_copy_kbps)
+
+
+def _info(codec="hevc", video_kbps=4000, total_kbps=None):
+    from server.media import ProbeInfo
+    return ProbeInfo(duration=1440, size=1, start_time=0, format_name="matroska",
+                     bitrate_kbps=total_kbps if total_kbps is not None else video_kbps + 200,
+                     video={"codec_name": codec, "index": 0, "bit_rate": str(video_kbps * 1000)},
+                     audio=[{"index": 1, "codec_name": "aac", "channels": 2}])
+
+
+def test_the_funnel_budget_is_split_between_remote_viewers():
+    from server.media import funnel_share, target_kbps
+    cfg, info = _funnel(), _info(video_kbps=4000)  # alone: min(4500, 2 × 4000) = 4500
+    assert [target_kbps(cfg, info, n) for n in (0, 1, 2, 3)] == [4500, 4500, 3000, 2000]
+    assert target_kbps(cfg, info, 6) == 1500 and target_kbps(cfg, info, 10) == 1500  # the floor
+    assert funnel_share(cfg, 0) == 0 and funnel_share(cfg, 4) == 1500
+    # A light source stays at twice its own rate while that fits.
+    assert target_kbps(cfg, _info(video_kbps=900), 3) == 1800
+    # Without Funnel (no budget) the number changes nothing.
+    from dataclasses import replace
+    assert target_kbps(replace(cfg, funnel_budget_kbps=0), info, 5) == 4500
+
+
+def test_copies_adding_up_past_the_budget_are_converted():
+    cfg = _funnel()
+    h264 = _info("h264", video_kbps=2300, total_kbps=2500)
+    assert decide_mode(h264, cfg, 2)[0] == "copy"  # 5000 kbps in all
+    mode, reason = decide_mode(h264, cfg, 3)  # 7500
+    assert mode == "transcode" and "3 × 2500" in reason and "FUNNEL_BUDGET_KBPS=6000" in reason
+    from dataclasses import replace
+    assert decide_mode(h264, replace(cfg, funnel_budget_kbps=0), 3)[0] == "copy"
+    session = MediaSession(cfg, MediaSource(kind="file", url="x.mkv", title="x", size=1, media_key="k"), h264,
+                           remote=3)
+    assert session.mode == "transcode" and session.target_kbps == 2000
+    pub = session.public()
+    assert pub["funnelViewers"] == 3 and pub["targetKbps"] == 2000
+    alone = MediaSession(cfg, MediaSource(kind="file", url="x.mkv", title="x", size=1, media_key="k"), h264,
+                         remote=1)
+    assert alone.mode == "copy" and alone.public()["funnelViewers"] is None
+
+
+class _Stream:
+    """Just enough of an HlsStream for can_serve: 100 s made, finished."""
+
+    def __init__(self, session):
+        self.mode, self.kbps, self.audio = session.mode, session.target_kbps, session.audio
+        self.id, self.running = "fake00000001", False
+
+    def produced(self):
+        return 100.0
+
+    def ended(self):
+        return True
+
+    def stop(self):
+        pass
+
+
+def test_a_stream_made_for_another_number_of_viewers_is_not_served():
+    session = MediaSession(_funnel(), MediaSource(kind="file", url="x.mkv", title="x", size=1, media_key="k"),
+                           _info(video_kbps=4000), remote=1)
+    session.stream = _Stream(session)
+    assert session.can_serve(50)
+    assert not session.set_remote(1) and session.can_serve(50)  # the same: nothing to do
+    assert session.plan_for(2) == ("transcode", 3000)
+    assert session.set_remote(2) and not session.can_serve(50)  # 4500 kbps made, 3000 wanted
+    assert session.notified_remote == 2
+    session.stream = _Stream(session)
+    assert session.can_serve(50) and session.stream.kbps == 3000
+    # Down again: a restart would give the better picture back.
+    assert session.set_remote(0) and session.target_kbps == 4500

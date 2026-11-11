@@ -392,3 +392,90 @@ def test_an_open_that_hangs_can_be_cancelled_or_replaced(monkeypatch):
                 if keys.count("open_cancelled") == 2:
                     break
             assert keys.count("opening") == 2 and keys.count("open_cancelled") == 2 and "open_failed" not in keys
+
+
+def test_more_friends_over_funnel_ask_the_host_to_re_encode(monkeypatch, tmp_path):
+    """A film plays; friends join over Funnel. Nothing restarts by itself: the host is asked
+    once per new, higher number (only when the stream would change), not when someone leaves,
+    and the host's answer restarts it where the room is, for the viewers there."""
+    import dataclasses
+
+    from server import main
+    from server.media import MediaSession, MediaSource, ProbeInfo
+
+    cfg = dataclasses.replace(main.cfg, tailscale_funnel=True, funnel_budget_kbps=6000, transcode_kbps=4500)
+    monkeypatch.setattr(main, "cfg", cfg)
+    info = ProbeInfo(duration=1440, size=1, start_time=0, format_name="matroska", bitrate_kbps=4200,
+                     video={"codec_name": "hevc", "index": 0, "bit_rate": "4000000"},
+                     audio=[{"index": 1, "codec_name": "aac", "channels": 2}])
+    session = MediaSession(cfg, MediaSource(kind="file", url="x.mkv", title="Film", size=1, media_key="funnel"),
+                           info, remote=0)
+
+    class Stream:
+        def __init__(self):
+            self.mode, self.kbps, self.audio = session.mode, session.target_kbps, session.audio
+            self.id, self.running = f"fake{session.target_kbps:08d}", False
+            self.out_dir = tmp_path / self.id
+
+        def produced(self):
+            return 100.0
+
+        def ended(self):
+            return True
+
+        def stop(self):
+            pass
+
+    async def start_at(target):
+        session.stream = Stream()
+        session.stream_start = 0.0
+
+    session.stream = Stream()
+    monkeypatch.setattr(session, "start_at", start_at)
+    monkeypatch.setattr(main.ctl, "session", session)
+
+    host_headers = {"cookie": f"cw_key={KEY}; cw_viewer=funnel-host", "host": "localhost:8000"}
+
+    def friend(n):  # Funnel's requests come from 127.0.0.1 with a *.ts.net Host
+        return {"cookie": f"cw_key={KEY}; cw_viewer=funnel-friend-{n}", "host": "pc.tail1234.ts.net"}
+
+    def hello(ws, name):
+        ws.send_json({"type": "hello", "name": name})
+
+    def quiet(ws):
+        """Nothing about re-encoding is waiting for this page (a ping's pong comes after it)."""
+        ws.send_json({"type": "ping", "t0": 1})
+        while (msg := ws.receive_json())["type"] != "pong":
+            assert msg["type"] != "retune"
+
+    with TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 5)) as client:
+        with client.websocket_connect("/ws", headers=host_headers) as hws, \
+                client.websocket_connect("/ws", headers=friend(1)) as f1:
+            hws.receive_json(), f1.receive_json()
+            hello(hws, "Host")
+            hello(f1, "One")  # one friend: 4500 kbps fits, nothing to ask
+            next_of(hws, "members", lambda m: sum(x["name"] == "One" for x in m["members"]) == 1)
+            quiet(hws)
+            with client.websocket_connect("/ws", headers=friend(2)) as f2:
+                f2.receive_json()
+                hello(f2, "Two")
+                ask = next_of(hws, "retune")
+                assert (ask["count"], ask["kbps"], ask["mode"]) == (2, 3000, "transcode")
+                quiet(f1)  # friends are not asked
+            next_of(hws, "members", lambda m: len(m["members"]) == 2)
+            quiet(hws)  # fewer viewers ask nothing
+            with client.websocket_connect("/ws", headers=friend(2)) as f2:
+                f2.receive_json()
+                hello(f2, "Two")
+                next_of(hws, "members", lambda m: sum(x["name"] == "Two" for x in m["members"]) == 1)
+                quiet(hws)  # two again: asked about that already
+                assert session.stream.kbps == 4500  # and nothing restarted by itself
+                friend_post = client.post("/api/media/retune", headers=friend(1))
+                assert friend_post.status_code == 403
+                resp = client.post("/api/media/retune", headers=host_headers)
+                assert resp.json() == {"ok": True, "restarted": True}
+                media = next_of(hws, "media", lambda m: m["media"]["targetKbps"] == 3000)["media"]
+                assert media["funnelViewers"] == 2
+                assert session.stream.kbps == 3000
+                again = client.post("/api/media/retune", headers=host_headers).json()
+                assert again["restarted"] is False  # made for them already

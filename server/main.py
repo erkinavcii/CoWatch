@@ -373,6 +373,7 @@ class Controller:
             taken = {c.color for c in self.room.clients.values() if c is not client and c.color}
             client.color = pick_color(msg.get("color"), taken)
             await self.room.broadcast(self.room.members_msg())
+            await self.check_remote()
         elif kind == "buffering":
             value = bool(msg.get("value"))
             if self.room.set_buffering(client, value):
@@ -432,6 +433,7 @@ class Controller:
         if session.can_serve(target):
             await self.broadcast_state()
             return
+        session.set_remote(self.remote_viewers())  # restarting anyway: made for whoever is here now
         self.room.set_loading(True)
         await self.broadcast_state()
         await self.status("restarting", at=round(target))
@@ -465,6 +467,43 @@ class Controller:
                 self.room.set_loading(False)
                 await self.broadcast_media()
                 await self.broadcast_state()
+
+    # ---- Funnel's relay: the bitrate follows the number of friends coming over it
+    # (media.funnel_share). A film opens, and restarts for a far seek, with the number in the
+    # room then. When more come while it plays, the stream is not restarted by itself, since
+    # everyone's picture would stop for a few seconds: the host and co-hosts are asked once for
+    # each new, higher number, and their answer restarts it where the room is. Fewer viewers ask
+    # nothing (a better picture is not worth a cut); the next far seek or film picks it up.
+    def remote_viewers(self) -> int:
+        """Viewers who joined over Funnel; one per browser (`viewer` cookie), so that a page
+        reconnecting before its old connection is gone does not count twice."""
+        if not cfg.tailscale_funnel:
+            return 0
+        return len({c.viewer or c.id for c in self.room.clients.values() if c.joined and not c.host})
+
+    async def check_remote(self) -> None:
+        session = self.session
+        if not self.ready or cfg.funnel_budget_kbps <= 0:
+            return
+        count = self.remote_viewers()
+        if count <= session.notified_remote:
+            return
+        mode, kbps = session.plan_for(count)
+        if (mode, kbps) == session.plan_for(session.remote):
+            return  # the stream fits them as it is (a light film, or already at the floor)
+        session.notified_remote = count
+        msg = {"type": "retune", "count": count, "mode": mode, "kbps": kbps}
+        for client in list(self.room.clients.values()):
+            if self.room.is_trusted(client):
+                self._relay_to(client, msg)
+
+    async def retune(self) -> bool:
+        """The host's answer: the stream again from where the room is, for the viewers here now."""
+        session = self.session
+        if not self.ready or not session.set_remote(self.remote_viewers()):
+            return False
+        await self.seek(self.room.current_position())
+        return True
 
     # ---- opening media ------------------------------------------------------------
     async def _addon_torrent(self, stream: dict) -> dict:
@@ -540,7 +579,7 @@ class Controller:
                 source = await self._resolve_source(torrent, path, stream)
                 await self.status("probing")
                 info = await probe(cfg, source.url, timeout=240)
-                session = MediaSession(cfg, source, info, audio)
+                session = MediaSession(cfg, source, info, audio, remote=self.remote_viewers())
                 await self.status("stream_starting", mode=session.mode, reason=session.mode_reason)
                 await session.start_at(0.0)
             except (MediaError, HelperError, OSError, ValueError) as exc:
@@ -1161,6 +1200,14 @@ async def api_media_audio(body: AudioBody, request: Request):
     require_media_control(request)
     await ctl.set_audio(body.index)
     return {"ok": True}
+
+
+@app.post("/api/media/retune")
+async def api_media_retune(request: Request):
+    """Restart the stream for the number of friends over Funnel now (the `retune` notice)."""
+    if not is_trusted(request):
+        raise HTTPException(403, detail="media_trusted_only")
+    return {"ok": True, "restarted": await ctl.retune()}
 
 
 @app.post("/api/media/cancel")

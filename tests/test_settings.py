@@ -143,3 +143,22 @@ def test_new_room_key(data, monkeypatch):
     key = (data / "access_key.txt").read_text(encoding="utf-8")
     assert key and key != KEY
     assert answer == {"restart": False, "localLink": f"http://localhost:8000/?k={key}"}
+
+
+def test_the_funnel_budget_is_on_with_funnel_and_auto_quality_only(fresh, monkeypatch):
+    for name in ("TAILSCALE_FUNNEL", "TAILSCALE_SERVE", "MAX_COPY_KBPS", "TRANSCODE_KBPS", "FUNNEL_BUDGET_KBPS"):
+        monkeypatch.delenv(name, raising=False)
+    config.save_saved(fresh, {**config.DEFAULTS, "connection": "funnel"})
+    assert get_settings().funnel_budget_kbps == config.FUNNEL_BUDGET_KBPS == 6000
+    config.save_saved(fresh, {**config.DEFAULTS, "connection": "serve"})
+    get_settings.cache_clear()
+    assert get_settings().funnel_budget_kbps == 0  # Serve and plain links: nothing changes
+    monkeypatch.setenv("FUNNEL_BUDGET_KBPS", "9000")
+    get_settings.cache_clear()
+    assert get_settings().funnel_budget_kbps == 0  # not even when set, without Funnel
+    config.save_saved(fresh, {**config.DEFAULTS, "connection": "funnel", "quality": "original"})
+    get_settings.cache_clear()
+    assert get_settings().funnel_budget_kbps == 9000  # set by hand: also for other qualities
+    monkeypatch.delenv("FUNNEL_BUDGET_KBPS")
+    get_settings.cache_clear()
+    assert get_settings().funnel_budget_kbps == 0  # "original" means the original

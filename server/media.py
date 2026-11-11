@@ -341,7 +341,9 @@ def tonemap_for(info: ProbeInfo, kind: Optional[str]) -> Optional[str]:
     return kind
 
 
-def decide_mode(info: ProbeInfo, cfg: Settings) -> tuple[str, str]:
+def decide_mode(info: ProbeInfo, cfg: Settings, remote: int = 0) -> tuple[str, str]:
+    """Copy or convert, and why (the film card shows the reason). `remote`: the viewers coming
+    over Funnel, who share its relay (`funnel_share`)."""
     codec = info.video_codec
     if codec != "h264":
         return "transcode", f"video codec {codec or '?'} is not H.264"
@@ -350,6 +352,9 @@ def decide_mode(info: ProbeInfo, cfg: Settings) -> tuple[str, str]:
         return "transcode", f"pixel format {pix_fmt} does not play in browsers"
     if cfg.max_copy_kbps > 0 and info.bitrate_kbps > cfg.max_copy_kbps:
         return "transcode", f"{info.bitrate_kbps} kbps is above MAX_COPY_KBPS={cfg.max_copy_kbps}"
+    if cfg.funnel_budget_kbps > 0 and remote > 0 and info.bitrate_kbps * remote > cfg.funnel_budget_kbps:
+        return "transcode", (f"{remote} × {info.bitrate_kbps} kbps is above "
+                             f"FUNNEL_BUDGET_KBPS={cfg.funnel_budget_kbps}")
     return "copy", "H.264 source, sent without re-encoding"
 
 
@@ -377,22 +382,37 @@ def source_video_kbps(info: ProbeInfo) -> int:
     return max(0, info.bitrate_kbps - sum(_stream_kbps(a) for a in info.audio))
 
 
-def target_kbps(cfg: Settings, info: Optional[ProbeInfo]) -> int:
+def target_kbps(cfg: Settings, info: Optional[ProbeInfo], remote: int = 0) -> int:
     """A converted stream's video bitrate: TRANSCODE_KBPS, but no more than twice the source
-    (at least TRANSCODE_FLOOR_KBPS), so a light x265 episode is not inflated past the uplink."""
+    (at least TRANSCODE_FLOOR_KBPS), so a light x265 episode is not inflated past the uplink;
+    with Funnel, no more than its share of the relay either (`funnel_share`)."""
     kbps = max(500, cfg.transcode_kbps)
     source = source_video_kbps(info) if info is not None else 0
-    if source <= 0:
-        return kbps
-    return min(kbps, max(TRANSCODE_FLOOR_KBPS, source * 2))
+    if source > 0:
+        kbps = min(kbps, max(TRANSCODE_FLOOR_KBPS, source * 2))
+    share = funnel_share(cfg, remote)
+    return min(kbps, share) if share else kbps
+
+
+# ---- Funnel's relay, shared by the viewers coming through it
+# Funnel carried about 7-8 Mbps in all in our measurement, however many friends were watching:
+# each of them pulls their own copy of the stream. Below that budget, split by the number of
+# friends coming over it, nobody waits for the relay. The host (on this computer) does not count,
+# nor does anyone without Funnel (Serve and plain links go straight to this computer).
+def funnel_share(cfg: Settings, remote: int) -> int:
+    """One stream's share of FUNNEL_BUDGET_KBPS for `remote` viewers (at least
+    TRANSCODE_FLOOR_KBPS); 0 = no limit (no Funnel, no budget, or nobody remote)."""
+    if cfg.funnel_budget_kbps <= 0 or remote <= 0:
+        return 0
+    return max(TRANSCODE_FLOOR_KBPS, cfg.funnel_budget_kbps // remote)
 
 
 def _video_args(cfg: Settings, mode: str, encoder: str = SOFTWARE_ENCODER, info: Optional[ProbeInfo] = None,
-                tonemap: Optional[str] = None) -> list[str]:
+                tonemap: Optional[str] = None, kbps: Optional[int] = None) -> list[str]:
     if mode == "copy":
         return ["-c:v", "copy"]
     extra, pix_fmt = ENCODER_PRESETS.get(encoder, ([], "yuv420p"))
-    kbps = target_kbps(cfg, info)
+    kbps = kbps or target_kbps(cfg, info)
     vf = (_tonemap_filter(tonemap, info is not None and hdr_kind(info) == "hlg", cfg.max_height, pix_fmt) if tonemap
           else f"scale=-2:'min({cfg.max_height},ih)',format={pix_fmt}")
     return [
@@ -422,7 +442,7 @@ def _ffmpeg_out(path: PurePath) -> str:
 def build_command(
     cfg: Settings, source: str, out_dir: PurePath, start: float, mode: str,
     info: ProbeInfo, audio: Optional[dict], encoder: str = SOFTWARE_ENCODER,
-    hwaccel: Optional[str] = None, tonemap: Optional[str] = None,
+    hwaccel: Optional[str] = None, tonemap: Optional[str] = None, kbps: Optional[int] = None,
 ) -> list[str]:
     cmd = [cfg.ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "warning", "-y"]
     if mode == "transcode":
@@ -437,7 +457,7 @@ def build_command(
     if audio is not None:
         cmd += ["-map", f"0:{audio['index']}"]
     cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"]
-    cmd += _video_args(cfg, mode, encoder, info, tonemap if mode == "transcode" else None)
+    cmd += _video_args(cfg, mode, encoder, info, tonemap if mode == "transcode" else None, kbps)
     if audio is not None:
         cmd += _audio_args(cfg)
     cmd += [
@@ -461,8 +481,10 @@ class HlsStream:
 
     def __init__(self, cfg: Settings, source: str, out_dir: Path, start: float, mode: str,
                  info: ProbeInfo, audio: Optional[dict], encoder: str = SOFTWARE_ENCODER,
-                 hwaccel: Optional[str] = None, tonemap: Optional[str] = None):
+                 hwaccel: Optional[str] = None, tonemap: Optional[str] = None, kbps: Optional[int] = None):
         self.cfg = cfg
+        # converting: the video bitrate it is made with (None: copied, or target_kbps's own)
+        self.kbps = kbps if mode == "transcode" else None
         self.encoder = encoder
         self.hwaccel = hwaccel
         self.tonemap = tonemap
@@ -484,7 +506,7 @@ class HlsStream:
     def start_process(self) -> None:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         cmd = build_command(self.cfg, self.source, self.out_dir, self.start, self.mode, self.info, self.audio,
-                            self.encoder, self.hwaccel, self.tonemap)
+                            self.encoder, self.hwaccel, self.tonemap, self.kbps)
         how = ", ".join(x for x in (self.hwaccel and f"decode {self.hwaccel}", self.encoder,
                                      self.tonemap and f"HDR {self.tonemap}") if x)
         log.info("ffmpeg start=%.1f mode=%s%s -> %s", self.start, self.mode,
@@ -627,11 +649,16 @@ class MediaSource:
 class MediaSession:
     """The open film: its probe info and the HLS stream currently being produced."""
 
-    def __init__(self, cfg: Settings, source: MediaSource, info: ProbeInfo, audio_index: Optional[int] = None):
+    def __init__(self, cfg: Settings, source: MediaSource, info: ProbeInfo, audio_index: Optional[int] = None,
+                 remote: int = 0):
         self.cfg = cfg
         self.source = source
         self.info = info
-        self.mode, self.mode_reason = decide_mode(info, cfg)
+        # The viewers over Funnel the next stream is made for (set_remote); the stream running
+        # keeps the mode and bitrate it was started with until it is restarted.
+        self.remote = max(0, remote)
+        self.mode, self.mode_reason = decide_mode(info, cfg, self.remote)
+        self.notified_remote = self.remote  # the host was asked about this many (main.Controller.check_remote)
         self.audio = choose_audio(info, audio_index)
         self.stream: Optional[HlsStream] = None
         self.stream_start = 0.0
@@ -661,7 +688,7 @@ class MediaSession:
         while True:
             out_dir = self.cfg.hls_dir / uuid.uuid4().hex[:12]
             stream = HlsStream(self.cfg, self.source.url, out_dir, target, self.mode, self.info, self.audio,
-                               self.encoder or SOFTWARE_ENCODER, self.hwaccel, self.tonemap)
+                               self.encoder or SOFTWARE_ENCODER, self.hwaccel, self.tonemap, self.target_kbps)
             stream.start_process()
             try:
                 await stream.wait_ready(timeout=240)
@@ -717,10 +744,34 @@ class MediaSession:
         at the target is faster than waiting for everything in between."""
         if self.stream is None or target < self.stream_start - 0.5 or self.stream.audio is not self.audio:
             return False
+        if not self.stream_fits():
+            return False  # made for another number of viewers over Funnel (set_remote)
         end = self.produced_end()
         if target <= end:
             return True
         return self.stream.running and not self.stream.ended() and target <= end + slack
+
+    @property
+    def target_kbps(self) -> Optional[int]:
+        """The video bitrate the next stream is converted at; None when it is copied."""
+        return target_kbps(self.cfg, self.info, self.remote) if self.mode == "transcode" else None
+
+    def plan_for(self, remote: int) -> tuple[str, Optional[int]]:
+        """The mode and bitrate a stream for `remote` viewers over Funnel would have."""
+        mode, _ = decide_mode(self.info, self.cfg, remote)
+        return mode, target_kbps(self.cfg, self.info, remote) if mode == "transcode" else None
+
+    def stream_fits(self) -> bool:
+        """The stream running has the mode and bitrate the session wants now."""
+        return self.stream is None or (self.stream.mode, self.stream.kbps) == (self.mode, self.target_kbps)
+
+    def set_remote(self, remote: int) -> bool:
+        """The next stream is made for `remote` viewers over Funnel. True if that differs from
+        the stream running (a restart at the current position gives everyone the new one)."""
+        self.remote = max(0, remote)
+        self.notified_remote = max(self.notified_remote, self.remote)
+        self.mode, self.mode_reason = decide_mode(self.info, self.cfg, self.remote)
+        return not self.stream_fits()
 
     @property
     def audio_index(self) -> Optional[int]:
@@ -748,6 +799,8 @@ class MediaSession:
             if self.source.content_id else None,
             "mode": self.mode,
             "modeReason": self.mode_reason,
+            # The number of viewers over Funnel when it lowered the bitrate or made it convert, else None.
+            "funnelViewers": self.remote if self.remote and self.plan_for(self.remote) != self.plan_for(0) else None,
             "encoder": self.encoder if self.mode == "transcode" else None,
             "decoder": self.hwaccel if self.mode == "transcode" else None,
             "toneMap": self.tonemap if self.mode == "transcode" else None,
@@ -756,7 +809,7 @@ class MediaSession:
             "width": self.info.video.get("width"),
             "height": self.info.video.get("height"),
             "bitrateKbps": self.info.bitrate_kbps,
-            "targetKbps": target_kbps(self.cfg, self.info) if self.mode == "transcode" else None,
+            "targetKbps": self.target_kbps,
             "audio": {
                 "codec": audio.get("codec_name"),
                 "channels": audio.get("channels"),

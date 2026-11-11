@@ -441,6 +441,11 @@ const I18N = {
     err_key_locked: 'Oda anahtarı .env dosyasında (ACCESS_KEY); oradan değiştir.',
     err_restart_unavailable: 'Uygulama run.py ile başlatılmadı; elle yeniden başlat.',
     err_tailscale_open_failed: 'Tailscale açılamadı; Başlat menüsünden aç.',
+    funnel_for: '{n} arkadaş için',
+    retune_ask: 'Şu an {n} arkadaş Funnel üzerinden izliyor: film {mbps} Mbps ile daha rahat sığar. Şimdi yeniden dönüştürülsün mü?',
+    retune_note: 'Herkesin filmi birkaç saniye durur.',
+    retune_now: 'Yeniden dönüştür',
+    retune_later: 'Sonra',
   },
   en: {
     join_title: 'Join the room',
@@ -882,6 +887,11 @@ const I18N = {
     err_key_locked: 'The room key is in the .env file (ACCESS_KEY); change it there.',
     err_restart_unavailable: 'The app was not started with run.py; restart it by hand.',
     err_tailscale_open_failed: 'Tailscale could not be opened; open it from the Start menu.',
+    funnel_for: 'for {n} friends',
+    retune_ask: '{n} friends are watching through Funnel now: the film fits better at {mbps} Mbps. Re-encode now?',
+    retune_note: "Everyone's film stops for a few seconds.",
+    retune_now: 'Re-encode',
+    retune_later: 'Not now',
   },
   ru: {
     join_title: 'Войти в комнату',
@@ -1323,6 +1333,11 @@ const I18N = {
     err_key_locked: 'Ключ комнаты задан в файле .env (ACCESS_KEY); меняйте его там.',
     err_restart_unavailable: 'Приложение запущено не через run.py; перезапустите его вручную.',
     err_tailscale_open_failed: 'Не удалось открыть Tailscale; откройте его из меню «Пуск».',
+    funnel_for: 'для друзей: {n}',
+    retune_ask: 'Через Funnel сейчас смотрят друзей: {n}. Фильму лучше идти с {mbps} Мбит/с. Перекодировать сейчас?',
+    retune_note: 'У всех фильм остановится на несколько секунд.',
+    retune_now: 'Перекодировать',
+    retune_later: 'Не сейчас',
   },
 };
 
