@@ -15,6 +15,7 @@ a film opened again later has them at once. The 20 films used last are kept, old
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import json
 import logging
 import math
@@ -229,7 +230,9 @@ class ThumbStore:
             proc.communicate()
             return False, "took too long"
         except BaseException:  # cancelled: another film, or the server stops
-            proc.kill()
+            if proc.poll() is None:
+                with suppress(OSError):
+                    proc.kill()
             raise
         finally:
             self.proc = None

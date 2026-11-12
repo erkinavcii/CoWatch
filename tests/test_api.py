@@ -635,3 +635,15 @@ def test_a_subtitle_is_aligned_to_another_once_for_everyone(monkeypatch, tmp_pat
         assert res.status_code == 422 and res.json()["detail"] == "align_unsure"
         assert len([t for t in store.list("film1") if t["source"] == "aligned"]) == 1
         assert main.ctl.aligning is None
+
+
+def test_closing_media_stops_thumbnail_job(monkeypatch):
+    import server.main as main
+
+    calls = []
+    monkeypatch.setattr(main.ctl.thumbs, "stop", lambda: calls.append(True))
+    host = {"base_url": "http://localhost:8000", "cookies": {"cw_key": KEY}, "client": ("127.0.0.1", 5)}
+    with TestClient(app, **host) as client:
+        assert client.post("/api/media/close").status_code == 200
+        assert calls == [True]
+    assert calls == [True, True]  # lifespan stop() on shutdown too

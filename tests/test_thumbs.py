@@ -195,3 +195,36 @@ def test_a_local_film_gets_pictures_a_web_address_none(clip, tmp_path, monkeypat
         assert maker.task is task
 
     asyncio.run(run())
+
+
+def test_stop_cancels_running_thumbnail_job(tmp_path, monkeypatch):
+    monkeypatch.setattr(thumbs, "START_DELAY_S", 0)
+    cfg = get_settings()
+
+    async def run():
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        class SlowStore(ThumbStore):
+            async def make(self, *_args, **_kwargs):
+                started.set()
+                try:
+                    await asyncio.sleep(60)
+                except asyncio.CancelledError:
+                    cancelled.set()
+                    raise
+
+        maker = ThumbMaker(cfg, SlowStore(tmp_path))
+        session = MediaSession(
+            cfg, MediaSource(kind="file", url=str(tmp_path / "f.mkv"), title="f", size=1, media_key="cancelme"),
+            ProbeInfo(duration=60.0, size=1, start_time=0.0, format_name="matroska", bitrate_kbps=1000, video={}, audio=[]),
+        )
+        maker.soon(session, lambda _s: asyncio.sleep(0, result=True), lambda _s: asyncio.sleep(0))
+        await asyncio.wait_for(started.wait(), timeout=2)
+        maker.stop()
+        with pytest.raises(asyncio.CancelledError):
+            await maker.task
+        assert cancelled.is_set()
+        assert "cancelme" not in maker.tried
+
+    asyncio.run(run())

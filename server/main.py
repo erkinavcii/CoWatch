@@ -867,6 +867,7 @@ class Controller:
     async def close_media(self) -> None:
         self.note_position(flush=True)
         self.next_item = None
+        self.thumbs.stop()
         if self.session is not None:
             self.session.stop()
             self.session = None
