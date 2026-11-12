@@ -405,6 +405,27 @@ def run(headed: bool) -> None:
             check("after reloading, the subtitle keeps its offset and speed",
                   kept and abs(kept["scale"] - 25 / 23.976) < 1e-9 and "25 → 23,976" in out, f"{kept} {out}")
 
+            # A first anchor that falls at 0.0 s offset must still keep its point for the second match.
+            a.wait_for_function("() => document.querySelector('#video').readyState >= 2", timeout=20000)
+            seek_room(60)
+            t0 = a.evaluate(f"() => Math.round({DBG}.filmTime * 1000) / 1000")
+            zero = upload_subtitle(a, "zero.srt", srt([
+                (t0, "Sıfır noktası: tam burada."),
+                (t0 + 700 * 23.976 / 25, "Uzak nokta: hız burada ölçülür."),
+            ]))
+            a.wait_for_function(f"() => {DBG}.tracks.some(t => t.id === {zero['id']!r})", timeout=5000)
+            a.select_option("#primarySel", zero["id"])
+            a.click("#offsetRows [data-slot=primary] .align-open")
+            a.wait_for_function(f"() => document.querySelectorAll('#alignRows .align-row').length >= 2", timeout=5000)
+            tap_line("Sıfır noktası")
+            z1 = offset_of(a, zero)
+            seek_room(t0 + 700)
+            tap_line("Uzak nokta")
+            z2 = offset_of(a, zero)
+            check("a first match at 0 ms offset keeps its anchor point so a later point finds the speed",
+                  z1 and z1["offset"] == 0 and len(z1.get("pts") or []) == 1
+                  and z2 and abs(z2["scale"] - 25 / 23.976) < 1e-9, f"z1={z1} z2={z2}")
+
             # On a phone held upright the panel is the box under the film.
             b.set_viewport_size({"width": 390, "height": 844})
             b.evaluate("() => window.scrollTo(0, 0)")

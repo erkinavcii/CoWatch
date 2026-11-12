@@ -2620,7 +2620,8 @@
   const subTime = (id, film) => { const a = alignOf(id); return (film - a.offset / 1000) / (a.scale || 1); };
   function setAlign (id, change) {
     const next = { ...alignOf(id), ...change, used: Date.now() };
-    if (!next.offset && next.scale === 1) delete prefs.align[id]; else prefs.align[id] = next;
+    if (!next.offset && next.scale === 1 && !(next.pts && next.pts.length)) delete prefs.align[id];
+    else prefs.align[id] = next;
     const ids = Object.keys(prefs.align);
     if (ids.length > ALIGN_KEEP) {
       ids.sort((a, b) => (prefs.align[a].used || 0) - (prefs.align[b].used || 0));
