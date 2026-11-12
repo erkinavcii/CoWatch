@@ -1,5 +1,7 @@
 # Araştırma: HEVC'yi çevirmeden yollama (İP-10)
 
+> **Durum: kodlanmadı, eksik kaldı.** Bu dosya sadece araştırma ve plan; bugün H.264 olmayan her film hâlâ çevriliyor. Proje sahibinin kararı (12 Kasım): kodlanırken kullanıcıya soru ya da ayar olmayacak (herkes ileri düzey kullanıcı değil); kopya mı çeviri mi kararını program her izleyicinin tarayıcısına bakarak kendisi verir, desteklemeyen biri gelince de kendisi çeviriye döner. Aşağıda geçen `HEVC_COPY` ayarı bu yüzden yok: ilk sürüm kendiliğinden sadece SDR HEVC'yi kopyalar, HDR ve DV 8 gerçek cihazlarda denendikten sonra yine ayarsız açılır.
+
 12 Kasım 2026. Soru: odadaki bütün tarayıcılar HEVC (H.265) oynatabiliyorsa Co-Watch filmi H.264'e çevirmeden, kopya kipiyle yollayabilir mi? Bugün H.264 olmayan her film çevriliyor (`decide_mode`); 1,1 Mbps'lik x265 Daredevil bölümü ≈ 2,2 Mbps H.264 oluyor.
 
 Kısa cevap: **evet, koşullu.** Bu bilgisayarda Chrome 157 ve Edge 157, `-c:v copy -tag:v hvc1` ile yapılmış HLS fMP4'ü hls.js'le oynattı (8-bit, 10-bit, HDR10, Dolby Vision profil 8 dahil); sarma çalıştı, akış ≈ 2,6 kat küçük, ffmpeg'in işlemci zamanı 6–12 kat az. Ama destek tarayıcıya ve donanıma bağlı (Playwright'ın kendi Chromium'u, Firefox'un çoğu kurulumu hayır diyor), bu yüzden karar tarayıcı adına değil, her izleyicinin kendi `isTypeSupported` cevabına bakmalı ve desteklemeyen biri gelince akış çevirmeye dönmeli.
@@ -82,7 +84,7 @@ ffmpeg -ss <yer> -i <dosya> -map 0:v:0 -map 0:a:0 -sn -dn -map_metadata -1 -map_
 
 **Bekleyen ve yeniden bağlanan:** yeniden bağlanan sayfa yeni `hello` yollar; aynı cevabı verir, bir şey değişmez. Katılmamış ("?") sayfalar sayılmaz.
 
-**HDR HEVC ve SDR ekran:** Chrome ve Edge SDR'ye kendileri çeviriyor (ölçüldü); Safari ekranına göre gösteriyor. Firefox HDR göstermiyor ama büyük ihtimalle HEVC'ye de hayır dediği için kopyaya girmez. İlk sürümde temkinli yol: sadece SDR HEVC kopyalansın, HDR HEVC (PQ, HLG, DV 8) bir ayarla (`HEVC_COPY=sdr|hdr|off`, varsayılan `sdr`) ve birkaç gerçek cihazda bakıldıktan sonra açılsın. Zaten 4K HDR kaynaklar genelde 15–20 Mbps ve `MAX_HEIGHT` ile bit hızı kuralları onları kopyadan çıkarır.
+**HDR HEVC ve SDR ekran:** Chrome ve Edge SDR'ye kendileri çeviriyor (ölçüldü); Safari ekranına göre gösteriyor. Firefox HDR göstermiyor ama büyük ihtimalle HEVC'ye de hayır dediği için kopyaya girmez. İlk sürümde temkinli yol: sadece SDR HEVC kopyalansın, HDR HEVC (PQ, HLG, DV 8) birkaç gerçek cihazda bakıldıktan sonra açılsın; kullanıcıya sorulan bir ayar olmadan (en üstteki karar). Zaten 4K HDR kaynaklar genelde 15–20 Mbps ve `MAX_HEIGHT` ile bit hızı kuralları onları kopyadan çıkarır.
 
 ## 4. Beklenen kazanç (bu bilgisayardaki dosyalarla ölçüldü)
 
@@ -106,7 +108,7 @@ Yapmaya değer: Daredevil gibi küçük x265 dizilerinde (bu bilgisayardaki dosy
 
 1. Karar her izleyicinin kendi cevabıyla, herkes evet derse; boş odada ve bilinmeyende çevir.
 2. Desteksiz izleyici gelince ya da bir tarayıcı çözemeyince akış kendiliğinden çevirmeye döner.
-3. İlk sürüm sadece SDR HEVC, yükseklik ≤ `MAX_HEIGHT`, bit hızı kuralları aynı; HDR ve DV 8 ayarla, denendikten sonra. DV profil 5 hiç.
+3. İlk sürüm sadece SDR HEVC, yükseklik ≤ `MAX_HEIGHT`, bit hızı kuralları aynı; HDR ve DV 8 denendikten sonra, ayarsız. DV profil 5 hiç.
 4. Kalan elle denemeler 1. adımda yapılır: bir arkadaşın Yandex ya da Opera GX'i, bir Android telefon, bir iPhone (Safari), bir Firefox.
 
 ### Adımlar (fable.md 8. bölümün üslubunda)
@@ -116,8 +118,8 @@ Yapmaya değer: Daredevil gibi küçük x265 dizilerinde (bu bilgisayardaki dosy
 - Bitti sayılır: `hello` alanı doğrulanıyor (bilinmeyen anahtar ya da bool olmayan değer `False`); pytest.
 
 **İP-10b. Kopya kararı ve komut.**
-- Dosyalar: `server/media.py` (`decide_mode`'a izleyicilerin desteği; `_video_args` kopyada HEVC için `-tag:v hvc1`; HEVC'de `yuv420p10le` kabul; `hevc_need(info)`: Main / Main 10 / 4K ve HDR türü), `server/config.py` (`HEVC_COPY`: `off`, `sdr`, `hdr`; varsayılan `sdr`; ayarlar sayfasında "Bağlantı ve kalite" altında), `server/main.py` (`Controller` film açarken ve `seek`'te izleyicilerin desteğini verir), `tests/test_media.py`.
-- Kural: HEVC + profil uygun + `hdr_kind` ayara uygun (`dovi` asla) + yükseklik ≤ `MAX_HEIGHT` + bütün katılmış izleyiciler evet + bit hızı kuralları → `copy`. `media` mesajında `codec: "hevc"`; film kartı sebebi yazar.
+- Dosyalar: `server/media.py` (`decide_mode`'a izleyicilerin desteği; `_video_args` kopyada HEVC için `-tag:v hvc1`; HEVC'de `yuv420p10le` kabul; `hevc_need(info)`: Main / Main 10 / 4K ve HDR türü), `server/main.py` (`Controller` film açarken ve `seek`'te izleyicilerin desteğini verir), `tests/test_media.py`.
+- Kural: HEVC + profil uygun + SDR (`hdr_kind` yok; HDR sonra, `dovi` asla) + yükseklik ≤ `MAX_HEIGHT` + bütün katılmış izleyiciler evet + bit hızı kuralları → `copy`. `media` mesajında `codec: "hevc"`; film kartı sebebi yazar.
 - Bitti sayılır: Daredevil benzeri örnekte (testteki gibi küçük sentetik x265, ffmpeg varsa) komutta `-c:v copy -tag:v hvc1` ve `init.mp4`'te `hvc1`; desteksiz bir izleyici varken `transcode`; DV profil 5 ve 4K'da `transcode`; pytest.
 
 **İP-10c. Karma odada geri dönüş.**
@@ -128,7 +130,7 @@ Yapmaya değer: Daredevil gibi küçük x265 dizilerinde (bu bilgisayardaki dosy
 - Yeni `tests/e2e/hevc_copy.py`: iki sayfa `channel="chrome"` (yoksa `msedge`, ikisi de yoksa atla), sentetik 8-bit x265 film (açık GOP, `keyint=240`). Ölçüt: kopya kipinde iki sayfa da oynuyor, sarma çalışıyor, siyah resim yok (`sampleLuma`), konsolda ölümcül hata yok. Sonra Playwright'ın kendi Chromium'uyla üçüncü sayfa katılıyor: akış çevirmeye dönüyor, üç sayfa da oynuyor. `CLAUDE.md`'deki tarayıcı testleri listesine ekle.
 - Not: HEVC'li tarayıcı CI'da yok; bu test sadece bu bilgisayarda.
 
-**İP-10e. Elle deneme ve HDR.** Gerçek bir film gecesinde Daredevil'le: arkadaşların tarayıcıları (Yandex, Opera GX, telefon) ne cevap veriyor (`playback.log`'a `hello`'daki `hevc` yazılsın), açık GOP'ta `watchFrames` yanlış alarm veriyor mu. Sonra bir HDR10 film ve DV 8 ile `HEVC_COPY=hdr`; SDR ekranda renkler, iPhone'da Safari.
+**İP-10e. Elle deneme ve HDR.** Gerçek bir film gecesinde Daredevil'le: arkadaşların tarayıcıları (Yandex, Opera GX, telefon) ne cevap veriyor (`playback.log`'a `hello`'daki `hevc` yazılsın), açık GOP'ta `watchFrames` yanlış alarm veriyor mu. Sonra bir HDR10 film ve DV 8 (geliştirme sırasında kodda açılarak, kullanıcı ayarı olmadan); SDR ekranda renkler, iPhone'da Safari.
 
 Sıra: 10a ve 10b birlikte, sonra 10c, sonra 10d; 10e elle. `web/app.js` ve `server/main.py` İP-8 ile ortak; aynı dalgaya konmamalı.
 

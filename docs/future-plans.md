@@ -226,7 +226,7 @@ Elle hizalamanın ([altyazi-hizalama-plani.md](altyazi-hizalama-plani.md)) bir s
 
 ## Diğer gelecek işler
 
-- **HEVC'yi çevirmeden yollama:** odadaki herkes oynatabiliyorsa kopya kipi, desteksiz biri gelince çevirmeye dönüş. Araştırma ve adımlar: [hevc-arastirma.md](hevc-arastirma.md) (12 Kasım).
+- **HEVC'yi çevirmeden yollama:** odadaki herkes oynatabiliyorsa kopya kipi, desteksiz biri gelince çevirmeye dönüş. Araştırma ve adımlar: [hevc-arastirma.md](hevc-arastirma.md) (12 Kasım). Kodlanmadı; kullanıcıya soru ya da ayar olmadan, kendiliğinden olacak.
 
 - **Faz 2, altyazı otomasyonu:** dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi (README'deki "Sonraki fazlar"). Çevirinin ayrıntılı planı: [altyazi-ceviri-plani.md](altyazi-ceviri-plani.md) (3 Kasım); hizalamanınki yukarıda ve [altyazi-hizalama-plani.md](altyazi-hizalama-plani.md) (9 Kasım).
 - **Faz 3, sadece link:** film parçaları da eşler arası (WebRTC DataChannel), doğrudan bağlantı olmazsa Cloudflare TURN. Funnel'ın bant sınırını ve host'un Tailscale bağımlılığını kaldırır. Gerekenler: sayfa sabit bir HTTPS adresinde (GitHub Pages ya da kendi alan adı), iki tarafı tanıştıran küçük bir sinyal sunucusu (proje sahibinin P2P mesajlaşma uygulamasındaki sinyal ve şifreleme kısmı uyarlanabilir), hls.js'e parçaları kanaldan isteyen bir yükleyici, gönderen tarafta host'un sekmesi ya da `aiortc`. Darboğazlar: host'un upload'u (her izleyiciye ayrı kopya; ~30 Mbps'te 5 Mbps'lik filmle 4–5 kişi), iki taraf da katı NAT arkasındaysa TURN (bütün trafik oradan; kendi VPS'inde coturn ucuz, hazır servislerde iki saatlik film izleyici başına ~4–5 GB), DataChannel'da akış kontrolü ve ileri sarmada gecikme.
