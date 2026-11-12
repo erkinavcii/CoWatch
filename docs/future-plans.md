@@ -184,6 +184,8 @@ En güvenli başlangıç: sunucu öneri yapar ("Bu filmin aynısı sende var, ke
 
 Elle hizalamanın ([altyazi-hizalama-plani.md](altyazi-hizalama-plani.md)) bir sonraki adımı: kaymış altyazıyı kullanıcı satır aramadan, program kendisi oturtsun. Elle hizalama önce gelir: otomatik yöntem müzikli ya da az konuşmalı filmlerde yanılabilir, o zaman elle düzeltmek gerekir.
 
+**Durum (12 Kasım):** altyazıdan altyazıya hizalama yapıldı, `alass` olmadan, saf Python'la (`server/align.py`; numpy da yok). Çalıştırılabilir bir dosya indirmek ve pakete koymak gerekmedi, GPL ikilisinin lisans notu da yok. Yöntem: iki altyazının konuşma aralıkları bit dizisi (büyük tamsayı) olur, her kare hızı oranı (1, 25/23,976, 24/25 …) ve ±%0,2 ince ölçek için ±120 sn'deki her kayma 100 ms ızgarada denenir, en iyisi 10 ms'de inceltilir; kesilmiş ya da eklenmiş bir sahne için 49 bölme noktasında iki ayrı kayma denenir ve sadece belirgin kazançta (%5) alınır (en çok iki parça). Güven, şansa göre düzeltilmiş örtüşme; 0,35'in altı saklanmaz. Sentetik testlerde (1,5 saatlik, ≈ 1000 satır): kayma, 25 → 23,976, ikisi birden, kesilmiş sahne: ortanca hata 0–3 ms; satırları farklı bölünmüş, eksik ve fazla satırlı, ±60 ms oynayan "başka dil" kopyasında ≈ 40 ms (oynamanın kendisi); iki ilgisiz altyazı güven ≈ 0,05. Bir hizalama ≈ 0,3 sn. Kullanıcının gördüğü aşağıdaki gibi; panelden değil altyazı listesinden. Gerçek bir RU/TR çiftiyle henüz denenmedi. **Sıradaki:** filmin sesine göre hizalama (2. kaynak); bunun için de önce saf Python'la ses etkinliği (ffmpeg'in 8 kHz tek kanal çıktısının enerjisi) denenebilir, sonra aynı arama. Ayrıca kişinin elle hizaladığı kaymanın referansa uygulanması.
+
 ### İki kaynak
 
 1. **Başka bir altyazıya göre (önce bu):** "Bunu şu altyazıya hizala". Satırların zamanlarının deseni (ne zaman konuşuluyor, ne zaman susuluyor) dilden bağımsız olduğu için Rusça bir altyazı Türkçe bir altyazıya göre hizalanabilir. Referans:
@@ -213,9 +215,9 @@ Elle hizalamanın ([altyazi-hizalama-plani.md](altyazi-hizalama-plani.md)) bir s
 
 ### Adımlar (öneri)
 
-1. Paket ve geliştirme ortamına `alass` (`tools\`, `ALASS_PATH`); yoksa düğme görünmez.
-2. Altyazıdan altyazıya hizalama: sunucu iki altyazıyı geçici SRT'lere yazar, `alass`'ı çalıştırır, çıktıyı yeni altyazı olarak saklar. pytest: kaydırılmış ve hızlandırılmış bir SRT'nin aslına dönmesi.
-3. Sesten hizalama: önce ffmpeg'le sesi tek kanala, düşük örnekleme hızına çıkarmak (hızlı), sonra `alass`'a vermek. Gerçek bir filmle süre ölçümü.
+1. ~~Paket ve geliştirme ortamına `alass`~~: gerekmedi, Python'la yapıldı.
+2. Altyazıdan altyazıya hizalama: **yapıldı** (12 Kasım, `server/align.py`, `tests/test_align.py`).
+3. Sesten hizalama: önce ffmpeg'le sesi tek kanala, düşük örnekleme hızına çıkarmak (hızlı), konuşma aralıklarını bulmak, sonra `align.py`'nin aynı aramasına vermek. Gerçek bir filmle süre ölçümü.
 4. Yapay zekâ çevirisinden önce kaynağı otomatik hizalama önerisi ([altyazi-ceviri-plani.md](altyazi-ceviri-plani.md), "Bağlantılı iş").
 
 ### Bilinenler ve riskler
@@ -228,7 +230,7 @@ Elle hizalamanın ([altyazi-hizalama-plani.md](altyazi-hizalama-plani.md)) bir s
 
 - **HEVC'yi çevirmeden yollama:** odadaki herkes oynatabiliyorsa kopya kipi, desteksiz biri gelince çevirmeye dönüş. Araştırma ve adımlar: [hevc-arastirma.md](hevc-arastirma.md) (12 Kasım). Kodlanmadı; kullanıcıya soru ya da ayar olmadan, kendiliğinden olacak.
 
-- **Faz 2, altyazı otomasyonu:** dil tercihli yedek zinciri, alass ile hizalama, iki aşamalı LLM çevirisi (README'deki "Sonraki fazlar"). Çevirinin ayrıntılı planı: [altyazi-ceviri-plani.md](altyazi-ceviri-plani.md) (3 Kasım); hizalamanınki yukarıda ve [altyazi-hizalama-plani.md](altyazi-hizalama-plani.md) (9 Kasım).
+- **Faz 2, altyazı otomasyonu:** dil tercihli yedek zinciri, sesten hizalama (altyazıdan altyazıya yapıldı), iki aşamalı LLM çevirisi (README'deki "Sonraki fazlar"). Çevirinin ayrıntılı planı: [altyazi-ceviri-plani.md](altyazi-ceviri-plani.md) (3 Kasım); hizalamanınki yukarıda ve [altyazi-hizalama-plani.md](altyazi-hizalama-plani.md) (9 Kasım).
 - **Faz 3, sadece link:** film parçaları da eşler arası (WebRTC DataChannel), doğrudan bağlantı olmazsa Cloudflare TURN. Funnel'ın bant sınırını ve host'un Tailscale bağımlılığını kaldırır. Gerekenler: sayfa sabit bir HTTPS adresinde (GitHub Pages ya da kendi alan adı), iki tarafı tanıştıran küçük bir sinyal sunucusu (proje sahibinin P2P mesajlaşma uygulamasındaki sinyal ve şifreleme kısmı uyarlanabilir), hls.js'e parçaları kanaldan isteyen bir yükleyici, gönderen tarafta host'un sekmesi ya da `aiortc`. Darboğazlar: host'un upload'u (her izleyiciye ayrı kopya; ~30 Mbps'te 5 Mbps'lik filmle 4–5 kişi), iki taraf da katı NAT arkasındaysa TURN (bütün trafik oradan; kendi VPS'inde coturn ucuz, hazır servislerde iki saatlik film izleyici başına ~4–5 GB), DataChannel'da akış kontrolü ve ileri sarmada gecikme.
 - **Yavaş bağlantılıya düşük kalite (5 Kasım fikri):** Bugün sunucu filmi tek kalitede hazırlıyor, herkes aynısını indiriyor; bağlantısı yavaş olan takılıyor ve "biri takılırsa herkes bekler" kuralıyla herkesi durduruyor. Kamera ve ses için sorun yok: WebRTC her bağlantıda bit hızını kendisi düşürüyor (`SENDER_LIMITS` sadece üst sınır). Film için iki yol:
   - *Tam çözüm:* ffmpeg aynı filmi iki üç kalitede (örneğin 1080p, 720p, 480p) üretir, bir ana playlist hepsini listeler; hls.js herkesin hızını ölçüp kendine uyanı seçer, hız düşünce daha küçüğe geçer. Senkron kaliteden bağımsız (film zamanı aynı). Bedeli: dönüştürme iki üç katı iş (NVENC kaldırır, işlemciyle zor) ve disk; kopya kipinde (dönüştürme yokken) düşük kaliteler ayrıca kodlanmalı. Bütün parçalar aynı anahtar karelerde bölünmeli.

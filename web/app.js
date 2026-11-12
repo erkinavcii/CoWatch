@@ -341,6 +341,7 @@
     if (params.at !== undefined) params.at = fmtTime(params.at);
     if (msg.key === 'restarting') return; // the stage shows its own loader
     if (['translating', 'translated', 'translate_failed'].includes(msg.key)) { onAiStatus(msg, params); return; }
+    if (['aligning', 'aligned', 'align_failed'].includes(msg.key)) { onAlignStatus(msg, params); return; }
     // Opening a film takes a few steps: the loader on the stage follows them, for everyone.
     if (OPEN_ORDER.includes(msg.key)) {
       S.opening = true;
@@ -2951,6 +2952,7 @@
       if (S.isHost) startShare();
       renderUpdate(status.update);
       if (status.ai) { AI.status = status.ai; renderAi(); }
+      if (ALIGN.allowed !== !!status.canAlign) { ALIGN.allowed = !!status.canAlign; renderTracks(); }
     } catch { /* offline: the websocket indicator already shows it */ }
   }
 
@@ -3916,6 +3918,95 @@
     renderAi();
   }
 
+  // ---- automatic alignment to another subtitle (server/align.py): "Otomatik hizala" in the list
+  // of this film's subtitles, with the subtitle to fit it to. The result is a new subtitle for
+  // everyone ("… · hizalı"); one notice follows it for everyone, like a translation.
+  const ALIGN = { allowed: false, open: null, busy: null, toast: null };
+  // Best references first: the file's own subtitles, then ones matched by the file's hash, then
+  // my main subtitle (each in the same language first); never the subtitle itself or what was
+  // made from it.
+  function alignReferences (track) {
+    const score = (tr) => (tr.source === 'embedded' ? 0 : tr.hashMatch ? 2 : tr.id === S.primary ? 4 : 6) + (tr.lang === track.lang ? 0 : 1);
+    return S.tracks.filter((tr) => tr.id !== track.id && tr.fromTrack !== track.id)
+      .sort((a, b) => score(a) - score(b));
+  }
+  function alignControls (li, track) {
+    const refs = alignReferences(track);
+    if (!ALIGN.allowed || !refs.length) return;
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'ghost align-btn'; btn.textContent = t('align_auto');
+    btn.disabled = !!ALIGN.busy;
+    btn.addEventListener('click', () => { ALIGN.open = ALIGN.open === track.id ? null : track.id; renderTracks(); });
+    li.insertBefore(btn, li.lastChild);
+    if (ALIGN.open !== track.id) return;
+    const pick = document.createElement('div');
+    pick.className = 'align-pick';
+    const text = document.createElement('span'); text.textContent = t('align_reference');
+    const select = document.createElement('select');
+    select.className = 'align-ref'; select.title = t('align_reference');
+    fillSelect(select, refs.map((tr) => [tr.id, trackLabel(tr)]), refs[0].id);
+    const go = document.createElement('button');
+    go.type = 'button'; go.className = 'primary align-go'; go.textContent = t('align_go');
+    go.disabled = !!ALIGN.busy;
+    go.addEventListener('click', async () => {
+      go.disabled = true; go.classList.add('busy');
+      try {
+        const res = await api(`/api/subtitles/${track.id}/align`, { json: { reference: select.value } });
+        ALIGN.open = null;
+        if (res.cached) toast(t('align_already'));
+        // The subtitle I watch with is replaced by its aligned copy.
+        for (const slot of ['primary', 'secondary']) {
+          if (S[slot] === track.id && S.tracks.some((tr) => tr.id === res.track)) selectTrack(slot, res.track);
+        }
+      } catch (err) {
+        // A failed alignment already has everyone's notice.
+        const code = String(err && err.message).split(':')[0];
+        if (!['align_unsure', 'align_failed', 'align_empty'].includes(code)) toast(errorText(err), 'error');
+      }
+      renderTracks();
+    });
+    const cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'ghost'; cancel.textContent = t('align_cancel');
+    cancel.addEventListener('click', () => { ALIGN.open = null; renderTracks(); });
+    pick.append(text, select, go, cancel);
+    li.classList.add('align-open');
+    li.appendChild(pick);
+  }
+  function alignNote (params) {
+    const num = (n, digits) => Number(n).toLocaleString(prefs.uiLang, { minimumFractionDigits: digits, maximumFractionDigits: digits || 3 });
+    const shift = Number(params.shift) || 0;
+    const parts = [`${shift >= 0 ? '+' : '−'}${num(Math.abs(shift), 1)} ${t('align_seconds')}`];
+    if (Array.isArray(params.fps)) parts.push(`${num(params.fps[0])} → ${num(params.fps[1])}`);
+    else if (params.scale && Math.abs(params.scale - 1) > 0.0002) parts.push(`× ${num(params.scale)}`);
+    if (params.segments > 1) parts.push(t('align_parts', { n: params.segments }));
+    return parts.join(', ');
+  }
+  function onAlignStatus (msg, params) {
+    const name = `${langName(params.lang || '')} · ${params.label || ''}`;
+    let text;
+    if (msg.key === 'aligning') {
+      ALIGN.busy = true;
+      text = t('status_aligning', { label: name });
+    } else if (msg.key === 'aligned') {
+      text = t('status_aligned', { label: name, how: alignNote(params) });
+      if (params.segments > 1) text += ` ${t('align_check')}`;
+    } else {
+      const key = `err_${params.code}`;
+      const known = (I18N[prefs.uiLang] || {})[key] || I18N.en[key];
+      text = t('status_align_failed', { label: name, detail: known ? t(key) : params.code });
+    }
+    if (!ALIGN.toast || !ALIGN.toast.isConnected) ALIGN.toast = toast(text, 'info', 600000);
+    ALIGN.toast.textContent = text;
+    if (msg.key !== 'aligning') {
+      ALIGN.toast.className = `toast ${msg.level === 'error' ? 'error' : 'info'}`;
+      const done = ALIGN.toast;
+      ALIGN.toast = null;
+      setTimeout(() => done.remove(), msg.level === 'error' ? 12000 : 6000);
+      ALIGN.busy = null;
+    }
+    renderTracks();
+  }
+
   // ---------------------------------------------------------------- text chat
   // On a wide screen the chat is a column right of the film, on a phone held upright a box
   // under it; open unless closed (kept in prefs). In fullscreen, in the always-on-top window
@@ -4303,7 +4394,7 @@
     const alone = /^#\d+$/.test(track.label) && S.tracks.filter((tr) => tr.source === 'embedded' && tr.lang === track.lang).length === 1;
     const plain = track.source === 'embedded' && (alone || [name, said(track.lang)].some((n) => n && n.toLowerCase() === String(track.label).toLowerCase()));
     const label = track.source !== 'embedded' ? track.label : plain ? t('subs_embedded') : `${t('subs_embedded')} · ${track.label}`;
-    return `${name} · ${label}${track.hashMatch ? ' ✓' : ''}`;
+    return `${name} · ${label}${track.source === 'aligned' ? ` · ${t('subs_aligned')}` : ''}${track.hashMatch ? ' ✓' : ''}`;
   }
 
   function renderTracks () {
@@ -4331,7 +4422,8 @@
     for (const track of S.tracks) {
       const li = document.createElement('li');
       const lang = document.createElement('span'); lang.className = 'lang'; lang.textContent = track.lang.toUpperCase();
-      const label = document.createElement('span'); label.className = 'label'; label.textContent = track.label; label.title = track.label;
+      const label = document.createElement('span'); label.className = 'label';
+      label.textContent = track.source === 'aligned' ? `${track.label} · ${t('subs_aligned')}` : track.label; label.title = label.textContent;
       li.append(lang, label);
       for (const [slot, key] of [[S.primary, 'subs_is_primary'], [S.secondary, 'subs_is_secondary']]) {
         if (slot !== track.id) continue;
@@ -4349,6 +4441,7 @@
         try { await api(`/api/subtitles/${track.id}`, { method: 'DELETE' }); } catch (err) { toast(errorText(err), 'error'); }
       });
       li.appendChild(del);
+      alignControls(li, track);
       el.trackList.appendChild(li);
     }
   }

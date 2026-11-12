@@ -135,6 +135,35 @@ def run(headed: bool) -> None:
             check("and it stays after reloading the page",
                   b.evaluate(f"() => document.querySelector('#offsetRows output').textContent") == "+1,5 s")
 
+            # ---- automatic alignment: a shifted copy of the English subtitle, fitted to the file's own
+            shifted = tmp / "en.shifted.srt"
+            shifted.write_text(SRT_EN.replace("00:00:00,500 --> 00:00:07,500", "00:00:02,800 --> 00:00:09,800"),
+                               encoding="utf-8")
+            a.evaluate("() => { document.querySelector('details.add-subs').open = true; }")
+            a.set_input_files("#subFile", str(shifted))
+            a.fill("#subLang", "en")
+            a.click("#uploadForm button[type=submit]")
+            for page in (a, b):
+                page.wait_for_function(f"() => {DBG}.tracks.some(t => t.label === 'en.shifted.srt')", timeout=10000)
+            upload = next(t for t in a.evaluate(f"() => {DBG}.tracks") if t["label"] == "en.shifted.srt")
+            row = a.locator("#trackList li", has_text="en.shifted.srt")
+            row.locator(".align-btn").dispatch_event("click")
+            a.wait_for_selector("#trackList .align-pick select")
+            default = a.eval_on_selector("#trackList .align-pick select", "s => s.value")
+            check("Auto-align offers the file's own subtitle in the same language as the reference",
+                  default == en["id"], f"{default} {en['id']}")
+            a.locator("#trackList .align-pick .align-go").dispatch_event("click")
+            for page in (a, b):
+                page.wait_for_function(f"() => {DBG}.tracks.some(t => t.source === 'aligned')", timeout=20000)
+                page.wait_for_function("() => [...document.querySelectorAll('#trackList .label')]"
+                                       ".some(l => l.textContent === 'en.shifted.srt · hizalı')", timeout=5000)
+            made = next(t for t in a.evaluate(f"() => {DBG}.tracks") if t["source"] == "aligned")
+            first = a.evaluate(f"async () => (await (await fetch('/api/subtitles/{made['id']}.json')).json()).cues[0][0]")
+            notice = b.evaluate("() => [...document.querySelectorAll('#toasts .toast')].map(n => n.textContent).join(' | ')")
+            check("the aligned copy joins both windows' lists, its line where the file's own one is",
+                  made["fromTrack"] == upload["id"] and made["reference"] == en["id"] and abs(first - 0.5) <= 0.1
+                  and "hizalandı (−2,3 sn)" in notice, f"{made} {first} {notice}")
+
             # ---- the sound track, for everyone
             a.evaluate("() => window.scrollTo(0, 0)")
             labels = a.eval_on_selector_all("#audioSel option", "os => os.map(o => o.textContent)")

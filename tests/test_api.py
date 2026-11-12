@@ -559,3 +559,79 @@ def test_buffering_goes_to_the_playback_log():
     assert len(started) == 1 and "Yavas [buffering]" in started[0] and "@ 42.5s" in started[0]
     assert "0.2 s in hand" in started[0]
     assert len(ended) == 1 and "waited " in ended[0] and "in hand" not in ended[0]
+
+
+def _speech(rng, text):
+    cues, t = [], 3.0
+    while t < 1200:
+        t += rng.uniform(0.3, 4)
+        d = rng.uniform(1, 4)
+        cues.append((round(t, 3), round(t + d, 3), text))
+        t += d
+    return cues
+
+
+def test_a_subtitle_is_aligned_to_another_once_for_everyone(monkeypatch, tmp_path):
+    import dataclasses
+    import random
+
+    import server.main as main
+    from server.subtitles import SubtitleStore
+
+    class Session:
+        def __init__(self):
+            self.source = type("Source", (), {"media_key": "film1", "title": "Test Film", "kind": "file"})()
+            self.stream = None
+
+        def stop(self):
+            pass
+
+    rng = random.Random(4)
+    ref = _speech(rng, "line")
+    other = _speech(rng, "another film")
+    monkeypatch.setattr(main, "cfg", dataclasses.replace(main.cfg, ai_translate="trusted", data_dir=tmp_path))
+    monkeypatch.setattr(main.ctl, "store", SubtitleStore(tmp_path / "subs"))
+    monkeypatch.setattr(main.ctl, "session", Session())
+    monkeypatch.setattr(main.ctl, "aligning", None)
+    store = main.ctl.store
+    embedded = store.add("film1", "en", "#2", "embedded", ref, extra={"stream": 2, "hashMatch": True})
+    shifted = store.add("film1", "ru", "OpenSubtitles #1", "addon", [(s + 3.2, e + 3.2, x) for s, e, x in ref])
+    wrong = store.add("film1", "tr", "upload.srt", "upload", other)
+    host = {"base_url": "http://localhost:8000", "cookies": {"cw_key": KEY}, "client": ("127.0.0.1", 5)}
+    friend = {"base_url": "http://pc.tail1234.ts.net", "cookies": {"cw_key": KEY}, "client": ("127.0.0.1", 5),
+              "headers": {"Tailscale-User-Login": "friend@example.com"}}
+    url = f"/api/subtitles/{shifted['id']}/align"
+    with TestClient(app, **friend) as client:
+        assert client.get("/api/status").json()["canAlign"] is False
+        assert client.post(url, json={"reference": embedded["id"]}).json()["detail"] == "align_trusted_only"
+    monkeypatch.setattr(main, "cfg", dataclasses.replace(main.cfg, ai_translate="everyone"))
+    with TestClient(app, **friend) as client:
+        assert client.get("/api/status").json()["canAlign"] is True
+    monkeypatch.setattr(main, "cfg", dataclasses.replace(main.cfg, ai_translate="trusted"))
+    with TestClient(app, **host) as client:
+        assert client.post(url, json={"reference": shifted["id"]}).json()["detail"] == "align_same"
+        assert client.post(url, json={"reference": "0123456789"}).status_code == 404
+        with client.websocket_connect("/ws", headers={"host": "localhost:8000"}) as ws:
+            next_of(ws, "welcome")
+            res = client.post(url, json={"reference": embedded["id"]})
+            assert res.status_code == 200, res.text
+            body = res.json()
+            assert body["cached"] is False and body["alignment"]["segments"] == 1
+            assert abs(body["alignment"]["shift"] + 3.2) < 0.02
+            assert next_of(ws, "status")["key"] == "aligning"
+            assert next_of(ws, "subtitles")["tracks"][-1]["id"] == body["track"]
+            done = next_of(ws, "status")
+            assert done["key"] == "aligned" and done["params"]["track"] == body["track"]
+            assert done["params"]["lang"] == "ru" and done["params"]["segments"] == 1
+        made = store.find("film1", source="aligned")
+        assert made["id"] == body["track"] and made["fromTrack"] == shifted["id"]
+        assert made["reference"] == embedded["id"] and made["lang"] == "ru"
+        assert made["label"] == "OpenSubtitles #1" and made["cues"] == len(ref)
+        assert abs(store.cues("film1", made["id"])[0][0] - ref[0][0]) < 0.02
+        again = client.post(url, json={"reference": embedded["id"]}).json()
+        assert again["cached"] is True and again["track"] == made["id"]
+        # Two different films: not trusted, nothing stored.
+        res = client.post(f"/api/subtitles/{wrong['id']}/align", json={"reference": embedded["id"]})
+        assert res.status_code == 422 and res.json()["detail"] == "align_unsure"
+        assert len([t for t in store.list("film1") if t["source"] == "aligned"]) == 1
+        assert main.ctl.aligning is None

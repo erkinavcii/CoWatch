@@ -32,7 +32,7 @@ from starlette.websockets import WebSocketState
 
 from .addons import AddonError, AddonStore, episode_label, magnet, subtitle_key, subtitle_lang
 from .config import AI_PRESETS, CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
-from . import episodes, filepicker, library, netpanel, stremio, tailscale, translate, updates
+from . import align, episodes, filepicker, library, netpanel, stremio, tailscale, translate, updates
 from .version import VERSION
 from .positions import PositionStore
 from .stremio import StremioError
@@ -126,6 +126,7 @@ class Controller:
         self._relays: set[asyncio.Task] = set()
         self.screen_paused = False  # the film was paused for a screen share: it goes on afterwards
         self.translating: Optional[str] = None  # the language of the translation running now
+        self.aligning: Optional[str] = None  # the subtitle being aligned now (server/align.py)
         self.open_task: Optional[asyncio.Task] = None  # the film being opened, to cancel
         self.opening_hash: Optional[str] = None  # its torrent, for the progress shown while it opens
         self.embedded_tried: set[str] = set()  # films whose own subtitles were read (or tried) this run
@@ -966,6 +967,49 @@ class Controller:
         finally:
             self.translating = None
 
+    # ---- subtitle-to-subtitle alignment (server/align.py) ----
+    def aligned_track(self, source_id: str, reference_id: str) -> Optional[dict]:
+        """This subtitle aligned to this reference before: the same pair is not aligned twice."""
+        if self.session is None:
+            return None
+        return self.store.find(self.session.source.media_key, source="aligned", fromTrack=source_id,
+                               reference=reference_id)
+
+    async def align_subtitle(self, source: dict, reference: dict) -> dict:
+        """Fits `source` onto `reference` in a worker thread; the result joins everyone's list as
+        a new subtitle. Everyone sees one notice for it. Raises align.AlignError."""
+        session = self.session
+        key = session.source.media_key
+        about = {"lang": source["lang"], "label": source["label"]}
+        self.aligning = source["id"]
+        try:
+            await self.status("aligning", **about)
+            ref_cues = self.store.cues(key, reference["id"])
+            cues = self.store.cues(key, source["id"])
+            result = await asyncio.to_thread(align.align, ref_cues, cues)
+            summary = result.summary()
+            log.info("aligned %s to %s: %s", source["id"], reference["id"], summary)
+            if result.score < align.MIN_SCORE:
+                raise align.AlignError(f"confidence {result.score:.2f}", "align_unsure")
+            if session is not self.session:
+                raise align.AlignError("the film was closed", "no_media")
+            track = self.store.add(key, source["lang"], source["label"], "aligned", result.apply(cues),
+                                   extra={"fromTrack": source["id"], "reference": reference["id"],
+                                          "alignment": summary})
+            await self.broadcast_tracks()
+            await self.status("aligned", **about, track=track["id"], **{k: summary[k] for k in
+                                                                       ("shift", "fps", "scale", "segments", "score")})
+            return track
+        except align.AlignError as exc:
+            await self.status("align_failed", "error", **about, code=exc.code)
+            raise
+        except Exception as exc:  # keep the room usable whatever happened
+            log.exception("alignment failed")
+            await self.status("align_failed", "error", **about, code="align_failed")
+            raise align.AlignError(str(exc)[:200]) from exc
+        finally:
+            self.aligning = None
+
     async def add_addon_subtitle(self, ref: str) -> dict:
         session = self._require_session()
         item = self.addons.lookup(ref)
@@ -1359,6 +1403,7 @@ async def api_status(request: Request):
             "provider": cfg.ai_label,
             "busy": ctl.translating,
         },
+        "canAlign": can_translate(request),
     }
 
 
@@ -1824,6 +1869,36 @@ async def api_translate(body: TranslateBody, request: Request):
     ctl.translating = lang  # before the task starts: a second click finds it busy
     asyncio.create_task(ctl.translate_subtitle(source, lang))
     return {"ok": True}
+
+
+class AlignBody(BaseModel):
+    reference: str = Field(max_length=20)  # the subtitle that fits the film
+
+
+@app.post("/api/subtitles/{track_id}/align")
+async def api_subtitle_align(track_id: str, body: AlignBody, request: Request):
+    """Aligns a subtitle of the open film to another one (server/align.py) and stores the result
+    as a new subtitle for everyone. Who may: like starting a translation (can_translate)."""
+    if not can_translate(request):
+        raise HTTPException(403, detail="align_trusted_only")
+    if ctl.session is None:
+        raise HTTPException(409, detail="no_media")
+    tracks = {t["id"]: t for t in ctl.tracks()}
+    source, reference = tracks.get(track_id), tracks.get(body.reference)
+    if source is None or reference is None:
+        raise HTTPException(404, detail="unknown_subtitle")
+    if source["id"] == reference["id"]:
+        raise HTTPException(400, detail="align_same")
+    done = ctl.aligned_track(source["id"], reference["id"])
+    if done is not None:
+        return {"track": done["id"], "cached": True, "alignment": done.get("alignment")}
+    if ctl.aligning:
+        raise HTTPException(409, detail="align_busy")
+    try:
+        track = await ctl.align_subtitle(source, reference)
+    except align.AlignError as exc:
+        raise HTTPException(422 if exc.code == "align_unsure" else 400, detail=exc.code) from None
+    return {"track": track["id"], "cached": False, "alignment": track["alignment"]}
 
 
 @app.post("/api/media/close")
