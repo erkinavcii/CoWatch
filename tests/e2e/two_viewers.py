@@ -142,7 +142,9 @@ def make_video(path: Path) -> None:
 
 
 def start_server(port: int, data_dir: Path, extra: dict | None = None) -> subprocess.Popen:
-    env = dict(os.environ, ACCESS_KEY=KEY, DATA_DIR=str(data_dir), COWATCH_DOTENV="", ADDONS_BUILTIN="0", **(extra or {}))
+    env = dict(os.environ, ACCESS_KEY=KEY, DATA_DIR=str(data_dir), COWATCH_DOTENV="", ADDONS_BUILTIN="0",
+               UPDATE_CHECK="0")  # no request to GitHub's releases from the tests
+    env.update(extra or {})
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server.main:app", "--host", "127.0.0.1",
          "--port", str(port), "--log-level", "warning"],

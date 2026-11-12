@@ -4,7 +4,7 @@
 ; without touching them, and removing the app leaves them too.
 
 #ifndef AppVersion
-  #define AppVersion "0.2.0"
+  #error AppVersion comes from tools\build_windows.ps1, which reads it from server\version.py
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\CoWatch"

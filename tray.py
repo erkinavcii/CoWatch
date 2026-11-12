@@ -128,6 +128,7 @@ def main() -> None:
     import pystray
 
     import run
+    from server.version import VERSION
 
     text = TEXTS[ui_lang()]
     launcher = run.Launcher()
@@ -174,6 +175,7 @@ def main() -> None:
         pystray.MenuItem(text["copy"], copy_link),
         pystray.MenuItem(text["settings"], open_settings),
         pystray.Menu.SEPARATOR,
+        pystray.MenuItem(f"Co-Watch {VERSION}", lambda _icon, _item: None, enabled=False),  # a label
         pystray.MenuItem(text["quit"], quit_app),
     ))
     worker = threading.Thread(target=serve, name="server", daemon=True)

@@ -32,7 +32,8 @@ from starlette.websockets import WebSocketState
 
 from .addons import AddonError, AddonStore, episode_label, magnet, subtitle_key, subtitle_lang
 from .config import AI_PRESETS, CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
-from . import episodes, filepicker, library, netpanel, stremio, tailscale, translate
+from . import episodes, filepicker, library, netpanel, stremio, tailscale, translate, updates
+from .version import VERSION
 from .positions import PositionStore
 from .stremio import StremioError
 from .media import (MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, extract_subtitles,
@@ -1110,6 +1111,7 @@ def in_library(path: Path) -> bool:
 
 
 ctl = Controller()
+update_check = updates.UpdateCheck(cfg.update_url)  # a newer release: the host's notice
 
 
 def _key_ok(value: Optional[str]) -> bool:
@@ -1192,6 +1194,8 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(ctl.watchdog_loop()),
         asyncio.create_task(ctl.throttle_loop()),
     ]
+    if cfg.update_check:
+        ctl.tasks.append(asyncio.create_task(update_check.loop(cfg.update_delay_s)))
     yield
     ctl.note_position(flush=True)
     encoder_check.cancel()
@@ -1344,6 +1348,7 @@ async def api_status(request: Request):
         "helper": await ctl.helper.healthy(),
         "osEnabled": ctl.os.enabled,
         "isHost": is_local(request),
+        "update": update_check.latest if is_local(request) else None,
         "canLibrary": is_trusted(request),
         "canChangeMedia": can_change_media(request),
         "libraryConfigured": bool(cfg.library_dirs),
@@ -1535,6 +1540,8 @@ async def api_settings(request: Request):
         "keyLocked": "ACCESS_KEY" in os.environ,
         "canRestart": launcher is not None,
         "mediaOpen": ctl.session is not None,
+        "version": VERSION,
+        "update": update_check.latest,
     }
 
 

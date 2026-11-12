@@ -17,6 +17,7 @@ Needs ffmpeg (with flite, as in the Gyan builds). Not part of pytest (no test_ p
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -24,8 +25,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
@@ -77,9 +80,53 @@ def fake_voice(work: Path) -> Path:
     return out
 
 
-def start_server(port: int, data_dir: Path, library: Path) -> subprocess.Popen:
+def start_fake_releases() -> tuple[ThreadingHTTPServer, list[str]]:
+    """GitHub's "latest release" answer, with a version far ahead of this one."""
+    agents: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            agents.append(self.headers.get("User-Agent", ""))
+            body = json.dumps({"tag_name": "v99.0.0", "draft": False, "prerelease": False}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, agents
+
+
+def check_update_notice(host, guest, agents: list[str]) -> None:
+    """The host's Share card says a new version is out, with the release page; the guest sees nothing."""
+    host.wait_for_selector("#updateNote", state="visible", timeout=15000)
+    text = host.locator("#updateNote").inner_text()
+    assert "99.0.0" in text, text
+    href = host.locator("#updateNote a").get_attribute("href")
+    assert href == "https://github.com/erkinavcii/CoWatch/releases/tag/v99.0.0", href
+    assert agents and all(a.startswith("Co-Watch/") for a in agents), agents
+    guest.wait_for_timeout(3500)  # one status poll
+    assert guest.locator("#updateNote").is_hidden(), "the guest sees the update notice"
+    assert guest.evaluate("fetch('/api/status').then(r => r.json()).then(s => s.update)") is None
+    ok("a newer release: a notice with its link for the host only")
+    host.click("#settingsBtn")
+    host.wait_for_selector("#settingsOverlay", state="visible", timeout=10000)
+    footer = host.locator("#settingsVersion").inner_text()
+    assert "0." in footer and "99.0.0" in footer, footer
+    host.click("#settingsClose")
+    host.wait_for_selector("#settingsOverlay", state="hidden", timeout=5000)
+    ok("the settings page shows this version and the new one")
+
+
+def start_server(port: int, data_dir: Path, library: Path, extra: dict | None = None) -> subprocess.Popen:
     env = dict(os.environ, DATA_DIR=str(data_dir), ACCESS_KEY=KEY, OPENSUBTITLES_API_KEY="", COWATCH_DOTENV="",
-               ADDONS_BUILTIN="0", LIBRARY_DIRS=str(library))
+               ADDONS_BUILTIN="0", LIBRARY_DIRS=str(library), UPDATE_CHECK="0")
+    env.update(extra or {})
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "server.main:app", "--host", "127.0.0.1", "--port", str(port),
@@ -436,7 +483,10 @@ def run(headed: bool) -> None:
     voice = fake_voice(work)
     port = free_port()
     base = f"http://localhost:{port}"
-    server = start_server(port, work / "data", video.parent)
+    releases, agents = start_fake_releases()
+    server = start_server(port, work / "data", video.parent, {
+        "UPDATE_CHECK": "1", "UPDATE_DELAY_S": "0",
+        "UPDATE_URL": f"http://127.0.0.1:{releases.server_address[1]}/repos/erkinavcii/CoWatch/releases/latest"})
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(
@@ -459,6 +509,7 @@ def run(headed: bool) -> None:
                 guest.wait_for_timeout(3500)  # one status poll
                 assert guest.locator("#pathForm").is_hidden(), "guest sees the local file field"
                 ok("local file field: host only")
+                check_update_notice(host, guest, agents)
 
                 check_library(host, guest, video)
 

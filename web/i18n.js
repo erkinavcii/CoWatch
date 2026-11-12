@@ -471,6 +471,9 @@ const I18N = {
     resume_ok: 'Tamam',
     resume_restart: 'Baştan başla',
     err_no_next: 'Sonraki bölüm bulunamadı.',
+    update_out: 'Co-Watch {version} çıktı.',
+    update_link: 'Sürüm sayfası',
+    update_this: 'Bu sürüm: Co-Watch {version}',
   },
   en: {
     join_title: 'Join the room',
@@ -942,6 +945,9 @@ const I18N = {
     resume_ok: 'OK',
     resume_restart: 'Start from the beginning',
     err_no_next: 'No next episode was found.',
+    update_out: 'Co-Watch {version} is out.',
+    update_link: 'Release page',
+    update_this: 'This version: Co-Watch {version}',
   },
   ru: {
     join_title: 'Войти в комнату',
@@ -1413,6 +1419,9 @@ const I18N = {
     resume_ok: 'ОК',
     resume_restart: 'Начать сначала',
     err_no_next: 'Следующая серия не найдена.',
+    update_out: 'Вышла Co-Watch {version}.',
+    update_link: 'Страница выпуска',
+    update_this: 'Эта версия: Co-Watch {version}',
   },
 };
 

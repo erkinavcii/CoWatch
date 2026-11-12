@@ -7,6 +7,7 @@ from pathlib import Path
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="cowatch-test-")
 os.environ["COWATCH_DOTENV"] = ""  # this computer's .env (Funnel, encoder...) stays out of the tests
 os.environ["ADDONS_BUILTIN"] = "0"  # no requests to Stremio's add-ons from the tests
+os.environ["UPDATE_CHECK"] = "0"  # nor to GitHub's releases (test_updates.py fakes them)
 os.environ.setdefault("ACCESS_KEY", "test-key")
 os.environ["OPENSUBTITLES_API_KEY"] = ""
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

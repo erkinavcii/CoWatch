@@ -267,6 +267,10 @@ class Settings:
     ai_api_key: str
     ai_model: str
     ai_translate: str  # "trusted": the host and co-hosts may start one; "everyone"
+    # is there a newer release (server/updates.py)
+    update_check: bool  # UPDATE_CHECK=0 turns it off
+    update_url: str
+    update_delay_s: float  # the first look, after the start
 
     @property
     def connection(self) -> str:
@@ -399,4 +403,7 @@ def get_settings() -> Settings:
         ai_api_key=_str(v, "AI_API_KEY"),
         ai_model=_str(v, "AI_MODEL") or preset["model"],
         ai_translate="everyone" if _str(v, "AI_TRANSLATE").lower() == "everyone" else "trusted",
+        update_check=_int(v, "UPDATE_CHECK", 1) != 0,
+        update_url=_str(v, "UPDATE_URL") or "https://api.github.com/repos/erkinavcii/CoWatch/releases/latest",
+        update_delay_s=_int(v, "UPDATE_DELAY_S", 30),
     )

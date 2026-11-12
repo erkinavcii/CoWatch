@@ -1,0 +1,78 @@
+# The Windows installer for a release: push a tag (git tag -a v0.3.0 -m "notes"; git push origin v0.3.0)
+# and this builds CoWatch-Setup-0.3.0.exe with tools/build_windows.ps1 and puts it on that tag's
+# GitHub Release. The tag must match VERSION in server/version.py (the build checks it). A release
+# that does not exist yet is made with the notes from the tag's message, else from the
+# CHANGELOG.md section of that version, else GitHub's generated notes; an existing one keeps its
+# notes and gets the installer (replaced if it was already there). Normal pushes do not run this.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # create the release and upload the installer
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: The tag's message (checkout fetches the tag without it)
+        shell: bash
+        run: git fetch --force origin "+refs/tags/$TAG:refs/tags/$TAG"
+      - name: The tag matches server/version.py
+        shell: powershell
+        run: .\tools\build_windows.ps1 -Version $env:TAG -VersionOnly
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Inno Setup
+        shell: powershell
+        run: choco install innosetup -y --no-progress
+      - name: The project's virtualenv (the build script uses .venv)
+        shell: powershell
+        run: python -m venv .venv
+      - name: Build the installer
+        shell: powershell
+        run: .\tools\build_windows.ps1 -Version $env:TAG
+      - name: Release notes
+        shell: bash
+        run: |
+          ver="${TAG#v}"
+          : > notes.md
+          if [ "$(git cat-file -t "$TAG")" = "tag" ]; then
+            git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$TAG" | sed '/-----BEGIN PGP SIGNATURE-----/,$d' > notes.md
+          fi
+          if [ ! -s notes.md ] && [ -f CHANGELOG.md ]; then
+            awk -v v="$ver" '
+              /^## / { if (found) exit; h = $2; gsub(/[][]/, "", h); sub(/^v/, "", h); if (h == v) { found = 1; next } }
+              found { print }
+            ' CHANGELOG.md > notes.md
+          fi
+          if ! grep -q '[^[:space:]]' notes.md; then : > notes.md; fi
+          echo "notes: $(wc -c < notes.md) bytes"
+      - name: Upload to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${TAG#v}"
+          setup="dist/CoWatch-Setup-$ver.exe"
+          test -f "$setup"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$setup" --clobber
+          elif [ -s notes.md ]; then
+            gh release create "$TAG" "$setup" --verify-tag --title "Co-Watch $ver" --notes-file notes.md
+          else
+            gh release create "$TAG" "$setup" --verify-tag --title "Co-Watch $ver" --generate-notes
+          fi

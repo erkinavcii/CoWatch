@@ -2949,6 +2949,7 @@
       if (status.progress) S.progress = status.progress;
       renderMediaPanel();
       if (S.isHost) startShare();
+      renderUpdate(status.update);
       if (status.ai) { AI.status = status.ai; renderAi(); }
     } catch { /* offline: the websocket indicator already shows it */ }
   }
@@ -3086,6 +3087,7 @@
     try { data = await api('/api/settings'); } catch (err) { toast(errorText(err), 'error'); return; }
     SH.settings = data;
     renderStorage();
+    renderVersion(data);
     SH.key = new URLSearchParams(new URL(SH.data ? SH.data.localLink : location.href).search).get('k');
     const v = data.values;
     const cur = data.current;
@@ -4477,6 +4479,36 @@
   function phoneSync () { keepAwake(); syncMediaSession(); }
   document.addEventListener('visibilitychange', phoneSync);
   setInterval(phoneSync, 3000);
+
+  // ---------------------------------------------------------------- a newer version (server/updates.py)
+  // The server asks GitHub once a day; the host's Share card and the settings page say when a
+  // newer release is out, with a link to it. Nothing more: no question, no automatic update.
+  const UPD = { latest: null };
+  function updateLink (u) {
+    const a = document.createElement('a');
+    a.href = u.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    a.textContent = t('update_link');
+    return a;
+  }
+  function renderUpdate (u) {
+    UPD.latest = u && u.version && /^https:\/\//.test(u.url || '') ? u : null;
+    const note = $('#updateNote');
+    if (!note) return;
+    note.hidden = !UPD.latest;
+    if (!UPD.latest) { note.textContent = ''; return; }
+    note.textContent = `${t('update_out', { version: UPD.latest.version })} `;
+    note.appendChild(updateLink(UPD.latest));
+  }
+  function renderVersion (data) {
+    const node = $('#settingsVersion');
+    if (!node || !data.version) return;
+    renderUpdate(data.update);
+    node.textContent = t('update_this', { version: data.version });
+    if (UPD.latest) {
+      node.append(' · ', t('update_out', { version: UPD.latest.version }), ' ');
+      node.appendChild(updateLink(UPD.latest));
+    }
+  }
 
   // For the browser console: cowatchDebug() shows the sync numbers.
   window.cowatchDebug = () => ({

@@ -1,7 +1,9 @@
 <#
 Builds the Windows installer: dist\CoWatch-Setup-<version>.exe
 
-    .\tools\build_windows.ps1
+    .\tools\build_windows.ps1                    (the version in server\version.py)
+    .\tools\build_windows.ps1 -Version 0.3.0     (must match it; the release workflow passes the tag)
+    .\tools\build_windows.ps1 -VersionOnly       (only check and print the version)
 
 1. PyInstaller turns tray.py into dist\CoWatch\CoWatch.exe (folder mode: antivirus programs
    flag single-file builds more often), with web\ and torrent-helper\ inside.
@@ -13,14 +15,27 @@ Builds the Windows installer: dist\CoWatch-Setup-<version>.exe
 Needs: the project's .venv, Inno Setup 6, and torrent-helper's npm packages.
 #>
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "",  # default: VERSION in server\version.py, the one place it is written
     [string]$FfmpegZip = "ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip",
-    [string]$NodeVersion = ""  # default: the version of the node on PATH
+    [string]$NodeVersion = "",  # default: the version of the node on PATH
+    [switch]$VersionOnly  # only check the version and print it (the release workflow, before building)
 )
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"  # Invoke-WebRequest is many times faster without the bar
 
 $root = Split-Path $PSScriptRoot -Parent
+
+# The app shows its version and compares it with GitHub's latest release (server/updates.py): an
+# installer named 0.3.0 with 0.2.0 inside would keep telling its host that 0.3.0 is out.
+$versionFile = Join-Path $root "server\version.py"
+$m = [regex]::Match([IO.File]::ReadAllText($versionFile), '(?m)^VERSION\s*=\s*"(\d+\.\d+\.\d+)"')
+if (-not $m.Success) { throw "no VERSION = ""x.y.z"" line in $versionFile" }
+$ownVersion = $m.Groups[1].Value
+if (-not $Version) { $Version = $ownVersion }
+$Version = $Version.TrimStart("v")
+if ($Version -ne $ownVersion) { throw "version $Version, but server\version.py says ${ownVersion}: change it there first" }
+Write-Host "Co-Watch $Version"
+if ($VersionOnly) { return }
 $py = Join-Path $root ".venv\Scripts\python.exe"
 $build = Join-Path $root "build"
 $cache = Join-Path $build "cache"
