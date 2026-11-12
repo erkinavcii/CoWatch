@@ -397,7 +397,7 @@
   function applyMedia (media) {
     const changedFilm = (S.media && S.media.mediaKey) !== (media && media.mediaKey);
     S.media = media;
-    if (changedFilm) { S.cues.clear(); resetAddonSubs(); }
+    if (changedFilm) { S.cues.clear(); resetAddonSubs(); ALIGN.swap = null; }
     if (!media || changedFilm) resetThumb();
     else if (!media.thumbs) hideThumb();
     if (!media) {
@@ -2577,6 +2577,20 @@
   function applyTracks (tracks) {
     S.tracks = tracks;
     const ids = new Set(tracks.map((tr) => tr.id));
+    let swapped = false;
+    if (ALIGN.swap && ids.has(ALIGN.swap.to)) {
+      const { from, to } = ALIGN.swap;
+      const track = tracks.find((tr) => tr.id === to);
+      ALIGN.swap = null;
+      for (const slot of ['primary', 'secondary']) {
+        if (S[slot] === from) {
+          S[slot] = to;
+          if (track) prefs[slot === 'primary' ? 'primaryLang' : 'secondaryLang'] = track.lang;
+          swapped = true;
+        }
+      }
+      if (swapped) savePrefs();
+    }
     if (S.primary && !ids.has(S.primary)) S.primary = '';
     if (S.secondary && !ids.has(S.secondary)) S.secondary = '';
     if (!S.primary && prefs.primaryLang) {
@@ -2592,6 +2606,7 @@
     renderTracks();
     if (AS.list.length) renderAddonSubs(); // added and deleted ones change their buttons
     renderAi();
+    if (swapped) renderAll();
   }
 
   function selectTrack (slot, trackId) {
@@ -3933,7 +3948,7 @@
   // ---- automatic alignment to another subtitle (server/align.py): "Otomatik hizala" in the list
   // of this film's subtitles, with the subtitle to fit it to. The result is a new subtitle for
   // everyone ("… · hizalı"); one notice follows it for everyone, like a translation.
-  const ALIGN = { allowed: false, open: null, busy: null, toast: null };
+  const ALIGN = { allowed: false, open: null, busy: null, toast: null, swap: null };
   // Best references first: the file's own subtitles, then ones matched by the file's hash, then
   // my main subtitle (each in the same language first); never the subtitle itself or what was
   // made from it.
@@ -3966,9 +3981,14 @@
         const res = await api(`/api/subtitles/${track.id}/align`, { json: { reference: select.value } });
         ALIGN.open = null;
         if (res.cached) toast(t('align_already'));
-        // The subtitle I watch with is replaced by its aligned copy.
-        for (const slot of ['primary', 'secondary']) {
-          if (S[slot] === track.id && S.tracks.some((tr) => tr.id === res.track)) selectTrack(slot, res.track);
+        // The subtitle I watch with is replaced by its aligned copy (whose tracks message may beat or trail the POST reply).
+        const slots = ['primary', 'secondary'].filter((slot) => S[slot] === track.id);
+        if (slots.length) {
+          if (S.tracks.some((tr) => tr.id === res.track)) {
+            for (const slot of slots) selectTrack(slot, res.track);
+          } else {
+            ALIGN.swap = { from: track.id, to: res.track };
+          }
         }
       } catch (err) {
         // A failed alignment already has everyone's notice.
