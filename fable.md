@@ -197,3 +197,21 @@ Altyazı hizalama paneli (Ö5) kendi planından yürür: `docs/altyazi-hizalama-
 **Proje sahibinin kararları (11 Kasım):** G4 ("onu bekleme") ve Ö8 ("hazır mısınız?" sayacı) yapılmayacak; geri kalan her şey bu sırayla uygulanacak. Bu dosyanın commit'i, uygulamadan önceki son nokta.
 
 İlk dalganın beklenen etkisi: Daredevil gibi küçük x265 dosyalarda iki uzak izleyici Funnel'a sığar (4,6 / 7–8 Mbps), kalan takılmalar yarıya yakın azalır, kopan izleyici sayfayı yenilemeden odaya döner. Siyah ekranın kesin sebebi İP-4'ün kaydıyla belli olur.
+
+## 9. Durum (12 Kasım)
+
+Bu dosyanın commit'inden (`921ff81`) sonra plan uygulandı:
+
+| Ne | Durum |
+| --- | --- |
+| H1–H7, G1–G3, G5–G8 (İP-1…İP-7) | Kodlandı, testlerde |
+| Ö1–Ö4 (İP-8, İP-9) | Kodlandı; telefon tarafı emülatörde denendi |
+| Ö5 Elle hizalama paneli | Kodlandı (planın 2. ve 3. adımı); 4. adım ("odaya öner") proje sahibinin kararıyla yok |
+| Ö6 Otomatik hizalama | Altyazıdan altyazıya, saf Python (`server/align.py`); filmin sesine göre hizalama yok, sırada |
+| Ö7 İlerleme çubuğunda küçük resim | Kodlandı (`server/thumbs.py`); HDR filmlerin resimleri renk çevrilmeden |
+| Ö9 Sürüm denetimi | Kodlandı; etiketle kurulum dosyası derleyen iş akışı (`.github/workflows/release.yml`) hiç çalıştırılmadı |
+| İP-10 HEVC'yi çevirmeden yollama | **Eksik kaldı:** sadece araştırma ([docs/hevc-arastirma.md](docs/hevc-arastirma.md)); kodlanınca soru ve ayar olmayacak |
+| G4, Ö8 | Proje sahibinin kararıyla yapılmadı |
+
+Denenmeyenler: gerçek Funnel bağlantısı ve birkaç arkadaş, gerçek telefonlar ve iPhone, arkadaşın tarayıcıları (Yandex Browser, Opera GX), gerçek bir Rusça/Türkçe altyazı çifti, sonraki bölüm için gerçek bir torrent paketi.
+
