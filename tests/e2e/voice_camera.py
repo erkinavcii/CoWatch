@@ -116,11 +116,13 @@ def check_update_notice(host, guest, agents: list[str]) -> None:
     ok("a newer release: a notice with its link for the host only")
     host.click("#settingsBtn")
     host.wait_for_selector("#settingsOverlay", state="visible", timeout=10000)
+    assert host.locator('#settingsForm input[name="bufferWait"][value="wait"]').is_checked()
+    assert host.locator('#settingsForm input[name="bufferWait"][value="skip"]').is_visible()
     footer = host.locator("#settingsVersion").inner_text()
     assert "0." in footer and "99.0.0" in footer, footer
     host.click("#settingsClose")
     host.wait_for_selector("#settingsOverlay", state="hidden", timeout=5000)
-    ok("the settings page shows this version and the new one")
+    ok("the settings page shows this version, the new one, and the buffer wait choice")
 
 
 def start_server(port: int, data_dir: Path, library: Path, extra: dict | None = None) -> subprocess.Popen:

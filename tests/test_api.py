@@ -98,7 +98,8 @@ def test_websocket_welcome_ping_and_members():
             assert ws.receive_json()["type"] == "pong"
 
 
-def test_websocket_buffering_after_the_watchdog_lets_the_room_go():
+def test_websocket_buffering_waits_by_default(monkeypatch):
+    import dataclasses
     import time
     from server import main
     from server.room import BUFFER_TIMEOUT_S
@@ -109,6 +110,35 @@ def test_websocket_buffering_after_the_watchdog_lets_the_room_go():
             if msg["type"] == kind:
                 return msg
 
+    monkeypatch.setattr(main, "cfg", dataclasses.replace(main.cfg, buffer_wait="wait"))
+    with TestClient(app, cookies={"cw_key": KEY}) as client:
+        with client.websocket_connect("/ws") as ws:
+            me = ws.receive_json()["clientId"]
+            ws.send_json({"type": "buffering", "value": True})
+            assert next_of(ws, "state")["waiting"] == [me]
+            next_of(ws, "members")
+            main.ctl.room.clients[me].buffering_since = time.monotonic() - BUFFER_TIMEOUT_S - 1
+            time.sleep(1.2)  # watchdog_loop ticks once a second and keeps waiting
+            ws.send_json({"type": "ping", "t0": 1})
+            assert ws.receive_json()["type"] == "pong"  # still waiting: no state release before pong
+            assert main.ctl.room.waiting() == [me]
+            ws.send_json({"type": "buffering", "value": False})
+            assert next_of(ws, "state")["waiting"] == []
+
+
+def test_websocket_buffering_after_the_watchdog_lets_the_room_go(monkeypatch):
+    import dataclasses
+    import time
+    from server import main
+    from server.room import BUFFER_TIMEOUT_S
+
+    def next_of(ws, kind):
+        while True:
+            msg = ws.receive_json()
+            if msg["type"] == kind:
+                return msg
+
+    monkeypatch.setattr(main, "cfg", dataclasses.replace(main.cfg, buffer_wait="skip"))
     with TestClient(app, cookies={"cw_key": KEY}) as client:
         with client.websocket_connect("/ws") as ws:
             me = ws.receive_json()["clientId"]

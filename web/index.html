@@ -433,6 +433,14 @@
           <input type="number" id="qualityMbps" min="1" max="200" step="0.5"></label>
       </fieldset>
 
+      <fieldset data-key="bufferWait">
+        <legend data-i18n="set_buffer_wait"></legend>
+        <label class="choice"><input type="radio" name="bufferWait" value="wait">
+          <span><b data-i18n="buffer_wait"></b><small data-i18n="buffer_wait_hint"></small></span></label>
+        <label class="choice"><input type="radio" name="bufferWait" value="skip">
+          <span><b data-i18n="buffer_skip"></b><small data-i18n="buffer_skip_hint"></small></span></label>
+      </fieldset>
+
       <fieldset data-key="libraryDirs">
         <legend data-i18n="set_library"></legend>
         <ul class="dir-list" id="dirList"></ul>

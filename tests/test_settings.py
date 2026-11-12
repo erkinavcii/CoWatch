@@ -38,20 +38,23 @@ def fresh(tmp_path, monkeypatch):
 
 def test_saved_values_of_the_wrong_kind_are_dropped(tmp_path):
     (tmp_path / "settings.json").write_text(json.dumps({
-        "connection": "funnel", "quality": "best", "port": "80", "libraryDirs": ["D:\\Films", 3], "extra": 1,
+        "connection": "funnel", "quality": "best", "bufferWait": "never", "port": "80",
+        "libraryDirs": ["D:\\Films", 3], "extra": 1,
     }), encoding="utf-8")
     saved = load_saved(tmp_path)
     assert saved["connection"] == "funnel"
-    assert saved["quality"] == "auto" and saved["port"] == 8000 and saved["libraryDirs"] == []
+    assert saved["quality"] == "auto" and saved["bufferWait"] == "wait" and saved["port"] == 8000 and saved["libraryDirs"] == []
     assert "extra" not in saved
     (tmp_path / "settings.json").write_text("not json", encoding="utf-8")
     assert load_saved(tmp_path) == config.DEFAULTS
 
 
 def test_choices_become_the_variables_they_stand_for():
-    env = saved_env({**config.DEFAULTS, "connection": "http", "libraryDirs": ["D:\\Films", "E:\\Series"],
-                     "quality": "manual", "qualityMbps": 6})
+    env = saved_env({**config.DEFAULTS, "connection": "http", "bufferWait": "skip",
+                     "libraryDirs": ["D:\\Films", "E:\\Series"], "quality": "manual", "qualityMbps": 6})
     assert env["TAILSCALE_SERVE"] == "0" and env["TAILSCALE_FUNNEL"] == "0"
+    assert env["BUFFER_WAIT"] == "skip"
+    assert saved_env(config.DEFAULTS)["BUFFER_WAIT"] == "wait"
     assert env["LIBRARY_DIRS"] == "D:\\Films;E:\\Series"
     assert env["MAX_COPY_KBPS"] == "6000" and env["TRANSCODE_KBPS"] == "4800"
     assert "MAX_COPY_KBPS" not in saved_env(config.DEFAULTS)  # auto: decided with Funnel
@@ -72,6 +75,10 @@ def test_auto_quality_converts_heavy_files_on_funnel_only(fresh, monkeypatch):
     get_settings.cache_clear()
     assert get_settings().max_copy_kbps == 9000
     assert "quality" in locked_settings() and "connection" not in locked_settings()
+    assert get_settings().buffer_wait == "wait"
+    monkeypatch.setenv("BUFFER_WAIT", "skip")
+    get_settings.cache_clear()
+    assert get_settings().buffer_wait == "skip" and "bufferWait" in locked_settings()
 
 
 def test_settings_are_for_the_host_only(data):
@@ -98,11 +105,11 @@ def test_host_saves_settings(data, tmp_path):
         assert host.post("/api/settings", json=form(port=80)).status_code == 422
 
         saved = host.post("/api/settings", json=form(
-            connection="funnel", libraryDirs=[f'"{films}"', " "], osUsername="me", osPassword="secret",
+            connection="funnel", bufferWait="skip", libraryDirs=[f'"{films}"', " "], osUsername="me", osPassword="secret",
             osApiKey="ignored", iceServers=" stun:a.example:3478 ,", port=8100))
         assert saved.json() == {"restart": False, "localLink": f"http://localhost:8100/?k={KEY}"}
         stored = json.loads((data / "settings.json").read_text(encoding="utf-8"))
-        assert stored["connection"] == "funnel" and stored["libraryDirs"] == [str(films)]
+        assert stored["connection"] == "funnel" and stored["bufferWait"] == "skip" and stored["libraryDirs"] == [str(films)]
         assert stored["iceServers"] == "stun:a.example:3478" and stored["osPassword"] == "secret"
         assert stored["osApiKey"] == ""  # locked by the environment: not saved
 

@@ -3126,6 +3126,7 @@
     setRadio('connection', pick('connection', cur.connection));
     setRadio('quality', pick('quality', cur.maxCopyKbps ? 'manual' : 'original'));
     el.qualityMbps.value = locked.has('quality') && cur.maxCopyKbps ? cur.maxCopyKbps / 1000 : v.qualityMbps;
+    setRadio('bufferWait', pick('bufferWait', cur.bufferWait));
     SH.dirs = [...pick('libraryDirs', cur.libraryDirs)];
     setRadio('mediaControl', pick('mediaControl', cur.mediaControl));
     el.osApiKey.value = pick('osApiKey', cur.osApiKey);
@@ -3236,6 +3237,7 @@
   function settingsBody () {
     const body = {
       connection: radio('connection'), quality: radio('quality'), qualityMbps: Number(el.qualityMbps.value) || 8,
+      bufferWait: radio('bufferWait') || 'wait',
       libraryDirs: SH.dirs, mediaControl: radio('mediaControl'), port: Number(el.port.value) || 0,
       torrentUploadLimit: Math.max(0, Number(el.torrentUploadLimit.value) || 0), iceServers: el.iceServers.value,
       osApiKey: el.osApiKey.value.trim(), osUsername: el.osUsername.value.trim(),

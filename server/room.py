@@ -22,7 +22,7 @@ STALL_COUNT = 3
 STALL_WINDOW_S = 300.0
 STALL_NOTICE_EVERY_S = 600.0
 
-BUFFER_TIMEOUT_S = 20.0  # a viewer waited for longer no longer holds the room (`main.watchdog_loop`)
+BUFFER_TIMEOUT_S = 20.0  # when BUFFER_WAIT=skip, a viewer waited for longer no longer holds the room (`main.watchdog_loop`)
 # ...and its stalls do not stop the room for this long after that: it used to stall again a few
 # seconds later and pause everyone again, every half minute. "Ready again" is still taken.
 BUFFER_GRACE_S = 60.0

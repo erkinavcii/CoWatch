@@ -204,7 +204,7 @@ Bu dosyanın commit'inden (`921ff81`) sonra plan uygulandı:
 
 | Ne | Durum |
 | --- | --- |
-| H1–H7, G1–G3, G5–G8 (İP-1…İP-7) | Kodlandı, testlerde |
+| H1–H7, G1–G3, G5–G8 (İP-1…İP-7) | Kodlandı, testlerde; `H2` / **60 sn kuralı** 13 Kasım'da kullanıcı kararıyla varsayılan olmaktan çıkarılıp Ayarlar'da isteğe bağlı yapıldı (bkz. bölüm 11) |
 | Ö1–Ö4 (İP-8, İP-9) | Kodlandı; telefon tarafı emülatörde denendi |
 | Ö5 Elle hizalama paneli | Kodlandı (planın 2. ve 3. adımı); 4. adım ("odaya öner") proje sahibinin kararıyla yok |
 | Ö6 Otomatik hizalama | Altyazıdan altyazıya, saf Python (`server/align.py`); filmin sesine göre hizalama yok, sırada |
@@ -231,4 +231,10 @@ Gemini tarafından `c7e7a2e` üzerinde yapılan kod + canlı tarayıcı denetimi
 **Gemini notu (12 Kasım):** Yukarıdaki 6 maddenin tamamı **Gemini tarafından düzenlendi**, ilgili birim ve tarayıcı regresyon testleri eklendi ve son düzenlemelerin ardından tüm testler geçti: `pytest` **199 passed**, `two_viewers.py` **58/58**, `film_file.py` **36/36**, `next_episode.py` **10/10**, `slow_link.py` **10/10**, `voice_camera.py` **all good**.
 
 Karar bekleyen konular: Funnel yeni izleyici / yavaş bağlantı önerilerinin kendiliğinden uygulanıp uygulanmayacağı ve `v0.3.0` sürüm etiketi (`server/version.py`).
+
+## 11. Yavaş izleyiciyi bekleme — kullanıcı kararı (13 Kasım)
+
+- **Proje sahibinin kararı:** Biri takıldığında diğer izleyiciler biraz daha uzun beklenecek olsa bile o kişinin yüklenmesini beklemeyi tercih ediyor; **takılan geride bırakılıp oda devam etmesin, kimse geride kalmasın**.
+- **Varsayılan (`BUFFER_WAIT=wait`):** Uygulamada artık **"Kimse geride kalmasın (herkesi bekle)"** varsayılan seçenek (`server/config.py`, `DEFAULTS["bufferWait"] = "wait"`). `watchdog_loop` (`server/main.py`) 20 sn bekleyen izleyiciyi `waiting`'den düşürmüyor; herkes onun yüklenmesini bekliyor (yalnızca bağlantı tamamen koparsa `SEND_TIMEOUT_S = 10 s` / WebSocket kapanışıyla odadan düşüp kalanlar devam eder).
+- **Ayarlar'da isteğe bağlı seçenek (`BUFFER_WAIT=skip`):** Eskiden her zaman devrede olan **60 sn kuralı** (`20 sn` sonra odayı devam ettirip sonraki `60 sn` o izleyicinin yeniden durdurmasını yok sayma) **Ayarlar → Biri takılınca → "60 sn kuralı (20 sn bekle, sonra devam et)"** ve `.env` (`BUFFER_WAIT=skip`) üzerinden isteğe bağlı hâle getirildi.
 

@@ -1089,8 +1089,8 @@ class Controller:
             await self.status("stream_error", "error", detail=stream.log_tail(4))
 
     async def watchdog_loop(self) -> None:
-        """A client stuck buffering for too long no longer holds the room; a screen share
-        request nobody answers runs out."""
+        """A screen share request nobody answers runs out; when the optional 60 s rule is on
+        (`buffer_wait == "skip"`), a client stuck buffering for too long no longer holds the room."""
         while True:
             await asyncio.sleep(1)
             expired = self.room.expired_share_asks()
@@ -1098,13 +1098,14 @@ class Controller:
                 for client_id in expired:
                     self.room.share_asks.pop(client_id, None)
                 await self.room.broadcast(self.room.screen_msg())
-            for client in self.room.expired_buffering():
-                log.info("ignoring buffering client %s", client.name)
-                since = client.buffering_since
-                if self.room.release_buffering(client):
-                    self.log_buffering(client, {}, since, released=True)
-                    await self.broadcast_state()
-                    await self.room.broadcast(self.room.members_msg())
+            if cfg.buffer_wait == "skip":
+                for client in self.room.expired_buffering():
+                    log.info("ignoring buffering client %s", client.name)
+                    since = client.buffering_since
+                    if self.room.release_buffering(client):
+                        self.log_buffering(client, {}, since, released=True)
+                        await self.broadcast_state()
+                        await self.room.broadcast(self.room.members_msg())
 
     async def throttle_loop(self) -> None:
         """Slow the torrent down once ffmpeg is far ahead of playback, so the
@@ -1553,6 +1554,7 @@ class SettingsBody(BaseModel):
     connection: Literal[CHOICES["connection"]]
     quality: Literal[CHOICES["quality"]]
     qualityMbps: float = Field(ge=1, le=200)
+    bufferWait: Literal[CHOICES["bufferWait"]] = "wait"
     libraryDirs: list[str] = Field(max_length=50)
     mediaControl: Literal[CHOICES["mediaControl"]]
     port: int = Field(ge=1024, le=65535)
@@ -1609,6 +1611,7 @@ async def api_settings(request: Request):
         # what runs now: for the locked choices, the value from .env
         "current": {
             "connection": cfg.connection, "maxCopyKbps": cfg.max_copy_kbps, "transcodeKbps": cfg.transcode_kbps,
+            "bufferWait": cfg.buffer_wait,
             "libraryDirs": [str(d) for d in cfg.library_dirs], "mediaControl": cfg.media_control,
             "port": cfg.port, "torrentUploadLimit": cfg.torrent_upload_limit, "iceServers": cfg.ice_servers,
             "osApiKey": cfg.os_api_key, "osUsername": cfg.os_username,

@@ -2,9 +2,9 @@
 (noise, so it does not compress) plays for a host and a viewer whose page is throttled with
 the browser's own network emulation (CDP `Network.emulateNetworkConditions`).
 
-- A: the viewer has 3000 kbps, about 65 % of the film. For 120 s the room's stops are counted
+- A: the viewer has 3000 kbps, about 65 % of the film (default `wait` mode). For 120 s the room's stops are counted
   (each time `waiting` goes from empty to someone). It used to stop 9 times in 147 s.
-- B: the viewer has 1200 kbps, a third viewer a normal link. The server lets the room go on
+- B: the viewer has 1200 kbps, a third viewer a normal link, with the optional 60 s rule on (`BUFFER_WAIT=skip`). The server lets the room go on
   after 20 s of waiting; in the 60 s after that the slow viewer must not stop it again.
 - Every half second each page's picture is drawn into a 32 x 18 canvas: while the room runs,
   no picture may be black.
@@ -247,7 +247,10 @@ def run(headed: bool, cases: str) -> None:
                 if name not in cases:
                     continue
                 port = free_port()  # a fresh server, so a fresh room, for each case
-                server = start_server(port, tmp / f"data-{name}", {"HELPER_PORT": str(free_port())})
+                extra = {"HELPER_PORT": str(free_port())}
+                if name == "B":
+                    extra["BUFFER_WAIT"] = "skip"
+                server = start_server(port, tmp / f"data-{name}", extra)
                 try:
                     case(browser, f"http://127.0.0.1:{port}", film, errors)
                 finally:

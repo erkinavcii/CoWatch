@@ -99,6 +99,7 @@ for _id in ("deepseek", "claude", "gemini", "kimi", "openai", "openrouter"):
 CHOICES = {
     "connection": ("funnel", "serve", "http"),
     "quality": ("auto", "original", "manual"),
+    "bufferWait": ("wait", "skip"),
     "mediaControl": ("everyone", "trusted"),
     "aiProvider": tuple(AI_PRESETS),
     "aiProtocol": ("", "openai", "anthropic", *MT_PROTOCOLS),  # "": the provider's own
@@ -110,6 +111,7 @@ DEFAULTS = {
     "connection": "funnel" if FROZEN else "serve",
     "quality": "auto",  # auto: Funnel converts heavier files, Serve sends the original · original · manual
     "qualityMbps": 8,  # manual: files above this are converted to 80% of it
+    "bufferWait": "wait",  # wait: everyone waits · skip: the 60 s rule (stop waiting after 20 s, ignore stalls for 60 s)
     "libraryDirs": [],
     "mediaControl": "everyone",
     "port": 8000,
@@ -129,6 +131,7 @@ ENV_NAMES = {
     "connection": ("TAILSCALE_SERVE", "TAILSCALE_FUNNEL"),
     "quality": ("MAX_COPY_KBPS", "TRANSCODE_KBPS"),
     "qualityMbps": ("MAX_COPY_KBPS", "TRANSCODE_KBPS"),
+    "bufferWait": ("BUFFER_WAIT",),
     "libraryDirs": ("LIBRARY_DIRS",),
     "mediaControl": ("MEDIA_CONTROL",),
     "port": ("PORT",),
@@ -192,6 +195,7 @@ def saved_env(saved: dict) -> dict[str, str]:
     env = {
         "TAILSCALE_SERVE": "0" if conn == "http" else "1",
         "TAILSCALE_FUNNEL": "1" if conn == "funnel" else "0",
+        "BUFFER_WAIT": saved["bufferWait"],
         "LIBRARY_DIRS": ";".join(saved["libraryDirs"]),
         "MEDIA_CONTROL": saved["mediaControl"],
         "PORT": str(int(saved["port"])),
@@ -248,6 +252,7 @@ class Settings:
     audio_filter: str
     hls_time: int
     # the host's film folders: the host and co-hosts open videos from them
+    buffer_wait: str  # "wait": wait for stalled viewers; "skip": optional 60 s rule (release at 20 s, ignore 60 s)
     library_dirs: tuple[Path, ...]
     media_control: str  # "everyone" changes the film; "trusted" = only the host and co-hosts
     # add-ons
@@ -392,6 +397,7 @@ def get_settings() -> Settings:
         audio_kbps=_int(v, "AUDIO_KBPS", 192),
         audio_filter=_str(v, "AUDIO_FILTER", "dynaudnorm=f=500:g=15"),
         hls_time=_int(v, "HLS_TIME", 4),
+        buffer_wait="skip" if _str(v, "BUFFER_WAIT").lower() == "skip" else "wait",
         library_dirs=_paths(v, "LIBRARY_DIRS"),
         media_control="trusted" if _str(v, "MEDIA_CONTROL").lower() == "trusted" else "everyone",
         addons_builtin=_int(v, "ADDONS_BUILTIN", 1) != 0,
