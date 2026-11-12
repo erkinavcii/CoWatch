@@ -80,7 +80,7 @@ ffmpeg -ss <yer> -i <dosya> -map 0:v:0 -map 0:a:0 -sn -dn -map_metadata -1 -map_
 
 **Sonradan desteksiz biri katılırsa:** retune'dan farklı olarak host'a sormak yetmez, çünkü o kişi hiçbir şey göremez. `hello`'da yeni bir `check_codecs`: akış HEVC kopyasıysa ve yeni izleyici desteklemiyorsa oturumun kipi çevirmeye döner ve `seek(şimdiki yer)` akışı yeniden başlatır (`can_serve` / `stream_fits` kip tutmayınca zaten hayır der). Herkes birkaç saniyelik bir duraklama görür; karta "Ahmet'in tarayıcısı HEVC oynatamıyor, film çevriliyor" yazılır. Desteksiz izleyici ayrılınca kendiliğinden geri dönülmez (retune'daki gibi: herkesin filmini kesmeye değmez); sonraki sarma ya da film kopyayı yeniden seçer.
 
-**Yalan söyleyen tarayıcı:** `isTypeSupported` true deyip çözemeyen bir tarayıcı olabilir (sürücü, uzantı, 10-bit). hls.js'te `bufferAddCodecError` ya da HEVC akışında `watchFrames`'in kare gelmiyor kararı, o izleyiciyi sunucuda "HEVC yok" yapan bir `report` olur (`codec_failed`) ve yukarıdaki gibi çevirmeye dönülür. O tarayıcı `localStorage`'da hatırlanır, sonraki `hello`'da `hevc: false` gider.
+**Yalan söyleyen tarayıcı:** `isTypeSupported` true deyip çözemeyen bir tarayıcı olabilir (sürücü, uzantı, 10-bit). hls.js'te `bufferAddCodecError` ya da HEVC akışında `watchFrames`'in kare gelmiyor kararı, o izleyiciyi sunucuda "HEVC yok" yapan bir `report` olur (`codec_failed`) ve yukarıdaki gibi çevirmeye dönülür. O tarayıcı `localStorage`'da hatırlanır, sonraki `hello`'da `hevc: false` gider. Ancak bu not tarayıcıyı sonsuza kadar kilitlememeli: tarayıcı sürümü/profilleri değiştiğinde ya da belirli bir süre sonunda sıfırlanıp yeniden denenebilmeli; ayrıca hata veren izleyici odadan çıkınca sonraki sarma ya da filmde oda yeniden kopya kipine geçebilmeli.
 
 **Bekleyen ve yeniden bağlanan:** yeniden bağlanan sayfa yeni `hello` yollar; aynı cevabı verir, bir şey değişmez. Katılmamış ("?") sayfalar sayılmaz.
 
@@ -123,7 +123,7 @@ Yapmaya değer: Daredevil gibi küçük x265 dizilerinde (bu bilgisayardaki dosy
 - Bitti sayılır: Daredevil benzeri örnekte (testteki gibi küçük sentetik x265, ffmpeg varsa) komutta `-c:v copy -tag:v hvc1` ve `init.mp4`'te `hvc1`; desteksiz bir izleyici varken `transcode`; DV profil 5 ve 4K'da `transcode`; pytest.
 
 **İP-10c. Karma odada geri dönüş.**
-- Dosyalar: `server/main.py` (`check_codecs`, `hello`'da `check_remote`'un yanında; `report`'ta `codec_failed`), `server/media.py` (`MediaSession.set_viewers_codec` → `stream_fits`'e kip), `web/app.js` (`loadStream`'in hata dalında `bufferAddCodecError` ve HEVC akışında `watchFrames` → `report('codec_failed')`, `localStorage`'da hatırla), `web/i18n.js` (kart metni, tr/en/ru), `tests/test_api.py`.
+- Dosyalar: `server/main.py` (`check_codecs`, `hello`'da `check_remote`'un yanında; `report`'ta `codec_failed`), `server/media.py` (`MediaSession.set_viewers_codec` → `stream_fits`'e kip), `web/app.js` (`loadStream`'in hata dalında `bufferAddCodecError` ve HEVC akışında `watchFrames` → `report('codec_failed')`, `localStorage`'da tarayıcı sürümüyle/süreli sıfırlanabilir biçimde hatırla), `web/i18n.js` (kart metni, tr/en/ru), `tests/test_api.py`.
 - Bitti sayılır: HEVC kopyası oynarken `hevc: false` izleyici katılınca akış çevirmeye dönüyor ve herkese yeni `streamId` gidiyor; `codec_failed` aynı şeyi yapıyor; ayrılınca geri dönülmüyor.
 
 **İP-10d. Tarayıcı testi.**
