@@ -183,6 +183,7 @@ Ortak kurallar (her ajanın brifine girer): `CLAUDE.md`'deki kurallar geçerli. 
 **İP-9. Telefon: Wake Lock ve Media Session (Ö3, Ö4).** Sadece `web/app.js`; gerçek telefonda ya da emülatörde denenmeli (`CLAUDE.md`, "Android emülatörü").
 
 **İP-10. Araştırma: HEVC'yi çevirmeden yollama.** Kod değil, rapor: hangi tarayıcılar, fMP4'te `hvc1` etiketi, karma odada geri dönüş, HDR. Sonucuna göre ayrı bir plan.
+- Rapor (12 Kasım): [docs/hevc-arastirma.md](docs/hevc-arastirma.md). Sonuç koşullu evet: Chrome ve Edge bu bilgisayarda `hvc1` kopyasını oynattı, akış ≈ 2,6 kat küçük; adımlar (İP-10a–e) raporda.
 
 Altyazı hizalama paneli (Ö5) kendi planından yürür: `docs/altyazi-hizalama-plani.md`, 2. adım.
 
