@@ -64,6 +64,11 @@
     chatBtn: $('#chatBtn'), chatBadge: $('#chatBadge'), chatBox: $('#chatBox'), chatClose: $('#chatClose'),
     chatLog: $('#chatLog'), chatForm: $('#chatForm'), chatInput: $('#chatInput'), chatPeek: $('#chatPeek'),
     watch: $('#watch'), chatDock: $('#chatDock'),
+    chatName: $('#chatName'), chatTabs: $('#chatTabs'), chatTabChat: $('#chatTabChat'), chatTabAlign: $('#chatTabAlign'),
+    alignPane: $('#alignPane'), alignTitle: $('#alignTitle'), alignSlot: $('#alignSlot'), alignSearch: $('#alignSearch'),
+    alignMark: $('#alignMark'), alignState: $('#alignState'), alignMarkInfo: $('#alignMarkInfo'), alignNote: $('#alignNote'),
+    alignList: $('#alignList'), alignRows: $('#alignRows'), alignNow: $('#alignNow'), alignCount: $('#alignCount'),
+    alignReset: $('#alignReset'), alignDone: $('#alignDone'),
     aiBox: $('#aiBox'), aiForm: $('#aiForm'), aiLang: $('#aiLang'), aiSource: $('#aiSource'), aiGo: $('#aiGo'),
     aiHint: $('#aiHint'), aiSettings: $('#aiSettings'), aiProvider: $('#aiProvider'), aiProtocol: $('#aiProtocol'),
     aiBaseUrl: $('#aiBaseUrl'), aiApiKey: $('#aiApiKey'), aiModel: $('#aiModel'), aiModels: $('#aiModels'),
@@ -2648,7 +2653,7 @@
       const row = document.createElement('div');
       row.className = 'offset-row';
       const out = document.createElement('output');
-      const show = () => { out.textContent = fmtOffset(alignOf(id).offset); };
+      const show = () => { out.textContent = fmtOffset(alignOf(id).offset) + speedNote(alignOf(id).scale); };
       const step = (ms) => {
         const b = document.createElement('button');
         b.type = 'button';
@@ -2656,16 +2661,20 @@
         b.textContent = ms ? `${ms > 0 ? '+' : '−'}${(Math.abs(ms) / 1000).toFixed(1).replace('.', t('decimal_sep'))}` : '0';
         if (!ms) b.className = 'ghost';
         b.addEventListener('click', () => {
-          setAlign(id, { offset: ms ? Math.round(alignOf(id).offset + ms) : 0, ...(ms ? {} : { scale: 1 }) });
+          // The points of the alignment panel move along, so a later point fits with this one.
+          setAlign(id, ms ? { offset: Math.round(alignOf(id).offset + ms), pts: shiftPoints(alignOf(id).pts, ms) }
+            : { offset: 0, scale: 1, pts: undefined });
           show();
+          if (AP.track === id) renderAlign(true);
         });
         return b;
       };
-      row.append(step(OFFSET_STEPS[0]), step(OFFSET_STEPS[1]), out, step(OFFSET_STEPS[2]), step(OFFSET_STEPS[3]), step(0));
+      row.append(step(OFFSET_STEPS[0]), step(OFFSET_STEPS[1]), out, step(OFFSET_STEPS[2]), step(OFFSET_STEPS[3]), step(0), alignButton(id));
       show();
       box.append(label, row);
       return box;
     }));
+    renderAlignHead();
   }
   el.sizeRange.addEventListener('input', () => { prefs.fontSize = Number(el.sizeRange.value); savePrefs(); renderSubStyle(); });
   el.bottomRange.addEventListener('input', () => { prefs.bottom = Number(el.bottomRange.value); savePrefs(); renderSubStyle(); });
@@ -4017,6 +4026,8 @@
   // or the page is scrolled away from it) peek over the picture for a few seconds and count
   // on the button.
   const CHAT = { overlay: false, unread: 0, messages: [] };
+  // The alignment panel ("aligning a subtitle by hand" below) is the box's second tab.
+  const AP = { track: '', on: false, query: '', hits: null, follow: true, mark: null, note: null, now: -1, drawn: '' };
   const CHAT_KEEP = 100; // as many as the server keeps
   const CHAT_PEEK_MS = 7000;
   const CHAT_PEEK_MAX = 3;
@@ -4076,18 +4087,26 @@
   const chatOpen = () => (chatDocked() ? prefs.chatDock : CHAT.overlay);
   // In sight: the column while its part of the page is on screen, the panel unless the film
   // is in the corner box (where it is hidden); neither while the tab is behind another one.
-  const chatSeen = () => chatOpen() && (!!PIP.win || !document.hidden) &&
+  const chatSeen = () => chatOpen() && !AP.on && (!!PIP.win || !document.hidden) &&
     (chatDocked() ? MINI.visible : !el.stage.classList.contains('mini'));
   const PAGE_TITLE = document.title;
 
   function placeChat () {
-    const parent = dockScreen.matches && !stageFull() && !PIP.win ? el.chatDock : el.stage;
+    // Aligning beside a picture-in-picture window: the panel stays on the page, in the column.
+    const docked = (dockScreen.matches && !stageFull() && !PIP.win) || (!!PIP.win && AP.on);
+    const parent = docked ? el.chatDock : el.stage;
     if (el.chatBox.parentNode !== parent) parent.appendChild(el.chatBox);
     renderChat();
   }
   function renderChat () {
-    const open = chatOpen();
+    const open = chatOpen() || AP.on;
     const docked = chatDocked();
+    el.chatBox.classList.toggle('aligning', AP.on);
+    el.alignPane.hidden = !AP.on;
+    el.chatTabs.hidden = !AP.track;
+    el.chatName.hidden = !!AP.track;
+    el.chatTabChat.classList.toggle('on', !AP.on);
+    el.chatTabAlign.classList.toggle('on', AP.on);
     el.watch.classList.toggle('docked', docked && open);
     el.chatBox.hidden = !open;
     el.stage.classList.toggle('chat-open', open && !docked);
@@ -4114,13 +4133,14 @@
     if (own || chatSeen()) return;
     CHAT.unread += 1;
     renderChat();
-    if (chatOpen() && !chatDocked()) return; // the panel is open, only the corner box hides it
+    if ((chatOpen() || AP.on) && !chatDocked()) return; // the panel is open, only the corner box hides it
     const node = chatLine(msg);
     el.chatPeek.appendChild(node);
     while (el.chatPeek.children.length > CHAT_PEEK_MAX) el.chatPeek.firstChild.remove();
     setTimeout(() => { node.classList.add('gone'); setTimeout(() => node.remove(), 400); }, CHAT_PEEK_MS);
   }
   function setChat (open) {
+    if (open && AP.on) { AP.on = false; placeChat(); } // back to the chat tab
     if (chatDocked()) { prefs.chatDock = open; savePrefs(); } else CHAT.overlay = open;
     renderChat();
     if (open) {
@@ -4131,8 +4151,8 @@
       el.chatInput.blur(); // the keys are the player's again
     }
   }
-  el.chatBtn.addEventListener('click', () => setChat(!chatOpen()));
-  el.chatClose.addEventListener('click', () => setChat(false));
+  el.chatBtn.addEventListener('click', () => setChat(AP.on || !chatOpen()));
+  el.chatClose.addEventListener('click', () => (AP.on ? closeAlign() : setChat(false)));
   el.chatInput.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     e.preventDefault();
@@ -4153,6 +4173,303 @@
   new MutationObserver(() => { if (chatSeen() && CHAT.unread) renderChat(); })
     .observe(el.stage, { attributes: true, attributeFilter: ['class'] });
   placeChat();
+
+  // ---------------------------------------------------------------- aligning a subtitle by hand
+  // "Hizala" beside a chosen subtitle's offset opens a panel in the chat's box, as its second
+  // tab, so the film stays in sight: the column beside it on a wide screen, the box under it on
+  // a phone held upright, over the picture elsewhere and in fullscreen (with the stage in a
+  // picture-in-picture window, the column on the page). It lists the subtitle's lines with
+  // their aligned times, the current one lit and kept in the middle, until the viewer scrolls
+  // or searches. A line tapped when its words are heard is a point: that line starts at that
+  // film time (or at the time of "Şimdi duydum", pressed within the last minute). One point
+  // moves the whole subtitle; a second one ten minutes or more away finds the speed too (a
+  // subtitle made for another frame rate drifts further every minute). For me only: kept in
+  // prefs.align with the offset, nothing goes to the server, nobody else's film stops.
+  // Only the rows around the visible ones are in the page: a film has 1500 lines.
+  const ALIGN_ROW = 46; // px, one row (two lines of text at most)
+  const ALIGN_PAD = 60; // rows drawn above and below the visible ones
+  const ALIGN_MARK_S = 60; // a tap within this long after "Şimdi duydum" uses its time
+  const ALIGN_SPAN_S = 600; // two points this far apart give the speed too
+  const ALIGN_SNAP = 0.003; // a speed this close to a known frame-rate ratio is that ratio
+  const FPS_RATIOS = [[25, 23.976], [23.976, 25], [24, 25], [25, 24], [23.976, 24], [24, 23.976]];
+  const ALIGN_SPEED = [0.8, 1.25]; // two points giving a speed outside this do not belong together
+
+  // Points are {s: the line's own start, t: the film time it was heard}, in seconds, the newest
+  // last. One point keeps the speed it is given; two (far enough apart) set it, snapped to a
+  // frame-rate ratio within ALIGN_SNAP (or to no difference at all); the offset fits both.
+  function fitAlignment (points, scaleIn = 1) {
+    const pts = (Array.isArray(points) ? points : []).filter((p) => p && Number.isFinite(p.s) && Number.isFinite(p.t));
+    const keep = Number.isFinite(scaleIn) && scaleIn > 0 ? scaleIn : 1;
+    const base = { fps: null, unusual: false, bad: false };
+    const one = (p, extra = {}) => ({ ...base, offset: Math.round((p.t - p.s * keep) * 1000), scale: keep, points: 1, ...extra });
+    if (!pts.length) return { ...base, offset: 0, scale: keep, points: 0 };
+    const b = pts[pts.length - 1];
+    const a = pts.length > 1 ? pts[pts.length - 2] : null;
+    if (!a || Math.abs(b.s - a.s) < ALIGN_SPAN_S) return one(b);
+    const raw = (b.t - a.t) / (b.s - a.s);
+    if (!(raw >= ALIGN_SPEED[0] && raw <= ALIGN_SPEED[1])) return one(b, { bad: true });
+    let scale = raw; let fps = null; let best = ALIGN_SNAP;
+    for (const ratio of [[1, 1], ...FPS_RATIOS]) {
+      const miss = Math.abs(raw / (ratio[0] / ratio[1]) - 1);
+      if (miss <= best) { best = miss; scale = ratio[0] / ratio[1]; fps = ratio[0] === ratio[1] ? null : ratio; }
+    }
+    const unusual = best === ALIGN_SNAP && scale === raw;
+    const offset = ((a.t - a.s * scale) + (b.t - b.s * scale)) / 2;
+    return { ...base, offset: Math.round(offset * 1000), scale, fps, unusual, points: 2 };
+  }
+  // A new point: a third one takes the place of the nearer of the two (a slip is mended where
+  // it was made), a second one too close to the first takes its place. The newest stays last.
+  function addAlignPoint (points, p) {
+    const pts = (Array.isArray(points) ? points : []).slice(-2);
+    if (pts.length === 2) {
+      const near = Math.abs(pts[0].s - p.s) <= Math.abs(pts[1].s - p.s) ? 0 : 1;
+      pts.splice(near, 1);
+    }
+    if (pts.length === 1 && Math.abs(pts[0].s - p.s) < ALIGN_SPAN_S) pts.pop();
+    return [...pts, p];
+  }
+  const shiftPoints = (pts, ms) => (Array.isArray(pts) && pts.length
+    ? pts.map(([s, tm]) => [s, Math.round((tm + ms / 1000) * 1000) / 1000]) : undefined);
+  const fpsText = (v) => String(v).replace('.', t('decimal_sep'));
+  function speedLabel (scale) {
+    if (!scale || scale === 1) return t('align_speed_same');
+    const ratio = FPS_RATIOS.find(([a, b]) => Math.abs(a / b - scale) < 1e-9);
+    return ratio ? `${fpsText(ratio[0])} → ${fpsText(ratio[1])}` : `×${scale.toFixed(4).replace('.', t('decimal_sep'))}`;
+  }
+  const speedNote = (scale) => (scale && scale !== 1 ? ` · ${speedLabel(scale)}` : '');
+  // Search and the "same line again" check ignore case and accents: İ, ı, ş, ё, й...
+  const foldText = (v) => String(v).normalize('NFD').replace(/\p{M}+/gu, '').replace(/ı/g, 'i').toLowerCase();
+  const nowFilm = () => (S.media ? (video.readyState ? filmTime() : expectedPosition()) : 0);
+  const alignSlots = () => [['primary', S.primary], ['secondary', S.secondary !== S.primary ? S.secondary : '']].filter(([, id]) => id);
+  const alignCues = () => S.cues.get(AP.track) || [];
+  function foldedCues () {
+    const cues = alignCues();
+    if (!AP.folded || AP.folded.cues !== cues) {
+      const raw = cues.map((c) => foldText(c[2]));
+      const words = raw.map((f) => f.replace(/[^\p{L}\p{N}]+/gu, ' ').trim());
+      const count = new Map();
+      for (const w of words) count.set(w, (count.get(w) || 0) + 1);
+      AP.folded = { cues, raw, words, count };
+    }
+    return AP.folded;
+  }
+
+  function alignButton (id) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'align-open';
+    b.dataset.align = id;
+    b.textContent = t('align_btn');
+    b.title = t('align_btn_title');
+    b.addEventListener('click', () => openAlign(id));
+    return b;
+  }
+  function openAlign (id) {
+    const slot = alignSlots().find(([, tr]) => tr === id);
+    if (!slot) return;
+    AP.slot = slot[0];
+    setAlignTrack(id);
+    AP.on = true;
+    placeChat();
+    renderAlignHead();
+    // The film and the panel in sight: the page goes up to the stage (the column is beside it,
+    // the phone's box under it); beside a picture-in-picture window, to the column.
+    (PIP.win ? el.chatDock : el.stageWrap).scrollIntoView({ block: 'start' });
+  }
+  function setAlignTrack (id) {
+    if (AP.track === id) return;
+    AP.track = id;
+    AP.query = ''; AP.hits = null; AP.follow = true; AP.mark = null; AP.note = null; AP.now = -1; AP.drawn = '';
+    el.alignSearch.value = '';
+    el.alignList.scrollTop = 0;
+    ensureCues(id);
+  }
+  function closeAlign () {
+    AP.on = false;
+    AP.track = '';
+    AP.mark = null;
+    placeChat();
+  }
+  // The chosen subtitles changed: the panel goes on with what is now in its slot.
+  function renderAlignHead () {
+    if (!AP.track) return;
+    const slots = alignSlots();
+    const mine = slots.find(([slot]) => slot === AP.slot);
+    if (!mine) { closeAlign(); return; }
+    setAlignTrack(mine[1]);
+    const track = S.tracks.find((tr) => tr.id === AP.track);
+    const name = track ? trackLabel(track) : '';
+    el.alignTitle.textContent = slots.length > 1 ? name : `${t(AP.slot === 'primary' ? 'subs_primary' : 'subs_secondary')} · ${name}`;
+    el.alignTitle.title = el.alignTitle.textContent;
+    el.alignSlot.hidden = slots.length < 2;
+    el.alignSlot.replaceChildren(...slots.map(([slot]) => {
+      const o = document.createElement('option');
+      o.value = slot;
+      o.textContent = t(slot === 'primary' ? 'subs_primary' : 'subs_secondary');
+      return o;
+    }));
+    el.alignSlot.value = AP.slot;
+    renderAlign(true);
+  }
+  el.alignSlot.addEventListener('change', () => { AP.slot = el.alignSlot.value; renderAlignHead(); });
+  el.chatTabAlign.addEventListener('click', () => { if (!AP.track) return; AP.on = true; placeChat(); renderAlign(true); });
+  el.chatTabChat.addEventListener('click', () => setChat(true));
+  el.alignDone.addEventListener('click', closeAlign);
+
+  // The line on screen now: the last one started, at the subtitle's own time.
+  function alignNowIndex () {
+    const cues = alignCues();
+    const time = subTime(AP.track, nowFilm());
+    let lo = 0; let hi = cues.length - 1; let idx = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (cues[mid][0] <= time) { idx = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return idx;
+  }
+  function drawAlignRows (force) {
+    const cues = alignCues();
+    const rows = AP.hits;
+    const n = rows ? rows.length : cues.length;
+    const list = el.alignList;
+    el.alignRows.style.height = `${n * ALIGN_ROW}px`;
+    const first = Math.max(0, Math.floor(list.scrollTop / ALIGN_ROW) - ALIGN_PAD);
+    const last = Math.min(n, Math.ceil((list.scrollTop + list.clientHeight) / ALIGN_ROW) + ALIGN_PAD);
+    const a = alignOf(AP.track);
+    const key = `${AP.track}|${first}|${last}|${n}|${a.offset}|${a.scale}|${AP.now}|${AP.query}`;
+    if (!force && key === AP.drawn) return;
+    AP.drawn = key;
+    const nodes = [];
+    for (let k = first; k < last; k++) {
+      const i = rows ? rows[k] : k;
+      const cue = cues[i];
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = i === AP.now ? 'align-row now' : 'align-row';
+      b.dataset.i = String(i);
+      b.style.top = `${k * ALIGN_ROW}px`;
+      const time = document.createElement('span');
+      time.className = 'align-time';
+      time.textContent = fmtTime(a.offset / 1000 + cue[0] * (a.scale || 1));
+      const text = document.createElement('span');
+      text.className = 'align-text';
+      text.textContent = cue[2];
+      b.append(time, text);
+      nodes.push(b);
+    }
+    el.alignRows.replaceChildren(...nodes);
+  }
+  function renderAlign (force) {
+    if (!AP.on || !AP.track) return;
+    const cues = alignCues();
+    const a = alignOf(AP.track);
+    AP.now = alignNowIndex();
+    el.alignState.textContent = t('align_state', { offset: fmtOffset(a.offset), speed: speedLabel(a.scale) });
+    const marked = AP.mark && Date.now() - AP.mark.at < ALIGN_MARK_S * 1000;
+    if (!marked) AP.mark = null;
+    el.alignMarkInfo.hidden = !marked;
+    if (marked) el.alignMarkInfo.textContent = t('align_marked', { at: fmtTime(AP.mark.film) });
+    const note = AP.note || { keys: [[cues.length ? 'align_hint' : 'align_loading']] };
+    const text = note.keys.map(([k, p]) => t(k, p)).join(' ');
+    if (el.alignNote.textContent !== text) el.alignNote.textContent = text;
+    el.alignNote.hidden = false;
+    el.alignNote.classList.toggle('warn', !!note.warn);
+    el.alignCount.textContent = AP.hits ? (AP.hits.length ? t('align_hits', { n: AP.hits.length }) : t('align_no_hits'))
+      : cues.length ? t('align_hits', { n: cues.length }) : '';
+    el.alignNow.hidden = AP.follow && !AP.query;
+    drawAlignRows(force);
+    if (AP.follow && !AP.hits && AP.now >= 0) {
+      const list = el.alignList;
+      const want = Math.max(0, Math.round(AP.now * ALIGN_ROW - (list.clientHeight - ALIGN_ROW) / 2));
+      if (Math.abs(list.scrollTop - want) > 1) { list.scrollTop = want; drawAlignRows(false); }
+    }
+  }
+  setInterval(() => { if (AP.on && !el.chatBox.hidden) renderAlign(false); }, 250);
+
+  // The viewer's own scrolling stops the following; "back to now" brings it back.
+  const stopFollow = () => { if (AP.follow) { AP.follow = false; el.alignNow.hidden = false; } };
+  el.alignList.addEventListener('wheel', stopFollow, { passive: true });
+  el.alignList.addEventListener('touchmove', stopFollow, { passive: true });
+  el.alignList.addEventListener('pointerdown', (e) => { if (e.target === el.alignList) stopFollow(); }); // its scroll bar
+  el.alignList.addEventListener('keydown', (e) => {
+    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) stopFollow();
+  });
+  let alignScrollFrame = 0;
+  el.alignList.addEventListener('scroll', () => {
+    if (alignScrollFrame) return;
+    alignScrollFrame = requestAnimationFrame(() => { alignScrollFrame = 0; drawAlignRows(false); });
+  }, { passive: true });
+  el.alignNow.addEventListener('click', () => {
+    AP.query = ''; AP.hits = null; AP.follow = true;
+    el.alignSearch.value = '';
+    renderAlign(true);
+  });
+
+  el.alignSearch.addEventListener('input', () => {
+    const q = foldText(el.alignSearch.value).trim();
+    AP.query = q;
+    if (q) {
+      const { raw, words } = foldedCues();
+      AP.hits = [];
+      raw.forEach((f, i) => { if (f.includes(q) || words[i].includes(q)) AP.hits.push(i); });
+      AP.follow = false;
+    } else {
+      AP.hits = null;
+      AP.follow = true;
+    }
+    el.alignList.scrollTop = 0;
+    renderAlign(true);
+  });
+  el.alignSearch.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    e.preventDefault();
+    if (el.alignSearch.value) { el.alignSearch.value = ''; el.alignSearch.dispatchEvent(new Event('input')); } else el.alignSearch.blur();
+  });
+
+  el.alignMark.addEventListener('click', () => {
+    if (!S.media) return;
+    AP.mark = { film: nowFilm(), at: Date.now() };
+    renderAlign(false);
+  });
+  // A line tapped: it starts at the mark's film time (pressed within the last minute) or now.
+  el.alignRows.addEventListener('click', (e) => {
+    const row = e.target.closest('.align-row');
+    if (!row || !S.media) return;
+    const i = Number(row.dataset.i);
+    const cue = alignCues()[i];
+    if (!cue) return;
+    const marked = AP.mark && Date.now() - AP.mark.at < ALIGN_MARK_S * 1000;
+    const film = marked ? AP.mark.film : nowFilm();
+    AP.mark = null;
+    const id = AP.track;
+    const cur = alignOf(id);
+    const pts = addAlignPoint((cur.pts || []).map(([s, tm]) => ({ s, t: tm })), { s: cue[0], t: film });
+    const fit = fitAlignment(pts, cur.scale || 1);
+    const kept = fit.points < 2 ? pts.slice(-1) : pts.slice(-2);
+    const r3 = (v) => Math.round(v * 1000) / 1000;
+    setAlign(id, { offset: fit.offset, scale: fit.scale, pts: kept.map((p) => [r3(p.s), r3(p.t)]) });
+    const keys = [];
+    let warn = false;
+    if (fit.bad) { keys.push(['align_bad']); warn = true; }
+    if (fit.points < 2) keys.push(['align_one', { offset: fmtOffset(fit.offset) }]);
+    else if (fit.unusual) { keys.push(['align_odd', { speed: speedLabel(fit.scale) }]); warn = true; }
+    else if (fit.fps) keys.push(['align_fps', { from: fpsText(fit.fps[0]), to: fpsText(fit.fps[1]) }]);
+    else keys.push(['align_same']);
+    // "Evet." comes again and again: a short or repeated line may be the wrong one.
+    const { words, count } = foldedCues();
+    if (words[i].replace(/ /g, '').length < 10 || count.get(words[i]) > 1) { keys.push(['align_short']); warn = true; }
+    AP.note = { keys, warn };
+    AP.follow = !AP.query; // while searching the list stays where the line was found
+    renderOffsets();
+    renderAlign(true);
+  });
+  el.alignReset.addEventListener('click', () => {
+    if (!AP.track) return;
+    setAlign(AP.track, { offset: 0, scale: 1, pts: undefined });
+    AP.note = null;
+    renderOffsets();
+    renderAlign(true);
+  });
 
   // ---------------------------------------------------------------- join
   el.nameInput.value = prefs.name;
@@ -4638,6 +4955,9 @@
 
   // Drops the room connection, as a network hiccup would; the page reconnects by itself.
   window.cowatchDebug.reconnect = () => { if (S.ws) S.ws.close(); };
+  // The alignment panel's sums, for the browser test.
+  window.cowatchDebug.fitAlignment = fitAlignment;
+  window.cowatchDebug.addAlignPoint = addAlignPoint;
   // Rebuilds every voice and camera connection, as peerWatch does for one that stays down.
   window.cowatchDebug.resetPeers = () => { for (const id of [...peers.keys()]) resetPeer(id); };
 

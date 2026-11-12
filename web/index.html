@@ -52,7 +52,11 @@
       </div>
       <div class="chat" id="chatBox" hidden>
         <div class="chat-head">
-          <span data-i18n="chat_title"></span>
+          <span class="chat-name" id="chatName" data-i18n="chat_title"></span>
+          <span class="chat-tabs" id="chatTabs" hidden>
+            <button type="button" class="chat-tab" id="chatTabChat" data-i18n="chat_title"></button>
+            <button type="button" class="chat-tab" id="chatTabAlign" data-i18n="align_tab"></button>
+          </span>
           <button type="button" id="chatClose" class="chat-close" data-i18n-title="chat_close">✕</button>
         </div>
         <ol class="chat-log" id="chatLog"></ol>
@@ -60,6 +64,28 @@
           <input id="chatInput" maxlength="500" autocomplete="off" enterkeyhint="send" data-i18n-placeholder="chat_placeholder">
           <button type="submit" class="primary" data-i18n="chat_send"></button>
         </form>
+        <div class="align-pane" id="alignPane" hidden>
+          <div class="align-top">
+            <div class="align-which">
+              <span class="align-title" id="alignTitle"></span>
+              <select id="alignSlot" hidden></select>
+            </div>
+            <input type="search" id="alignSearch" autocomplete="off" enterkeyhint="search" data-i18n-placeholder="align_search">
+            <div class="align-bar">
+              <button type="button" class="primary" id="alignMark" data-i18n="align_mark" data-i18n-title="align_mark_title"></button>
+              <span class="align-state" id="alignState"></span>
+            </div>
+            <div class="align-info" id="alignMarkInfo" hidden></div>
+            <div class="align-info" id="alignNote" hidden></div>
+          </div>
+          <div class="align-list" id="alignList"><div class="align-rows" id="alignRows"></div></div>
+          <button type="button" class="align-now" id="alignNow" data-i18n="align_now" hidden></button>
+          <div class="align-foot">
+            <span class="align-count" id="alignCount"></span>
+            <button type="button" class="ghost" id="alignReset" data-i18n="align_reset"></button>
+            <button type="button" id="alignDone" data-i18n="align_done"></button>
+          </div>
+        </div>
       </div>
       <div class="cam-big" id="camBig" hidden data-i18n-title="cam_shrink">
         <video autoplay playsinline muted></video>

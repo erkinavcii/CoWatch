@@ -1,6 +1,6 @@
 # Kaymış altyazıyı elle hizalama planı
 
-> 9 Kasım 2026. 1. adım (altyazı başına kayma) aynı gün kodlandı; panel ve hız henüz yok. Kararlar en sonda; cevap gelmediyse önerilenlerle ilerlenir. Otomatik hizalama (filmin sesine ya da başka bir altyazıya göre) ayrı bir iş: [future-plans.md](future-plans.md), "Altyazıyı otomatik hizalama".
+> 9 Kasım 2026. 1. adım (altyazı başına kayma) aynı gün kodlandı; 2. ve 3. adım (panel, ikinci nokta ve hız) 12 Kasım'da. 4. adım (odaya öner) proje sahibinin kararıyla yapılmayacak: başkalarına soru ya da öneri gitmez. Kararlar en sonda; cevap gelmediyse önerilenlerle ilerlenir. Otomatik hizalama (filmin sesine ya da başka bir altyazıya göre) ayrı bir iş: [future-plans.md](future-plans.md), "Altyazıyı otomatik hizalama".
 
 ## Sorun
 

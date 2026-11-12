@@ -791,3 +791,45 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .track-list li.align-open { flex-wrap: wrap; }
 .track-list .align-pick { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 4px; }
 .track-list .align-pick select { flex: 1; min-width: 0; max-width: 100%; }
+/* ---- aligning a subtitle by hand: the chat box's second tab, a list drawn only around what is in sight ---- */
+.chat-tabs { display: flex; gap: 2px; margin-left: -6px; }
+.chat-tabs[hidden], .chat-name[hidden], .align-pane[hidden], .align-now[hidden], .align-info[hidden] { display: none; }
+.chat-tab { padding: 3px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-weight: inherit; }
+.chat-tab.on { background: rgba(255, 255, 255, .1); color: var(--text); }
+.chat.aligning .chat-log, .chat.aligning .chat-form { display: none; }
+.stage .chat.aligning { height: min(480px, calc(100% - 100px)); }
+.align-pane { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.align-top { display: grid; gap: 6px; padding: 6px 10px 8px; }
+.align-which { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.align-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); }
+.align-which select { padding: 2px 6px; font-size: 12.5px; }
+.align-top input { min-width: 0; padding: 5px 9px; }
+.align-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.align-bar button { padding: 5px 10px; }
+.align-state { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.align-info { font-size: 12px; line-height: 1.35; color: var(--muted); }
+.align-info.warn { color: #ffd166; }
+.align-list { position: relative; flex: 1 1 auto; min-height: 92px; overflow-y: auto; border-top: 1px solid var(--line); overscroll-behavior: contain; }
+.align-rows { position: relative; }
+.align-row {
+  position: absolute; left: 0; right: 0; height: 46px; display: flex; gap: 8px; align-items: center; padding: 0 10px;
+  border: 0; border-radius: 0; background: transparent; text-align: left; white-space: normal;
+}
+.align-row:hover { background: rgba(255, 255, 255, .06); }
+.align-row.now { background: rgba(255, 255, 255, .12); box-shadow: inset 3px 0 0 var(--accent); }
+.align-time { flex: none; width: 54px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.align-text {
+  flex: 1; min-width: 0; font-size: 13px; line-height: 1.3; white-space: pre-line; overflow: hidden;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.align-now { align-self: center; margin-top: 6px; padding: 3px 12px; font-size: 12.5px; }
+.align-foot { display: flex; gap: 6px; align-items: center; padding: 8px 10px; border-top: 1px solid var(--line); }
+.align-count { flex: 1; min-width: 0; font-size: 12px; color: var(--muted); }
+.align-foot button { padding: 5px 10px; }
+.offset-row .align-open { margin-left: auto; padding: 5px 10px; }
+/* Beside a picture-in-picture window on a middle-sized screen the column sits under the film's place. */
+@media (min-width: 641px) and (max-width: 1099px) { .chat-dock { height: 480px; } }
+@media (max-width: 640px) {
+  .stage .chat.aligning { height: auto; }
+  .align-top input { font-size: 16px; } /* smaller text makes the iPhone zoom in on it */
+}
