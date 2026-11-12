@@ -306,7 +306,7 @@
         if (waitingForMe) clearTimeout(S.waitTimer);
         S.bufferingSent = waitingForMe;
         if (wasRunning !== roomRunning()) retimeStrokes();
-        renderControls(); renderCenter();
+        renderControls(); renderCenter(); phoneSync();
         break;
       }
       case 'members':
@@ -397,6 +397,7 @@
       loadStream(media);
     }
     renderAll();
+    phoneSync();
   }
 
   function destroyPlayer () {
@@ -3999,6 +4000,7 @@
     savePrefs();
     S.joined = true;
     el.joinOverlay.hidden = true;
+    phoneSync();
     if (S.kicked) { // removed by the host earlier: this is a new connection
       S.kicked = false;
       el.joinNotice.hidden = true;
@@ -4331,6 +4333,78 @@
       }
     }
   }
+
+  // ---------------------------------------------------------------- phone: screen awake, lock screen keys
+  // Wake lock: while the room plays a film the screen of this page stays on (a phone would dim
+  // and lock in the middle of the film). The browser drops the lock when the page is hidden, so
+  // it is asked again when the page shows. Only on a secure page (Funnel, Serve, localhost);
+  // where there is none, or the browser says no, nothing happens.
+  const WAKE = { lock: null, asking: false };
+  const wantAwake = () => S.joined && !!S.media && !!S.room.playing && !document.hidden;
+  function letSleep () {
+    const lock = WAKE.lock;
+    WAKE.lock = null;
+    if (lock) lock.release().catch(() => {});
+  }
+  async function keepAwake () {
+    if (!wantAwake()) { letSleep(); return; }
+    if (WAKE.lock || WAKE.asking || !navigator.wakeLock) return;
+    WAKE.asking = true;
+    try {
+      const lock = await navigator.wakeLock.request('screen');
+      lock.addEventListener('release', () => { if (WAKE.lock === lock) WAKE.lock = null; });
+      WAKE.lock = lock;
+      if (!wantAwake()) letSleep(); // paused while it was being asked
+    } catch { /* not allowed (hidden page, battery saver): the screen may sleep */ }
+    WAKE.asking = false;
+  }
+
+  // Media Session: the lock screen, the notification and headset keys show the film and steer
+  // the ROOM, like the buttons. Without handlers the browser would pause only this <video>; the
+  // handlers win, and a video paused locally anyway is played again by syncTick.
+  const MEDIA_SESSION = 'mediaSession' in navigator ? navigator.mediaSession : null;
+  const mediaActions = {
+    play: () => { if (S.media && !S.room.playing) send({ type: 'play' }); },
+    pause: () => { if (S.media && S.room.playing) send({ type: 'pause' }); },
+    seekbackward: (d) => seekTo(expectedPosition() - ((d && d.seekOffset) || 10)),
+    seekforward: (d) => seekTo(expectedPosition() + ((d && d.seekOffset) || 10)),
+    seekto: (d) => { if (d && Number.isFinite(d.seekTime)) seekTo(d.seekTime); }, // film time, as in the position state
+  };
+  if (MEDIA_SESSION) {
+    for (const [action, handler] of Object.entries(mediaActions)) {
+      try { MEDIA_SESSION.setActionHandler(action, handler); } catch { /* an action this browser does not know */ }
+    }
+  }
+  let sessionKey = null;
+  function syncMediaSession () {
+    if (!MEDIA_SESSION) return;
+    const m = S.joined ? S.media : null;
+    // The add-on poster when the film came from the browse card, else the app's icon.
+    const poster = m && (m.poster || (B.title && m.content && B.title.id === m.content.id && B.title.poster)) || '';
+    const key = m ? `${m.mediaKey}|${m.title}|${poster}` : '';
+    if (key !== sessionKey && typeof MediaMetadata === 'function') {
+      sessionKey = key;
+      try {
+        MEDIA_SESSION.metadata = !m ? null : new MediaMetadata({
+          title: m.title || 'Co-Watch', artist: 'Co-Watch',
+          artwork: poster
+            ? [{ src: poster }]
+            : [{ src: new URL('/static/favicon.svg', location.href).href, sizes: 'any', type: 'image/svg+xml' }],
+        });
+      } catch { /* a bad artwork address: no metadata rather than an error */ }
+    }
+    MEDIA_SESSION.playbackState = !m ? 'none' : S.room.playing ? 'playing' : 'paused';
+    const duration = m ? Number(m.duration) : 0;
+    if (!MEDIA_SESSION.setPositionState) return;
+    try {
+      if (!(duration > 0 && Number.isFinite(duration))) { MEDIA_SESSION.setPositionState(); return; }
+      const position = Math.min(Math.max(0, Number(expectedPosition()) || 0), duration);
+      MEDIA_SESSION.setPositionState({ duration, position, playbackRate: S.room.rate > 0 ? S.room.rate : 1 });
+    } catch { /* invalid numbers for a moment: the next sync puts them right */ }
+  }
+  function phoneSync () { keepAwake(); syncMediaSession(); }
+  document.addEventListener('visibilitychange', phoneSync);
+  setInterval(phoneSync, 3000);
 
   // For the browser console: cowatchDebug() shows the sync numbers.
   window.cowatchDebug = () => ({

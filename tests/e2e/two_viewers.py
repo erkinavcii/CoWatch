@@ -84,6 +84,34 @@ CANVAS_PIXEL = """([x, y]) => {
   return Array.from(c.getContext('2d').getImageData(px, py, 1, 1).data);
 }"""
 
+# Records the page's Media Session handlers and its screen wake locks. Headless Chromium may say
+# no to a wake lock; then a stand-in lock is handed out, so the page's asking and letting go are
+# still seen.
+PHONE_HOOKS = """(() => {
+  window.__cw = { actions: {}, wake: [] };
+  const ms = navigator.mediaSession;
+  if (ms) {
+    const set = ms.setActionHandler.bind(ms);
+    ms.setActionHandler = (action, handler) => { window.__cw.actions[action] = handler; return set(action, handler); };
+  }
+  const wl = navigator.wakeLock;
+  if (wl) {
+    const request = wl.request.bind(wl);
+    wl.request = async (type) => {
+      const entry = { type, real: true, released: false };
+      window.__cw.wake.push(entry);
+      let lock;
+      try { lock = await request(type); } catch {
+        entry.real = false;
+        lock = new EventTarget();
+        lock.release = async () => { lock.dispatchEvent(new Event('release')); };
+      }
+      lock.addEventListener('release', () => { entry.released = true; });
+      return lock;
+    };
+  }
+})();"""
+
 BALL = r"""() => {
   const n = document.querySelector('.ball:not(.me):not(.gone)');
   const m = /translate3d\(([-\d.]+)px, ([-\d.]+)px/.exec(n.style.transform);
@@ -198,6 +226,7 @@ def run(headed: bool) -> None:
                 ctx = browser.new_context(viewport={"width": width, "height": height}, locale="tr-TR")
                 ctx.add_init_script(COUNT_SOUNDS)
                 ctx.add_init_script(DEAF_SOCKETS)
+                ctx.add_init_script(PHONE_HOOKS)
                 page = ctx.new_page()
                 page.on("pageerror", lambda exc, n=name: errors.append(f"{n} pageerror: {exc}"))
                 page.on("console", lambda msg, n=name: on_console(msg, n))
@@ -297,6 +326,54 @@ def run(headed: bool) -> None:
             note = a.evaluate("() => { const n = document.querySelector('#centerMsg'); return n.hidden ? '' : n.textContent; }")
             check("the other window says who paused, the one who did sees nothing",
                   note == "Masha durdurdu" and b.is_hidden("#centerMsg"), repr(note))
+
+            # ---- phone: the lock screen and headset keys (Media Session) steer the room, and the
+            # screen stays on (wake lock) only while the room plays
+            WAKE = "window.__cw.wake"
+            held = lambda page: page.evaluate(f"() => {WAKE}.filter(w => !w.released).length")  # noqa: E731
+            session = b.evaluate("""() => { const m = navigator.mediaSession.metadata;
+              return { title: m && m.title, artist: m && m.artist, art: m ? m.artwork.map(a => a.src) : [],
+                       state: navigator.mediaSession.playbackState, actions: Object.keys(window.__cw.actions).sort() }; }""")
+            film_title = b.evaluate(f"() => {DBG}.media.title")
+            asked = b.evaluate(f"() => {WAKE}.length")
+            check("the lock screen shows the film's title, Co-Watch and the icon; the keys are the room's",
+                  session["title"] == film_title and session["artist"] == "Co-Watch"
+                  and any(src.endswith("/static/favicon.svg") for src in session["art"]) and session["state"] == "paused"
+                  and session["actions"] == ["pause", "play", "seekbackward", "seekforward", "seekto"], str(session))
+            check("the screen was kept on while playing and let go on pause",
+                  asked >= 1 and held(b) == 0 and held(a) == 0, b.evaluate(f"() => {WAKE}"))
+            paused_at = a.evaluate(f"() => {DBG}.room.position")
+            b.evaluate("() => window.__cw.actions.play({ action: 'play' })")
+            a.wait_for_function(f"() => {DBG}.room.playing", timeout=5000)
+            b.wait_for_function(f"() => navigator.mediaSession.playbackState === 'playing' && {WAKE}.some(w => !w.released)",
+                                timeout=5000)
+            a.wait_for_function(f"() => {WAKE}.some(w => !w.released)", timeout=5000)
+            check("the lock screen's play plays the room, both screens stay on", True)
+            before = a.evaluate(f"() => {DBG}.expected")
+            b.evaluate("() => window.__cw.actions.seekforward({ action: 'seekforward' })")
+            a.wait_for_function(f"() => {DBG}.room.position > {before} + 8", timeout=5000)
+            b.evaluate("() => window.__cw.actions.seekbackward({ action: 'seekbackward' })")
+            a.wait_for_function(f"() => {DBG}.room.position < {before} + 5", timeout=5000)
+            b.evaluate("() => window.__cw.actions.seekto({ action: 'seekto', seekTime: 3 })")
+            a.wait_for_function(f"() => Math.abs({DBG}.room.position - 3) < 1 && Math.abs({DBG}.filmTime - {DBG}.expected) < 1",
+                                timeout=10000)
+            check("the headset's ±10 s and the lock screen's seek bar move the room (film time)", True)
+            b.evaluate("() => window.__cw.actions.pause({ action: 'pause' })")
+            a.wait_for_function(f"() => !{DBG}.room.playing", timeout=5000)
+            b.wait_for_function(f"() => navigator.mediaSession.playbackState === 'paused' && !{WAKE}.some(w => !w.released)",
+                                timeout=5000)
+            a.wait_for_function(f"() => !{WAKE}.some(w => !w.released)", timeout=5000)
+            # A headset key the browser gave to the <video> alone pauses only this page: the room plays on.
+            b.evaluate("() => window.__cw.actions.play({ action: 'play' })")
+            a.wait_for_function(f"() => {DBG}.room.playing", timeout=5000)
+            b.evaluate("() => document.querySelector('#video').pause()")
+            b.wait_for_function("() => !document.querySelector('#video').paused", timeout=3000)
+            b.evaluate("() => window.__cw.actions.pause({ action: 'pause' })")
+            a.wait_for_function(f"() => !{DBG}.room.playing", timeout=5000)
+            check("the lock screen's pause pauses the room and lets the screens sleep; a video paused alone plays on", True,
+                  "real wake lock: " + str(b.evaluate(f"() => {WAKE}")[0]["real"]))
+            a.evaluate(f"() => {{ const s = document.querySelector('#seekBar'); s.value = '{paused_at}'; s.dispatchEvent(new Event('change')); }}")
+            b.wait_for_function(f"() => Math.abs({DBG}.room.position - {paused_at}) < 0.5", timeout=5000)
 
             # ---- a link that goes quiet: Masha's page hears nothing more from the server and
             # misses a seek. It notices the silence (no pong in 25 s), reconnects by itself as a
