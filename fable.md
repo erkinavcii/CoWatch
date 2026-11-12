@@ -215,3 +215,18 @@ Bu dosyanın commit'inden (`921ff81`) sonra plan uygulandı:
 
 Denenmeyenler: gerçek Funnel bağlantısı ve birkaç arkadaş, gerçek telefonlar ve iPhone, arkadaşın tarayıcıları (Yandex Browser, Opera GX), gerçek bir Rusça/Türkçe altyazı çifti, sonraki bölüm için gerçek bir torrent paketi.
 
+## 10. Son kontrol bulguları — Gemini incelemesi (12 Kasım)
+
+Gemini tarafından `c7e7a2e` üzerinde yapılan kod + canlı tarayıcı denetiminde testler geçti (`pytest` 196, `two_viewers.py` 58/58, `film_file.py` 31/31, `next_episode.py` 10/10, `slow_link.py` 10/10, `voice_camera.py` tam geçiş); bulunan ek hatalar ve bekleyen işler:
+
+| Önem | Bulgu | Yer | Etki |
+| --- | --- | --- | --- |
+| Yüksek | `0,0 s` kaymada `pts` siliniyor (`!next.offset && next.scale === 1`) | `web/app.js` (`setAlign`, satır 2621–2630) | İlk noktada `0,0 s` işaretlemek veya düğmeyle `0`a dönmek ilk noktayı siliyor; 10+ dk sonraki ikinci nokta hız farkını (`25 ↔ 23,976` vb.) hesaplayamıyor |
+| Orta | Kısa dikey ve yatay telefonlarda elle hizalama paneli taşıyor | `web/style.css` (satır 771–774, 800, 832–835) | Panel ~330–337 px istiyor; Chromium ölçümünde `390×667` alt kutuda `.align-foot` alttan 58 px, `844×390` normalde üstten 17 / alttan 95 px, `844×390` tam ekranda alttan 41 px taşıyor |
+| Orta | Otomatik hizalamada bitiş zamanı `e` sınırlanmıyor | `server/align.py` (`intervals`, `_bits`, satır 129–146) | `99:59:59` (`359.999 sn`) gibi bozuk bitişli tek satır filtrelenmiyor; `10 ms` adımda ~36 MB dizi/hesap açabiliyor |
+| Düşük | Film kapanınca arka plan küçük resim `ffmpeg`’i durdurulmuyor | `server/main.py` (`close_media`, satır 867–876) | `lifespan` (satır 1266) `thumbs.stop()` çağırıyor ama `close_media` çağırmıyor; kapalı dosyanın kare üretimi arka planda sürebiliyor |
+| Küçük | Medya kapanınca ilerleme çubuğu küçük resmi açık kalabiliyor | `web/app.js` (`applyMedia`, `hideThumb`, satır 397–402, 4953–4997) | İmleç çubuktayken film kapatılırsa önizleme kutusu boş sahnede asılı kalıyor |
+| Küçük | Otomatik hizalamada nadir HTTP/WebSocket yarışı | `web/app.js` (`alignControls`, satır 3963–3969) | `POST` yanıtı WS `tracks` mesajından birkaç ms önce gelirse `S.tracks.some(...)` henüz yok sayıp yeni hizalı izi seçmeyebilir |
+
+Karar bekleyen konular: Funnel yeni izleyici / yavaş bağlantı önerilerinin kendiliğinden uygulanıp uygulanmayacağı ve `v0.3.0` sürüm etiketi (`server/version.py`).
+
