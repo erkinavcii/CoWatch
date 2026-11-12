@@ -215,18 +215,20 @@ Bu dosyanın commit'inden (`921ff81`) sonra plan uygulandı:
 
 Denenmeyenler: gerçek Funnel bağlantısı ve birkaç arkadaş, gerçek telefonlar ve iPhone, arkadaşın tarayıcıları (Yandex Browser, Opera GX), gerçek bir Rusça/Türkçe altyazı çifti, sonraki bölüm için gerçek bir torrent paketi.
 
-## 10. Son kontrol bulguları — Gemini incelemesi (12 Kasım)
+## 10. Son kontrol bulguları — Gemini incelemesi ve düzeltmeleri (12 Kasım)
 
-Gemini tarafından `c7e7a2e` üzerinde yapılan kod + canlı tarayıcı denetiminde testler geçti (`pytest` 196, `two_viewers.py` 58/58, `film_file.py` 31/31, `next_episode.py` 10/10, `slow_link.py` 10/10, `voice_camera.py` tam geçiş); bulunan ek hatalar ve bekleyen işler:
+Gemini tarafından `c7e7a2e` üzerinde yapılan kod + canlı tarayıcı denetiminde (`pytest` 196, `two_viewers.py` 58/58, `film_file.py` 31/31, `next_episode.py` 10/10, `slow_link.py` 10/10, `voice_camera.py` tam geçiş) bulunan ek hatalar, **Gemini tarafından yapılan düzeltmeler** ve bekleyen kararlar:
 
-| Önem | Bulgu | Yer | Etki |
+| Önem | Bulgu | Yer | Gemini düzeltmesi ve doğrulama |
 | --- | --- | --- | --- |
-| Yüksek | `0,0 s` kaymada `pts` siliniyor (`!next.offset && next.scale === 1`) | `web/app.js` (`setAlign`, satır 2621–2630) | İlk noktada `0,0 s` işaretlemek veya düğmeyle `0`a dönmek ilk noktayı siliyor; 10+ dk sonraki ikinci nokta hız farkını (`25 ↔ 23,976` vb.) hesaplayamıyor |
-| Orta | Kısa dikey ve yatay telefonlarda elle hizalama paneli taşıyor | `web/style.css` (satır 771–774, 800, 832–835) | Panel ~330–337 px istiyor; Chromium ölçümünde `390×667` alt kutuda `.align-foot` alttan 58 px, `844×390` normalde üstten 17 / alttan 95 px, `844×390` tam ekranda alttan 41 px taşıyor |
-| Orta | Otomatik hizalamada bitiş zamanı `e` sınırlanmıyor | `server/align.py` (`intervals`, `_bits`, satır 129–146) | `99:59:59` (`359.999 sn`) gibi bozuk bitişli tek satır filtrelenmiyor; `10 ms` adımda ~36 MB dizi/hesap açabiliyor |
-| Düşük | Film kapanınca arka plan küçük resim `ffmpeg`’i durdurulmuyor | `server/main.py` (`close_media`, satır 867–876) | `lifespan` (satır 1266) `thumbs.stop()` çağırıyor ama `close_media` çağırmıyor; kapalı dosyanın kare üretimi arka planda sürebiliyor |
-| Küçük | Medya kapanınca ilerleme çubuğu küçük resmi açık kalabiliyor | `web/app.js` (`applyMedia`, `hideThumb`, satır 397–402, 4953–4997) | İmleç çubuktayken film kapatılırsa önizleme kutusu boş sahnede asılı kalıyor |
-| Küçük | Otomatik hizalamada nadir HTTP/WebSocket yarışı | `web/app.js` (`alignControls`, satır 3963–3969) | `POST` yanıtı WS `tracks` mesajından birkaç ms önce gelirse `S.tracks.some(...)` henüz yok sayıp yeni hizalı izi seçmeyebilir |
+| Yüksek | `0,0 s` kaymada `pts` siliniyor (`!next.offset && next.scale === 1`) | `web/app.js` (`setAlign`) | `!(next.pts && next.pts.length)` koşulu eklendi; ilk eşleşme `0 ms` olsa bile `pts` korunuyor (`Sıfırla` hâlâ temizliyor). `film_file.py` sıfır kayma → hız ölçümü testiyle doğrulandı. |
+| Orta | Kısa dikey ve yatay telefonlarda elle hizalama paneli taşıyor | `web/style.css` (`.align-pane`, `.chat-dock`, `@media (orientation: landscape) and (max-height: 500px)`) | `.align-pane` için `overflow-y: auto`, `max-width: 640px` altında `.chat-dock:has(.chat.aligning)` (`max(360px, 56vh)`) ve `.stage .chat.aligning` için `max-height: calc(100% - 76px)`, kısa yatay ekranda ise sıkılaştırılmış tam sahne yerleşimi eklendi; `390×667` ve `844×390` (normal + tam ekran) `film_file.py` içinde doğrulandı. |
+| Orta | Otomatik hizalamada bitiş zamanı `e` sınırlanmıyor | `server/align.py` (`intervals`, `_bits`) | `intervals` ve `_bits` içinde zaman aralığı `MAX_SPAN_S` (`1.1 ×` hız payıyla) ile sınırlandı. `tests/test_align.py` (`test_huge_end_timestamp_is_clamped`) ile doğrulandı. |
+| Düşük | Film kapanınca arka plan küçük resim `ffmpeg`’i durdurulmuyor | `server/main.py` (`close_media`), `server/thumbs.py` (`_run`) | `close_media` içine `self.thumbs.stop()` eklendi; iptal sırasında `proc.poll() is None` + `suppress(OSError)` ile güvenli sonlandırma sağlandı. `test_closing_media_stops_thumbnail_job` ve `test_stop_cancels_running_thumbnail_job` ile doğrulandı. |
+| Küçük | Medya kapanınca ilerleme çubuğu küçük resmi açık kalabiliyor | `web/app.js` (`applyMedia`, `resetThumb`) | Film kapandığında/değiştiğinde `resetThumb()` ile `THUMB.hover`/`touch`/`loaded` sıfırlanıp kutu gizleniyor; yenileme sonrası erken seek için `renderControls()` içinde `seekBar.max` da anında güncelleniyor. `film_file.py` ile doğrulandı. |
+| Küçük | Otomatik hizalamada nadir HTTP/WebSocket yarışı | `web/app.js` (`ALIGN.swap`, `alignControls`, `applyTracks`) | `POST /api/subtitles/{id}/align` dönüşünde yeni iz henüz `S.tracks` içinde yoksa `ALIGN.swap` saklanıyor, WS `subtitles` geldiğinde `applyTracks` etkin yuvayı yeni hizalı ize geçiriyor. |
+
+**Gemini notu (12 Kasım):** Yukarıdaki 6 maddenin tamamı **Gemini tarafından düzenlendi**, ilgili birim ve tarayıcı regresyon testleri eklendi ve son düzenlemelerin ardından tüm testler geçti: `pytest` **199 passed**, `two_viewers.py` **58/58**, `film_file.py` **36/36**, `next_episode.py` **10/10**, `slow_link.py` **10/10**, `voice_camera.py` **all good**.
 
 Karar bekleyen konular: Funnel yeni izleyici / yavaş bağlantı önerilerinin kendiliğinden uygulanıp uygulanmayacağı ve `v0.3.0` sürüm etiketi (`server/version.py`).
 
