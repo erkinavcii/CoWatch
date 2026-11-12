@@ -426,7 +426,7 @@ def run(headed: bool) -> None:
                   z1 and z1["offset"] == 0 and len(z1.get("pts") or []) == 1
                   and z2 and abs(z2["scale"] - 25 / 23.976) < 1e-9, f"z1={z1} z2={z2}")
 
-            # On a phone held upright the panel is the box under the film.
+            # On a phone held upright the panel is the box under the film, and stays inside its box across mobile sizes.
             b.set_viewport_size({"width": 390, "height": 844})
             b.evaluate("() => window.scrollTo(0, 0)")
             b.click("#offsetRows [data-slot=primary] .align-open")
@@ -436,6 +436,37 @@ def run(headed: bool) -> None:
                 width: box.getBoundingClientRect().width}; }""")
             check("on a phone held upright the panel is in the box under the film",
                   phone["parent"] == "chatDock" and phone["under"] and phone["width"] > 300, str(phone))
+            for label, vw, vh, fill in [
+                ("390x667 docked", 390, 667, False),
+                ("844x390 landscape", 844, 390, False),
+                ("844x390 fill", 844, 390, True),
+            ]:
+                b.set_viewport_size({"width": vw, "height": vh})
+                b.evaluate(f"""() => {{
+                  const s = document.querySelector('#stage');
+                  s.classList.toggle('fill', {str(fill).lower()});
+                  document.dispatchEvent(new Event('fullscreenchange'));
+                  document.querySelector('#stageWrap').scrollIntoView({{ block: 'start' }});
+                }}""")
+                b.wait_for_timeout(150)
+                fit = b.evaluate("""() => {
+                  const box = document.querySelector('#chatBox'), done = document.querySelector('#alignDone');
+                  const cb = box.getBoundingClientRect(), db = done.getBoundingClientRect();
+                  const cx = db.left + db.width / 2, cy = db.top + db.height / 2;
+                  const hit = cy >= 0 && cy < window.innerHeight ? document.elementFromPoint(cx, cy) : null;
+                  return {
+                    inBox: db.top >= cb.top - 1 && db.bottom <= cb.bottom + 1,
+                    inView: db.top >= 0 && db.bottom <= window.innerHeight + 1,
+                    clickable: !!(hit && (hit === done || done.contains(hit))),
+                    cb: {top: Math.round(cb.top), bottom: Math.round(cb.bottom)},
+                    db: {top: Math.round(db.top), bottom: Math.round(db.bottom)},
+                  };
+                }""")
+                check(f"align panel fits inside its box with reachable Bitti button ({label})",
+                      fit["inBox"] and fit["inView"] and fit["clickable"], str(fit))
+            b.evaluate("() => { document.querySelector('#stage').classList.remove('fill'); document.dispatchEvent(new Event('fullscreenchange')); }")
+            b.set_viewport_size({"width": 390, "height": 844})
+            b.wait_for_timeout(150)
             b.click("#chatTabChat")
             b.wait_for_function("() => document.querySelector('#alignPane').hidden && !document.querySelector('#chatLog').hidden"
                                 " && getComputedStyle(document.querySelector('#chatForm')).display !== 'none'", timeout=3000)

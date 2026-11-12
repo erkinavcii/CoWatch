@@ -798,7 +798,7 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 .chat-tab.on { background: rgba(255, 255, 255, .1); color: var(--text); }
 .chat.aligning .chat-log, .chat.aligning .chat-form { display: none; }
 .stage .chat.aligning { height: min(480px, calc(100% - 100px)); }
-.align-pane { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.align-pane { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .align-top { display: grid; gap: 6px; padding: 6px 10px 8px; }
 .align-which { display: flex; gap: 6px; align-items: center; min-width: 0; }
 .align-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--muted); }
@@ -830,8 +830,22 @@ button.big { padding: 10px 18px; font-size: 16px; width: 100%; }
 /* Beside a picture-in-picture window on a middle-sized screen the column sits under the film's place. */
 @media (min-width: 641px) and (max-width: 1099px) { .chat-dock { height: 480px; } }
 @media (max-width: 640px) {
-  .stage .chat.aligning { height: auto; }
+  .chat-dock:has(.chat.aligning) { height: max(360px, 56vh); }
+  .stage .chat.aligning { height: auto; max-height: calc(100% - 76px); }
   .align-top input { font-size: 16px; } /* smaller text makes the iPhone zoom in on it */
+}
+@media (orientation: landscape) and (max-height: 500px) {
+  .stage .chat.aligning {
+    top: 4px; bottom: 64px; height: auto; max-height: none; width: min(380px, 60%);
+  }
+  .stage .chat.aligning .chat-head { padding: 2px 6px 2px 10px; font-size: 12.5px; }
+  .stage .chat.aligning .align-top { gap: 3px; padding: 3px 10px 4px; }
+  .stage .chat.aligning .align-top input { padding: 3px 8px; }
+  .stage .chat.aligning .align-bar button { padding: 3px 8px; }
+  .stage .chat.aligning .align-list { min-height: 46px; }
+  .stage .chat.aligning .align-now { margin-top: 3px; padding: 2px 10px; }
+  .stage .chat.aligning .align-foot { padding: 4px 10px; }
+  .stage .chat.aligning .align-foot button { padding: 3px 8px; }
 }
 
 /* ---- pictures over the seek bar (app.js: THUMB) ---- */
