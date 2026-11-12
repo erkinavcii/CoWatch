@@ -476,6 +476,18 @@ def run(headed: bool) -> None:
             b.wait_for_function("() => document.querySelector('#alignPane').hidden && document.querySelector('#chatTabs').hidden", timeout=3000)
             check("the tabs go between the chat and the panel; Bitti leaves the chat as it was", True)
 
+            # Closing media hides the seekbar thumbnail tooltip if the pointer was on the bar.
+            a.click("#alignDone")
+            a.evaluate("() => window.scrollTo(0, 0)")
+            a.wait_for_function(f"() => {DBG}.media && {DBG}.media.thumbs", timeout=20000)
+            sb = a.locator("#seekBar").bounding_box()
+            a.mouse.move(sb["x"] + sb["width"] * 0.5, sb["y"] + sb["height"] * 0.5)
+            a.wait_for_function("() => { const p = document.querySelector('.seek-preview'); return p && !p.hidden; }", timeout=3000)
+            a.evaluate("() => fetch('/api/media/close', { method: 'POST' })")
+            a.wait_for_function(f"() => !{DBG}.media", timeout=5000)
+            thumb_hidden = a.evaluate("() => { const p = document.querySelector('.seek-preview'); return !p || p.hidden; }")
+            check("closing media hides any visible seekbar thumbnail preview", thumb_hidden)
+
             check("no errors in the browser console", not errors, "\n".join(errors[:5]))
             browser.close()
     finally:

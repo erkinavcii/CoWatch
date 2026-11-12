@@ -398,6 +398,8 @@
     const changedFilm = (S.media && S.media.mediaKey) !== (media && media.mediaKey);
     S.media = media;
     if (changedFilm) { S.cues.clear(); resetAddonSubs(); }
+    if (!media || changedFilm) resetThumb();
+    else if (!media.thumbs) hideThumb();
     if (!media) {
       destroyPlayer();
     } else if (media.streamId !== S.streamId) {
@@ -4548,6 +4550,7 @@
     el.muteBtn.classList.toggle('muted', video.muted);
     const disabled = !S.media;
     for (const node of [el.playBtn, el.backBtn, el.fwdBtn, el.seekBar]) node.disabled = disabled;
+    el.seekBar.max = String(Math.max(S.media ? S.media.duration : 0, 1));
     if (!roomRunning()) el.stage.classList.remove('idle');
   }
 
@@ -4952,6 +4955,7 @@
   }
 
   function hideThumb () { if (THUMB.box) THUMB.box.hidden = true; }
+  function resetThumb () { THUMB.hover = false; THUMB.touch = false; THUMB.loaded = ''; hideThumb(); }
 
   // clientX on the bar -> film seconds (as the slider itself counts them)
   function seekTimeAt (clientX) {
