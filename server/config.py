@@ -324,6 +324,10 @@ class Settings:
     def torrent_dir(self) -> Path:
         return self.data_dir / "torrents"
 
+    @property
+    def thumbs_dir(self) -> Path:
+        return self.data_dir / "thumbs"
+
 
 def _persistent_key(data_dir: Path) -> str:
     """Keep the access key across restarts so the shared link stays valid."""

@@ -35,6 +35,7 @@ from .config import AI_PRESETS, CHOICES, get_settings, load_saved, locked_settin
 from . import align, episodes, filepicker, library, netpanel, stremio, tailscale, translate, updates
 from .version import VERSION
 from .positions import PositionStore
+from .thumbs import ThumbMaker, ThumbStore
 from .stremio import StremioError
 from .media import (MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, extract_subtitles,
                     prepare_converting, probe)
@@ -136,6 +137,7 @@ class Controller:
         self.last_jump = -math.inf  # monotonic: the last seek, after which everyone loads for a moment
         self.next_item: Optional[dict] = None  # the next episode of the film playing (find_next)
         self.positions = PositionStore(cfg.data_dir / "positions.json")  # where each film was left
+        self.thumbs = ThumbMaker(cfg, ThumbStore(cfg.thumbs_dir))  # pictures over the seek bar (thumbs.py)
 
     # ---- messages -------------------------------------------------------------
     @property
@@ -146,7 +148,8 @@ class Controller:
         if not self.ready:
             return None
         public = self.session.public()
-        return {**public, "streamKbps": netpanel.stream_kbps(public, cfg.audio_kbps), "next": self.next_public()}
+        return {**public, "streamKbps": netpanel.stream_kbps(public, cfg.audio_kbps), "next": self.next_public(),
+                "thumbs": self.thumbs.store.public(public["mediaKey"])}
 
     # ---- connection panel (netpanel.py) ---------------------------------------------------
     def on_netstat(self, client: Client, msg: dict) -> None:
@@ -706,6 +709,7 @@ class Controller:
             if resume:
                 await self.room.broadcast({"type": "resumed", "at": round(resume, 1), "mediaKey": source.media_key})
             self.embedded_soon(session)
+            self.thumbs_soon(session)
 
     # ---- the next episode and resuming (episodes.py, positions.py)
     # The next episode is the video after the one playing in the same torrent, or in the same
@@ -823,6 +827,22 @@ class Controller:
         if added and self.session is session:
             await self.broadcast_tracks()
             await self.status("embedded_subs", n=added)
+
+    # ---- pictures over the seek bar (thumbs.py): made once per film, sent in `media` when ready
+    def thumbs_soon(self, session: MediaSession) -> None:
+        self.thumbs.soon(session, self._torrent_complete, self._thumbs_ready)
+
+    async def _torrent_complete(self, session: MediaSession) -> bool:
+        try:
+            info = await self.helper.info(session.source.info_hash)
+        except HelperError:
+            return False
+        files = [f for f in info.get("files", []) if f.get("index") == session.source.file_index]
+        return bool(files) and files[0].get("progress", 0) >= 1
+
+    async def _thumbs_ready(self, session: MediaSession) -> None:
+        if self.session is session and self.ready:
+            await self.broadcast_media()
 
     def start_open(self, **kwargs) -> None:
         self.opening = True  # at once: a second request now finds it busy and cancels it
@@ -1094,6 +1114,7 @@ class Controller:
                 session = self.session
                 if session is not None and session.source.kind == "torrent":
                     self.embedded_soon(session)
+                    self.thumbs_soon(session)
                 if session is None or session.source.kind != "torrent" or session.stream is None:
                     if self.download_throttled:
                         await self.helper.throttle(download_kb=0)
@@ -1242,6 +1263,7 @@ async def lifespan(_app: FastAPI):
         ctl.tasks.append(asyncio.create_task(update_check.loop(cfg.update_delay_s)))
     yield
     ctl.note_position(flush=True)
+    ctl.thumbs.stop()
     encoder_check.cancel()
     for task in ctl.tasks:
         task.cancel()
@@ -1320,6 +1342,16 @@ async def hls_file(stream_id: str, name: str):
         raise HTTPException(404)
     media_type = "video/mp4" if name.endswith(".mp4") else "video/iso.segment"
     return FileResponse(path, media_type=media_type, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/thumbs/{key}/{name}", include_in_schema=False)
+async def thumb_file(key: str, name: str):
+    """A sheet of the pictures over the seek bar (thumbs.py), of the film playing only."""
+    session = ctl.session
+    path = ctl.thumbs.store.file(key, name) if session is not None and session.source.media_key == key else None
+    if path is None:
+        raise HTTPException(404)
+    return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 # ---- API ------------------------------------------------------------------------------------

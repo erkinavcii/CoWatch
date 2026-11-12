@@ -4920,6 +4920,86 @@
     }
   }
 
+  // ---------------------------------------------------------------- pictures over the seek bar
+  // The server makes a small picture every 10 s or so (server/thumbs.py) and sends where they
+  // are in `media.thumbs` once they are ready: sprite sheets of cols × rows tiles, w × h each.
+  // Hovering the bar with the mouse, or dragging it with a finger, shows the tile of that
+  // moment and its time above the bar. Nothing while the film has no pictures yet. The box sits
+  // inside the seek bar, so it goes with it into fullscreen and the picture-in-picture window
+  // (the sheet's address is absolute there: that window's document has no address of its own).
+  const THUMB = { box: null, pic: null, time: null, touch: false, hover: false, loaded: '' };
+  const SEEK_KNOB_PX = 14; // the slider's knob: the value runs from its half to the other end's half
+
+  function thumbBox () {
+    if (THUMB.box) return THUMB.box;
+    const box = document.createElement('div');
+    box.className = 'seek-preview'; box.hidden = true;
+    THUMB.pic = document.createElement('div'); THUMB.pic.className = 'seek-pic';
+    THUMB.time = document.createElement('span'); THUMB.time.className = 'seek-time';
+    box.append(THUMB.pic, THUMB.time);
+    el.seekBar.parentNode.appendChild(box);
+    THUMB.box = box;
+    return box;
+  }
+  const thumbSheet = (thumbs, n) => new URL(`${thumbs.url}sheet_${String(n).padStart(3, '0')}.jpg`, location.href).href;
+
+  function preloadThumbs (thumbs) {
+    const key = `${thumbs.url}${thumbs.sheets}`;
+    if (THUMB.loaded === key) return;
+    THUMB.loaded = key;
+    for (let n = 0; n < thumbs.sheets; n++) new Image().src = thumbSheet(thumbs, n);
+  }
+
+  function hideThumb () { if (THUMB.box) THUMB.box.hidden = true; }
+
+  // clientX on the bar -> film seconds (as the slider itself counts them)
+  function seekTimeAt (clientX) {
+    const r = el.seekBar.getBoundingClientRect();
+    const f = Math.min(1, Math.max(0, (clientX - r.left - SEEK_KNOB_PX / 2) / Math.max(1, r.width - SEEK_KNOB_PX)));
+    return f * S.media.duration;
+  }
+
+  function showThumb (t) {
+    const media = S.media;
+    const thumbs = media && media.thumbs;
+    if (!thumbs || !(media.duration > 0) || !thumbs.count) { hideThumb(); return; }
+    preloadThumbs(thumbs);
+    const box = thumbBox();
+    const index = Math.min(thumbs.count - 1, Math.max(0, Math.round(t / thumbs.interval)));
+    const perSheet = thumbs.cols * thumbs.rows;
+    const sheet = Math.floor(index / perSheet);
+    const tile = index % perSheet;
+    // A short stage (a phone held upright, the corner box) gets a smaller picture.
+    const scale = el.stage.clientHeight < 320 ? 0.7 : 1;
+    const w = thumbs.w * scale; const h = thumbs.h * scale;
+    const pic = THUMB.pic;
+    pic.style.width = `${w}px`; pic.style.height = `${h}px`;
+    pic.style.backgroundImage = `url("${thumbSheet(thumbs, sheet)}")`;
+    pic.style.backgroundSize = `${thumbs.cols * w}px ${thumbs.rows * h}px`;
+    pic.style.backgroundPosition = `-${(tile % thumbs.cols) * w}px -${Math.floor(tile / thumbs.cols) * h}px`;
+    THUMB.time.textContent = fmtTime(t);
+    box.dataset.t = String(Math.round(t * 10) / 10);
+    box.hidden = false;
+    const bar = el.seekBar.getBoundingClientRect();
+    const f = Math.min(1, Math.max(0, t / media.duration));
+    const x = SEEK_KNOB_PX / 2 + f * (bar.width - SEEK_KNOB_PX);
+    box.style.left = `${Math.min(Math.max(0, x - w / 2), Math.max(0, bar.width - w))}px`;
+  }
+
+  el.seekBar.addEventListener('pointerdown', (e) => { THUMB.touch = e.pointerType === 'touch'; });
+  el.seekBar.addEventListener('pointermove', (e) => {
+    if (e.pointerType === 'touch' || !S.media) return; // a finger: the dragged value below
+    THUMB.hover = true;
+    showThumb(seekTimeAt(e.clientX));
+  });
+  el.seekBar.addEventListener('pointerleave', (e) => {
+    THUMB.hover = false;
+    if (e.pointerType !== 'touch' && !S.dragging) hideThumb();
+  });
+  el.seekBar.addEventListener('input', () => { if (S.media) showThumb(Number(el.seekBar.value)); });
+  const endTouchThumb = () => { if (THUMB.touch || !THUMB.hover) hideThumb(); THUMB.touch = false; };
+  for (const name of ['change', 'pointerup', 'pointercancel', 'touchend']) el.seekBar.addEventListener(name, endTouchThumb);
+
   // For the browser console: cowatchDebug() shows the sync numbers.
   window.cowatchDebug = () => ({
     filmTime: filmTime(), expected: expectedPosition(), drift: filmTime() - expectedPosition(),

@@ -615,6 +615,28 @@ def run(headed: bool) -> None:
             b.keyboard.press("Escape")
             check("Escape closes the panel", b.evaluate("() => document.querySelector('#chatBox').hidden"))
 
+            # ---- pictures over the seek bar: the server makes them after the film opens; hovering
+            # the middle of the bar shows the tile of 0:15 and its time, leaving the bar hides it
+            a.wait_for_function(f"() => {DBG}.media && {DBG}.media.thumbs", timeout=60000)
+            thumbs = a.evaluate(f"() => {DBG}.media.thumbs")
+            bar = a.eval_on_selector("#seekBar", "s => { const r = s.getBoundingClientRect(); return {x: r.left, y: r.top + r.height / 2, w: r.width}; }")
+            a.mouse.move(bar["x"] + bar["w"] * 0.3, bar["y"] - 40)
+            a.mouse.move(bar["x"] + 7 + (bar["w"] - 14) * 0.5, bar["y"], steps=4)
+            a.wait_for_function("() => { const b = document.querySelector('.seek-preview'); return b && !b.hidden; }", timeout=3000)
+            preview = a.evaluate("""async () => { const b = document.querySelector('.seek-preview'), p = b.querySelector('.seek-pic');
+              const url = getComputedStyle(p).backgroundImage.slice(5, -2), r = b.getBoundingClientRect();
+              const bar = document.querySelector('#seekBar').getBoundingClientRect();
+              return {time: b.querySelector('.seek-time').textContent, image: url, pos: p.style.backgroundPosition,
+                      status: (await fetch(url)).status, above: r.bottom <= bar.top, w: p.offsetWidth}; }""")
+            check("the media message brings the seek bar's pictures once they are made",
+                  thumbs["count"] in (20, 21) and thumbs["interval"] == 1.5 and thumbs["w"] == 160, str(thumbs))
+            check("hovering the middle of the seek bar shows that moment's picture and time above the bar",
+                  preview["time"] == "0:15" and preview["image"].endswith("/sheet_000.jpg") and preview["status"] == 200
+                  and preview["pos"].endswith(f" -{thumbs['h']}px") and preview["above"], str(preview))
+            a.mouse.move(bar["x"] + bar["w"] * 0.5, bar["y"] - 120)
+            a.wait_for_function("() => document.querySelector('.seek-preview').hidden", timeout=3000)
+            check("leaving the bar hides the picture", True)
+
             # ---- a phone held upright: the chat in a box under the film, the header on one line,
             # and where only a <video> may go fullscreen (the iPhone) the stage fills the window
             phone_ctx = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True,
@@ -643,6 +665,25 @@ def run(headed: bool) -> None:
                       share: getComputedStyle(document.querySelector('#screenGroup')).display}; }""")
             check("on the short picture the drawing toolbar lies in a row, clear of the seek bar",
                   tools["row"] and tools["bottom"] <= tools["seek"], str(tools))
+
+            # ---- dragging the seek bar with a finger shows the picture of where it is, lifting hides it
+            cdp = phone.context.new_cdp_session(phone)
+            bar = phone.eval_on_selector("#seekBar", "s => { const r = s.getBoundingClientRect(); return {x: r.left, y: r.top + r.height / 2, w: r.width}; }")
+            phone.touchscreen.tap(bar["x"] + bar["w"] * 0.5, bar["y"] - 60)  # the controls show
+            time.sleep(0.4)
+            touch = lambda kind, f: cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [] if kind == "touchEnd" else  # noqa: E731
+                                                                          [{"x": bar["x"] + 7 + (bar["w"] - 14) * f, "y": bar["y"]}]})
+            touch("touchStart", 0.2)
+            for f in (0.3, 0.4, 0.5):
+                touch("touchMove", f)
+                time.sleep(0.05)
+            dragged = phone.evaluate("""() => { const b = document.querySelector('.seek-preview');
+              return b ? {shown: !b.hidden, t: Number(b.dataset.t), w: b.querySelector('.seek-pic').offsetWidth} : null; }""")
+            touch("touchEnd", 0.5)
+            time.sleep(0.3)
+            check("dragging the seek bar with a finger shows the picture of that moment, smaller on the phone",
+                  bool(dragged) and dragged["shown"] and abs(dragged["t"] - 15) < 1.5 and dragged["w"] < 160, str(dragged))
+            check("lifting the finger hides it", phone.evaluate("() => document.querySelector('.seek-preview').hidden"))
 
             # ---- taps: one shows the controls; in the small picture a quick double tap anywhere goes
             # fullscreen (here: fills the window); there it seeks on the sides and the middle comes back
