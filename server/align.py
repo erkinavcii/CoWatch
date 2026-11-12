@@ -128,7 +128,8 @@ def frame_rates(scale: float) -> Optional[list[float]]:
 # ---- speech as bits ---------------------------------------------------------------------------
 def intervals(cues: Iterable[Cue]) -> list[tuple[float, float]]:
     """Speech intervals: the cues' times, sorted and merged where they overlap or touch."""
-    spans = sorted((float(s), float(e)) for s, e, *_ in cues if e > s and s < MAX_SPAN_S)
+    spans = sorted((max(0.0, float(s)), min(float(e), MAX_SPAN_S))
+                   for s, e, *_ in cues if s < MAX_SPAN_S and e > max(0.0, float(s)))
     merged: list[list[float]] = []
     for s, e in spans:
         if merged and s <= merged[-1][1]:
@@ -139,7 +140,9 @@ def intervals(cues: Iterable[Cue]) -> list[tuple[float, float]]:
 
 
 def _bits(spans: Iterable[tuple[float, float]], step: float) -> int:
-    spans = [(max(0, round(s / step)), max(0, round(e / step))) for s, e in spans]
+    limit = round(MAX_SPAN_S * 1.1 / step)
+    spans = [(min(limit, max(0, round(s / step))), min(limit, max(0, round(e / step)))) for s, e in spans]
+    spans = [(i, j) for i, j in spans if j > i]
     if not spans:
         return 0
     size = max(e for _, e in spans) + 1

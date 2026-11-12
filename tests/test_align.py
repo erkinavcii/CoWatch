@@ -150,3 +150,19 @@ def test_one_line_subtitle():
 def test_empty_subtitle():
     with pytest.raises(align.AlignError):
         align.align([(1.0, 2.0, "a")], [])
+
+
+def test_huge_end_timestamp_is_clamped():
+    spans = align.intervals([
+        (-5.0, 2.0, "starts negative"),
+        (1.0, 359999.0, "99:59:59 broken cue"),
+        (align.MAX_SPAN_S + 100.0, 359999.0, "beyond limit"),
+    ])
+    assert spans == [(0.0, align.MAX_SPAN_S)]
+    bits = align._bits([(0.0, 1e9)], align.FINE_S)
+    assert bits.bit_length() <= round(align.MAX_SPAN_S * 1.1 / align.FINE_S) + 1
+    ref = film(11, minutes=40)
+    target, _ = release(ref, lambda t: t + 2.5)
+    target.append((500.0, 359999.0, "corrupt end"))
+    result = align.align(ref, target)
+    assert result.score >= align.MIN_SCORE and abs(result.offset + 2.5) < 0.05
