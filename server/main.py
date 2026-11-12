@@ -219,6 +219,7 @@ class Controller:
         if client.id not in self.room.clients:
             return
         changed = self.room.remove(client.id)
+        self.luma.pop(client.id, None)  # its picture no longer counts for the others
         await self.room.broadcast(self.room.members_msg())
         if changed:
             await self.broadcast_state()

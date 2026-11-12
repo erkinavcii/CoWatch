@@ -539,8 +539,9 @@ def test_a_dark_scene_is_not_a_black_picture():
     _clear_log()
     with TestClient(app) as client, ExitStack() as stack:
         opened = _luma_room(stack, client, ["Bir", "Iki", "Uc"])
-        _luma_rounds(opened, [2, 4, 0], 2)
-        _luma_rounds(opened[:1], [0], 2, start=110.0)  # dark at a moment nobody else has seen
+        # Film times of its own: a page of the test before may still be leaving, with its samples.
+        _luma_rounds(opened, [2, 4, 0], 2, start=700.0)
+        _luma_rounds(opened[:1], [0], 2, start=710.0)  # dark at a moment nobody else has seen
         assert _log_lines("black_picture") == []
 
 
