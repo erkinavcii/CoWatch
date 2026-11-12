@@ -317,6 +317,7 @@
       case 'screen': onScreen(msg); break;
       case 'media': applyMedia(msg.media); keepRetune(); break;
       case 'retune': onRetune(msg); break;
+      case 'resumed': onResumed(msg); break;
       case 'progress': S.progress = msg; renderMediaInfo(); break;
       case 'subtitles': applyTracks(msg.tracks || []); break;
       case 'status': onStatus(msg); break;
@@ -2426,6 +2427,7 @@
       }
     }
     retuneCard();
+    nextCard(); resumeCard();
     el.shareAsks.hidden = !el.shareAsks.children.length;
   }
 
@@ -2794,6 +2796,75 @@
       pickFileBtn.disabled = false;
     }
   });
+
+  // ---------------------------------------------------------------- next episode and resuming
+  // The server finds the video after this one (the same torrent or folder) and keeps it: the
+  // page sees only its label (`media.next`) and asks for it, saying which film it saw, so that
+  // two clicks at the end of an episode do not skip one. Near the end a card over the picture
+  // offers it to whoever may open it. A film opened again starts paused where it was left: the
+  // server says so (`resumed`) and anyone may start it from the beginning.
+  const NEXT = { offeredFor: null, dismissed: null, film: null };
+  const RESUMED = { ask: null, timer: null };
+  const NEXT_OFFER_S = 60;
+  const nextBtn = $('#nextBtn');
+  function canOpenNext () {
+    const n = S.media && S.media.next;
+    if (!n || !S.canChangeMedia) return false;
+    if (n.kind === 'local') return S.isHost;
+    if (n.kind === 'library') return S.canLibrary;
+    return true;
+  }
+  function renderNext () {
+    const show = canOpenNext();
+    nextBtn.hidden = !show;
+    if (show) nextBtn.textContent = t('next_episode', { label: S.media.next.label });
+  }
+  async function openNext () {
+    if (!S.media) return;
+    NEXT.dismissed = S.media.mediaKey;
+    NEXT.offeredFor = null;
+    renderShareAsks();
+    try {
+      await api('/api/media/next', { json: { after: S.media.mediaKey } });
+    } catch (err) {
+      if (String(err.message) !== 'next_moved') toast(errorText(err), 'error'); // someone was quicker
+    }
+  }
+  nextBtn.addEventListener('click', openNext);
+  // Once a second: the last minute of the film (or its end) offers the next episode. "Not now"
+  // holds until another film opens; the resume notice goes once the room has left that point.
+  setInterval(() => {
+    const m = S.media;
+    const film = m ? m.mediaKey : null;
+    if (film !== NEXT.film) { NEXT.film = film; NEXT.dismissed = null; }
+    if (RESUMED.ask && m && Math.abs(expectedPosition() - RESUMED.ask.at) > 5) { RESUMED.ask = null; renderShareAsks(); }
+    const near = !!m && m.duration > 0 && expectedPosition() >= m.duration - Math.min(NEXT_OFFER_S, m.duration / 4);
+    const key = near && canOpenNext() && NEXT.dismissed !== m.mediaKey ? m.mediaKey : null;
+    if (key !== NEXT.offeredFor) { NEXT.offeredFor = key; renderShareAsks(); }
+  }, 1000);
+  function nextCard () {
+    const m = S.media;
+    if (!m || !m.next || NEXT.offeredFor !== m.mediaKey) return;
+    const card = shareCard(t('next_offer', { label: m.next.label }));
+    card.dataset.next = '1';
+    const later = () => { NEXT.dismissed = m.mediaKey; NEXT.offeredFor = null; renderShareAsks(); };
+    cardButtons(card, [[t('next_later'), 'ghost', later], [t('next_play'), 'primary', openNext]]);
+  }
+  function onResumed (msg) {
+    RESUMED.ask = { at: Number(msg.at) || 0, mediaKey: msg.mediaKey };
+    clearTimeout(RESUMED.timer);
+    RESUMED.timer = setTimeout(() => { RESUMED.ask = null; renderShareAsks(); }, 20000);
+    renderShareAsks();
+  }
+  function resumeCard () {
+    const ask = RESUMED.ask;
+    if (!ask) return;
+    if (!S.media || S.media.mediaKey !== ask.mediaKey) { RESUMED.ask = null; return; }
+    const card = shareCard(t('resumed_at', { at: fmtTime(ask.at) }));
+    card.dataset.resume = '1';
+    const close = () => { RESUMED.ask = null; renderShareAsks(); };
+    cardButtons(card, [[t('resume_ok'), 'ghost', close], [t('resume_restart'), 'primary', () => { close(); seekTo(0); }]]);
+  }
 
   // ---------------------------------------------------------------- film folders
   // The host's LIBRARY_DIRS. The host and the friends the host trusted (co-hosts) pick a video
@@ -4136,6 +4207,7 @@
     el.addonSubs.hidden = !(S.media && S.media.content);
     el.filmTitle.textContent = S.media ? S.media.title : '';
     renderMediaInfo();
+    renderNext();
     renderAudioTracks();
     renderTorrentInfo();
   }

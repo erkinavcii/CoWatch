@@ -32,7 +32,8 @@ from starlette.websockets import WebSocketState
 
 from .addons import AddonError, AddonStore, episode_label, magnet, subtitle_key, subtitle_lang
 from .config import AI_PRESETS, CHOICES, get_settings, load_saved, locked_settings, new_access_key, save_saved
-from . import filepicker, library, netpanel, stremio, tailscale, translate
+from . import episodes, filepicker, library, netpanel, stremio, tailscale, translate
+from .positions import PositionStore
 from .stremio import StremioError
 from .media import (MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, extract_subtitles,
                     prepare_converting, probe)
@@ -131,6 +132,8 @@ class Controller:
         self.luma: dict[str, LumaTrack] = {}  # client id -> brightness samples, for the black picture check
         self.net_noticed: dict[str, float] = {}  # viewer -> when the host last heard they keep stalling
         self.last_jump = -math.inf  # monotonic: the last seek, after which everyone loads for a moment
+        self.next_item: Optional[dict] = None  # the next episode of the film playing (find_next)
+        self.positions = PositionStore(cfg.data_dir / "positions.json")  # where each film was left
 
     # ---- messages -------------------------------------------------------------
     @property
@@ -141,7 +144,7 @@ class Controller:
         if not self.ready:
             return None
         public = self.session.public()
-        return {**public, "streamKbps": netpanel.stream_kbps(public, cfg.audio_kbps)}
+        return {**public, "streamKbps": netpanel.stream_kbps(public, cfg.audio_kbps), "next": self.next_public()}
 
     # ---- connection panel (netpanel.py) ---------------------------------------------------
     def on_netstat(self, client: Client, msg: dict) -> None:
@@ -649,17 +652,24 @@ class Controller:
         )
 
     async def open_media(self, torrent: Optional[dict] = None, path: Optional[str] = None,
-                         audio: Optional[int] = None, stream: Optional[dict] = None) -> None:
+                         audio: Optional[int] = None, stream: Optional[dict] = None,
+                         audio_lang: Optional[str] = None, content: Optional[dict] = None) -> None:
         async with self.open_lock:
             self.opening = True
             try:
                 await self.status("opening")
                 source = await self._resolve_source(torrent, path, stream)
+                if content:  # the next episode of an add-on's series: its id, for subtitles
+                    source.content_type, source.content_id = content["type"], content["id"]
                 await self.status("probing")
                 info = await probe(cfg, source.url, timeout=240)
+                if audio is None and audio_lang:
+                    audio = same_language_audio(info, audio_lang)
                 session = MediaSession(cfg, source, info, audio, remote=self.remote_viewers())
+                self.note_position()  # the same film opened again: from where it is now
+                resume = self.positions.resume_at(source.media_key, session.duration)
                 await self.status("stream_starting", mode=session.mode, reason=session.mode_reason)
-                await session.start_at(0.0)
+                await session.start_at(resume or 0.0)
             except (MediaError, HelperError, OSError, ValueError) as exc:
                 log.warning("open failed: %s", exc)
                 await self.status("open_failed", "error", detail=str(exc)[:300])
@@ -674,18 +684,85 @@ class Controller:
             finally:
                 self.opening = False
                 self.opening_hash = None
+            upcoming = await self.find_next(session)  # before the switch: the room waits for nothing
+            self.note_position(flush=True)  # where the film playing so far was left
             old, self.session = self.session, session
             if old is not None:
                 old.stop()
             self.restart_target = None
             self.download_throttled = False
             self.room.reset()
+            if resume:
+                self.room.seek(resume)  # paused there; everyone is told and may start from 0
+            self.next_item = upcoming
             # State first: clients pick their start position from it when the new stream loads.
             await self.broadcast_state()
             await self.broadcast_media()
             await self.broadcast_tracks()
             await self.status("stream_ready", mode=session.mode, title=source.title)
+            if resume:
+                await self.room.broadcast({"type": "resumed", "at": round(resume, 1), "mediaKey": source.media_key})
             self.embedded_soon(session)
+
+    # ---- the next episode and resuming (episodes.py, positions.py)
+    # The next episode is the video after the one playing in the same torrent, or in the same
+    # folder (a film folder or, for the host, any folder on this computer). The server keeps
+    # what to open; the page sees only a label and asks POST /api/media/next.
+    def next_public(self) -> Optional[dict]:
+        item = self.next_item
+        return {"label": item["label"], "kind": item["kind"]} if item else None
+
+    async def find_next(self, session: MediaSession) -> Optional[dict]:
+        try:
+            return await asyncio.wait_for(self._find_next(session), 10)
+        except Exception as exc:  # a missing next episode never keeps a film from opening
+            log.info("no next episode: %r", exc)
+            return None
+
+    async def _find_next(self, session: MediaSession) -> Optional[dict]:
+        src = session.source
+        audio_lang = None
+        if len(session.info.audio) > 1 and session.audio:
+            audio_lang = subtitle_lang((session.audio.get("tags") or {}).get("language"))
+        item: Optional[dict] = None
+        if src.kind == "torrent" and src.info_hash:
+            info = await self.helper.info(src.info_hash)
+            videos = {str(f.get("path") or f["name"]).replace("\\", "/"): f
+                      for f in info.get("files", []) if f.get("isVideo")}
+            current = next((p for p, f in videos.items() if f["index"] == src.file_index), None)
+            after = current and episodes.pick_next(list(videos), current)
+            if after:
+                item = {"kind": "torrent", "label": episodes.label(after),
+                        "torrent": {"infoHash": src.info_hash, "fileIndex": videos[after]["index"]}}
+                content = next_content(src.content_type, src.content_id, episodes.episode(after))
+                if content:
+                    item["content"] = content
+        elif src.kind == "file":
+            path = Path(src.url)
+            names = await asyncio.to_thread(sibling_videos, path.parent)
+            after = episodes.pick_next(names, path.name) if path.name in names else None
+            if after:
+                kind = "library" if in_library(path) else "local"
+                item = {"kind": kind, "label": episodes.label(after), "path": str(path.parent / after)}
+        if item is not None and audio_lang and audio_lang != "und":
+            item["audioLang"] = audio_lang
+        return item
+
+    def open_next(self) -> None:
+        item = self.next_item
+        self.start_open(torrent=item.get("torrent"), path=item.get("path"),
+                        audio_lang=item.get("audioLang"), content=item.get("content"))
+
+    def note_position(self, flush: bool = False) -> None:
+        """Remembers where the room is in the film playing (written every 15 s at most)."""
+        session = self.session
+        if session is not None and session.stream is not None:
+            self.positions.note(session.source.media_key, self.room.current_position(), session.duration,
+                                session.source.title)
+        if flush:
+            self.positions.flush()
+        else:
+            self.positions.maybe_save()
 
     # ---- subtitles inside the film's file
     # Text subtitle streams (an MKV's Turkish, English... tracks) become tracks of their own, in
@@ -765,6 +842,8 @@ class Controller:
                 pass
 
     async def close_media(self) -> None:
+        self.note_position(flush=True)
+        self.next_item = None
         if self.session is not None:
             self.session.stop()
             self.session = None
@@ -918,6 +997,7 @@ class Controller:
             self.room.pause()
             self.room.seek(session.duration)
             await self.broadcast_state()
+        self.note_position()
         progress = session.progress()
         if progress != self.last_progress:
             self.last_progress = progress
@@ -985,6 +1065,47 @@ class Controller:
                 pass
             except Exception:
                 log.exception("throttle loop")
+
+
+def same_language_audio(info, lang: str) -> Optional[int]:
+    """The sound track in this language (the one chosen for the episode before), if the file has one."""
+    return next((i for i, a in enumerate(info.audio)
+                 if subtitle_lang((a.get("tags") or {}).get("language")) == lang), None)
+
+
+def next_content(content_type: Optional[str], content_id: Optional[str],
+                 episode: Optional[tuple[int, int]]) -> Optional[dict]:
+    """An add-on's series episode id ("tt0903747:1:2") for the next file, so its subtitles are found by id."""
+    match = re.fullmatch(r"([^:]+):(\d+):(\d+)", content_id or "")
+    if not match or not episode:
+        return None
+    return {"type": content_type or "series", "id": f"{match.group(1)}:{episode[0]}:{episode[1]}"}
+
+
+SIBLINGS_MAX = 2000
+
+
+def sibling_videos(folder: Path) -> list[str]:
+    """The names of the videos in a folder (not in its subfolders)."""
+    names = []
+    try:
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                if library.is_video(entry.name) and entry.is_file():
+                    names.append(entry.name)
+                    if len(names) >= SIBLINGS_MAX:
+                        break
+    except OSError:
+        return []
+    return names
+
+
+def in_library(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+        return any(resolved.is_relative_to(root.resolve()) for root in cfg.library_dirs)
+    except OSError:
+        return False
 
 
 ctl = Controller()
@@ -1071,6 +1192,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(ctl.throttle_loop()),
     ]
     yield
+    ctl.note_position(flush=True)
     encoder_check.cancel()
     for task in ctl.tasks:
         task.cancel()
@@ -1267,6 +1389,29 @@ async def api_media_open(body: OpenBody, request: Request):
         await ctl.cancel_open()  # the latest choice wins: no waiting for one that may never open
     torrent = body.torrent.model_dump() if body.torrent else None
     ctl.start_open(torrent=torrent, path=path, audio=body.audio, stream=stream)
+    return {"ok": True}
+
+
+class NextBody(BaseModel):
+    after: str = ""  # the film the page saw: two clicks at the end of an episode do not skip one
+
+
+@app.post("/api/media/next", status_code=202)
+async def api_media_next(body: NextBody, request: Request):
+    """Opens the next episode the server found (the `next` of the `media` message)."""
+    require_media_control(request)
+    item = ctl.next_item
+    if item is None or ctl.session is None:
+        raise HTTPException(404, detail="no_next")
+    if body.after and body.after != ctl.session.source.media_key:
+        raise HTTPException(409, detail="next_moved")
+    if item["kind"] == "local" and not is_local(request):
+        raise HTTPException(403, detail="local_files_host_only")
+    if item["kind"] == "library" and not is_trusted(request):
+        raise HTTPException(403, detail="library_not_allowed")
+    if ctl.opening:
+        await ctl.cancel_open()
+    ctl.open_next()
     return {"ok": True}
 
 
