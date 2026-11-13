@@ -102,10 +102,24 @@ CHAT_REFILL_S = 1.0  # then one message per this many seconds
 
 # A viewer's player tells the server what went wrong in their browser (`report`): written to
 # data/playback.log, so a black screen on a friend's side can be read afterwards.
-REPORT_KINDS = {"hls_error", "video_error", "frames_stalled", "reloaded", "repaired"}
+REPORT_KINDS = {"hls_error", "video_error", "frames_stalled", "reloaded", "repaired", "codec_failed"}
 REPORT_MAX_CHARS = 300
 REPORT_BURST = 5
 REPORT_REFILL_S = 10.0
+
+HEVC_PROFILES = ("main", "main10", "uhd")
+
+
+def no_hevc() -> dict[str, bool]:
+    """Conservative HEVC support map used before a viewer joins or after a decode failure."""
+    return {k: False for k in HEVC_PROFILES}
+
+
+def hevc_caps(value) -> dict[str, bool]:
+    """Normalise a viewer's HEVC profile claims from `hello`: unknown keys dropped, non-bools are False."""
+    if not isinstance(value, dict):
+        return no_hevc()
+    return {k: value.get(k) is True for k in HEVC_PROFILES}
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]+")  # line breaks, direction overrides
 

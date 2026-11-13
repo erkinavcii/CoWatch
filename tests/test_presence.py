@@ -228,3 +228,15 @@ def test_black_viewers_needs_a_bright_page_at_the_same_moment():
     assert black_viewers({"a": dark[-1:], "b": bright}, now) == []  # one dark sample: a fade-out at a cut
     assert black_viewers({"a": [(now - 3, 50, 120), (now, 53, 2)], "b": bright}, now) == []
     assert black_viewers({"a": dark, "b": bright}, now + LUMA_KEEP_S + 1) == []  # old samples are forgotten
+
+
+def test_hevc_caps_and_codec_failed_report_are_normalised():
+    from server.presence import hevc_caps, no_hevc, playback_report
+    assert no_hevc() == {"main": False, "main10": False, "uhd": False}
+    assert hevc_caps(None) == no_hevc()
+    assert hevc_caps(False) == no_hevc()
+    assert hevc_caps("yes") == no_hevc()
+    assert hevc_caps({"main": True, "main10": 1, "uhd": "true", "other": True}) == {
+        "main": True, "main10": False, "uhd": False}
+    assert playback_report({"kind": "codec_failed", "detail": "bufferAddCodecError"}) == {
+        "kind": "codec_failed", "detail": "bufferAddCodecError"}

@@ -80,7 +80,7 @@ ffmpeg -ss <yer> -i <dosya> -map 0:v:0 -map 0:a:0 -sn -dn -map_metadata -1 -map_
 
 **Sonradan desteksiz biri katılırsa:** retune'dan farklı olarak host'a sormak yetmez, çünkü o kişi hiçbir şey göremez. `hello`'da yeni bir `check_codecs`: akış HEVC kopyasıysa ve yeni izleyici desteklemiyorsa oturumun kipi çevirmeye döner ve `seek(şimdiki yer)` akışı yeniden başlatır (`can_serve` / `stream_fits` kip tutmayınca zaten hayır der). Herkes birkaç saniyelik bir duraklama görür; karta "Ahmet'in tarayıcısı HEVC oynatamıyor, film çevriliyor" yazılır. Desteksiz izleyici ayrılınca kendiliğinden geri dönülmez (retune'daki gibi: herkesin filmini kesmeye değmez); sonraki sarma ya da film kopyayı yeniden seçer.
 
-**Yalan söyleyen tarayıcı:** `isTypeSupported` true deyip çözemeyen bir tarayıcı olabilir (sürücü, uzantı, 10-bit). hls.js'te `bufferAddCodecError` ya da HEVC akışında `watchFrames`'in kare gelmiyor kararı, o izleyiciyi sunucuda "HEVC yok" yapan bir `report` olur (`codec_failed`) ve yukarıdaki gibi çevirmeye dönülür. O tarayıcı `localStorage`'da hatırlanır, sonraki `hello`'da `hevc: false` gider. Ancak bu not tarayıcıyı sonsuza kadar kilitlememeli: tarayıcı sürümü/profilleri değiştiğinde ya da belirli bir süre sonunda sıfırlanıp yeniden denenebilmeli; ayrıca hata veren izleyici odadan çıkınca sonraki sarma ya da filmde oda yeniden kopya kipine geçebilmeli.
+**Yalan söyleyen tarayıcı:** `isTypeSupported` true deyip çözemeyen bir tarayıcı olabilir (sürücü, uzantı, 10-bit). hls.js'te `bufferAddCodecError` (tek seferde kesin hata) ya da HEVC akışında `watchFrames`'in kare gelmiyor kararı (yanlış alarmı ayırmak için aynı filmde **2 kez** olursa), o izleyiciyi sunucuda "HEVC yok" yapan bir `report` olur (`codec_failed`) ve yukarıdaki gibi çevirmeye dönülür. O tarayıcı `localStorage`'da tarayıcının ana sürümüne (`Chrome/131`, `Edg/131` vb.) bağlanıp **7 gün** ömürle hatırlanır (`fails: 1`), sonraki `hello`'da `hevc: false` gider. Sürüm değişince ya da 7 gün dolunca bir kez daha denenir; aynı ana sürümde üst üste ikinci kez hata verirse süre **30 güne** uzar (süre dolup yeni denemede kareler akmaya başlayınca eski kayıt silinir). Ayrıca hata veren izleyici odadan çıkınca sonraki sarma ya da filmde oda yeniden kopya kipine geçebilmeli.
 
 **Bekleyen ve yeniden bağlanan:** yeniden bağlanan sayfa yeni `hello` yollar; aynı cevabı verir, bir şey değişmez. Katılmamış ("?") sayfalar sayılmaz.
 
@@ -113,22 +113,22 @@ Yapmaya değer: Daredevil gibi küçük x265 dizilerinde (bu bilgisayardaki dosy
 
 ### Adımlar (fable.md 8. bölümün üslubunda)
 
-**İP-10a. Tarayıcı ne oynatabiliyor.**
-- Dosyalar: `web/app.js` (`hello`'ya `hevc`; `codecSupport()` küçük bir fonksiyon, `ManagedMediaSource || MediaSource`, yoksa `canPlayType`), `server/main.py` (`hello`'da `client.hevc`), `server/room.py` (`Client.hevc`, `members_msg`'de göstermeye gerek yok), `tests/test_api.py`.
+**İP-10a. Tarayıcı ne oynatabiliyor.** *(Kodlandı — 13 Kasım)*
+- Dosyalar: `web/app.js` (`hello`'ya `hevc`; `codecSupport()` küçük bir fonksiyon, `ManagedMediaSource || MediaSource`, yoksa `canPlayType`), `server/main.py` (`hello`'da `client.hevc`), `server/presence.py` (`hevc_caps`, `no_hevc`), `server/room.py` (`Client.hevc`, `members_msg`'de göstermeye gerek yok), `tests/test_presence.py`, `tests/test_api.py`.
 - Bitti sayılır: `hello` alanı doğrulanıyor (bilinmeyen anahtar ya da bool olmayan değer `False`); pytest.
 
-**İP-10b. Kopya kararı ve komut.**
+**İP-10b. Kopya kararı ve komut.** *(Kodlandı — 13 Kasım)*
 - Dosyalar: `server/media.py` (`decide_mode`'a izleyicilerin desteği; `_video_args` kopyada HEVC için `-tag:v hvc1`; HEVC'de `yuv420p10le` kabul; `hevc_need(info)`: Main / Main 10 / 4K ve HDR türü), `server/main.py` (`Controller` film açarken ve `seek`'te izleyicilerin desteğini verir), `tests/test_media.py`.
-- Kural: HEVC + profil uygun + SDR (`hdr_kind` yok; HDR sonra, `dovi` asla) + yükseklik ≤ `MAX_HEIGHT` + bütün katılmış izleyiciler evet + bit hızı kuralları → `copy`. `media` mesajında `codec: "hevc"`; film kartı sebebi yazar.
-- Bitti sayılır: Daredevil benzeri örnekte (testteki gibi küçük sentetik x265, ffmpeg varsa) komutta `-c:v copy -tag:v hvc1` ve `init.mp4`'te `hvc1`; desteksiz bir izleyici varken `transcode`; DV profil 5 ve 4K'da `transcode`; pytest.
+- Kural: HEVC + profil uygun + SDR (`hdr_kind` yok; HDR sonra, `dovi` asla) + yükseklik ≤ `MAX_HEIGHT` + bütün katılmış izleyiciler evet + bit hızı kuralları → `copy`. `media` mesajında `videoCodec: "hevc"`; film kartı sebebi yazar.
+- Bitti sayılır: sentetik x265 örnekte komutta `-c:v copy -tag:v hvc1` ve `init.mp4`'te `hvc1`; desteksiz bir izleyici varken `transcode`; DV profil 5, HDR ve 4K'da `transcode`; pytest.
 
-**İP-10c. Karma odada geri dönüş.**
-- Dosyalar: `server/main.py` (`check_codecs`, `hello`'da `check_remote`'un yanında; `report`'ta `codec_failed`), `server/media.py` (`MediaSession.set_viewers_codec` → `stream_fits`'e kip), `web/app.js` (`loadStream`'in hata dalında `bufferAddCodecError` ve HEVC akışında `watchFrames` → `report('codec_failed')`, `localStorage`'da tarayıcı sürümüyle/süreli sıfırlanabilir biçimde hatırla), `web/i18n.js` (kart metni, tr/en/ru), `tests/test_api.py`.
-- Bitti sayılır: HEVC kopyası oynarken `hevc: false` izleyici katılınca akış çevirmeye dönüyor ve herkese yeni `streamId` gidiyor; `codec_failed` aynı şeyi yapıyor; ayrılınca geri dönülmüyor.
+**İP-10c. Karma odada geri dönüş.** *(Kodlandı — 13 Kasım)*
+- Dosyalar: `server/main.py` (`check_codecs`, `hello`'da `check_remote`'un yanında; `report`'ta `codec_failed`), `server/media.py` (`MediaSession.set_viewers_hevc` → `stream_fits`'e kip, `hevcBlocker`), `web/app.js` (`loadStream`'in hata dalında `bufferAddCodecError` [1×] ve HEVC akışında `watchFrames` [aynı filmde 2×] → `report('codec_failed')`, `localStorage`'da tarayıcı ana sürümüyle 7 gün / 2. hatada 30 gün ömürle hatırlama), `web/i18n.js` (kart metni ve bildirim, tr/en/ru), `tests/test_api.py`.
+- Bitti sayılır: HEVC kopyası oynarken `hevc: false` izleyici katılınca akış çevirmeye dönüyor ve herkese yeni `streamId` gidiyor; `codec_failed` aynı şeyi yapıyor; ayrılınca kendiliğinden geri dönülmüyor, sonraki `seek` kopyaya dönebiliyor.
 
-**İP-10d. Tarayıcı testi.**
-- Yeni `tests/e2e/hevc_copy.py`: iki sayfa `channel="chrome"` (yoksa `msedge`, ikisi de yoksa atla), sentetik 8-bit x265 film (açık GOP, `keyint=240`). Ölçüt: kopya kipinde iki sayfa da oynuyor, sarma çalışıyor, siyah resim yok (`sampleLuma`), konsolda ölümcül hata yok. Sonra Playwright'ın kendi Chromium'uyla üçüncü sayfa katılıyor: akış çevirmeye dönüyor, üç sayfa da oynuyor. `CLAUDE.md`'deki tarayıcı testleri listesine ekle.
-- Not: HEVC'li tarayıcı CI'da yok; bu test sadece bu bilgisayarda.
+**İP-10d. Tarayıcı testi.** *(Kodlandı — 13 Kasım)*
+- Yeni `tests/e2e/hevc_copy.py`: iki sayfa `channel="chrome"` (yoksa `msedge`, ikisi de yoksa atla), sentetik 8-bit x265 film (açık GOP, `keyint=240`). Ölçüt: kopya kipinde iki sayfa da oynuyor, sarma çalışıyor, siyah resim yok, konsolda ölümcül hata yok. Sonra Playwright'ın kendi Chromium'uyla üçüncü sayfa katılıyor: akış çevirmeye dönüyor, üç sayfa da oynuyor, ayrılıp sarınca kopyaya dönülüyor. `CLAUDE.md`'deki tarayıcı testleri listesine eklendi.
+- Not: HEVC'li tarayıcı CI'da yok; bu test Chrome/Edge kurulu bilgisayarda çalışır.
 
 **İP-10e. Elle deneme ve HDR.** Gerçek bir film gecesinde Daredevil'le: arkadaşların tarayıcıları (Yandex, Opera GX, telefon) ne cevap veriyor (`playback.log`'a `hello`'daki `hevc` yazılsın), açık GOP'ta `watchFrames` yanlış alarm veriyor mu. Sonra bir HDR10 film ve DV 8 (geliştirme sırasında kodda açılarak, kullanıcı ayarı olmadan); SDR ekranda renkler, iPhone'da Safari.
 

@@ -12,7 +12,15 @@ from typing import Callable, Optional
 
 from starlette.websockets import WebSocket
 
-from .presence import CHAT_HISTORY, NETSTAT_BURST, NETSTAT_REFILL_S, REPORT_BURST, REPORT_REFILL_S, Bucket
+from .presence import (
+    CHAT_HISTORY,
+    NETSTAT_BURST,
+    NETSTAT_REFILL_S,
+    REPORT_BURST,
+    REPORT_REFILL_S,
+    Bucket,
+    no_hevc,
+)
 
 log = logging.getLogger("cowatch.room")
 
@@ -46,6 +54,7 @@ class Client:
         self.joined = False  # sent hello: pressed "Join", so it can take part in voice and camera
         self.mic = False
         self.cam = False
+        self.hevc: dict[str, bool] = no_hevc()
         self.last_poke = 0.0
         self.chat_bucket = Bucket()
         self.report_bucket = Bucket(REPORT_BURST, REPORT_REFILL_S)

@@ -420,3 +420,86 @@ def test_a_stream_made_for_another_number_of_viewers_is_not_served():
     assert session.can_serve(50) and session.stream.kbps == 3000
     # Down again: a restart would give the better picture back.
     assert session.set_remote(0) and session.target_kbps == 4500
+
+
+def test_hevc_copy_decision_and_fallback_gates():
+    from server.media import ProbeInfo, hevc_need
+
+    def hevc(pix_fmt="yuv420p", profile="Main", width=1920, height=1080, kbps=1100, extra=None):
+        video = {"codec_name": "hevc", "index": 0, "pix_fmt": pix_fmt, "profile": profile,
+                 "width": width, "height": height, "bit_rate": str(kbps * 1000)}
+        if extra:
+            video.update(extra)
+        return ProbeInfo(duration=1440, size=1, start_time=0, format_name="matroska", bitrate_kbps=kbps,
+                         video=video, audio=[{"index": 1, "codec_name": "aac", "channels": 2}])
+
+    cfg = _funnel(budget=6000, transcode_kbps=4500, max_copy_kbps=5500)
+    main_ok = {"name": "Erkin", "main": True, "main10": False, "uhd": False}
+    ten_ok = {"name": "Masha", "main": True, "main10": True, "uhd": False}
+    uhd_ok = {"name": "Erkin", "main": True, "main10": True, "uhd": True}
+    sdr8, sdr10 = hevc(), hevc("yuv420p10le", "Main 10", kbps=1500)
+    hdr_pq = hevc("yuv420p10le", "Main 10", extra={"color_transfer": "smpte2084"})
+    dovi = hevc("yuv420p10le", "Main 10",
+                extra={"side_data_list": [{"side_data_type": "DOVI configuration record", "dv_profile": 5}]})
+    uhd4k = hevc("yuv420p10le", "Main 10", width=3840, height=2160, kbps=4000)
+
+    assert hevc_need(_info("h264")) is None
+    assert hevc_need(sdr8) == ("main", None)
+    assert hevc_need(sdr10) == ("main10", None)
+    assert hevc_need(hdr_pq) == ("main10", "pq")
+    assert hevc_need(uhd4k) == ("uhd", None)
+    assert hevc_need(hevc("yuv422p10le", "Main 4:2:2 10")) == ("unsupported", None)
+
+    assert decide_mode(sdr8, cfg)[0] == "transcode"  # empty room stays safe
+    assert decide_mode(sdr8, cfg, 0, [main_ok, ten_ok])[0] == "copy"
+    assert decide_mode(sdr10, cfg, 0, [main_ok, ten_ok])[0] == "transcode"  # 10-bit blocked by main-only viewer
+    assert decide_mode(sdr10, cfg, 0, [ten_ok, uhd_ok])[0] == "copy"
+    assert decide_mode(hdr_pq, cfg, 0, [uhd_ok])[0] == "transcode"
+    assert decide_mode(dovi, cfg, 0, [uhd_ok])[0] == "transcode"
+    assert decide_mode(uhd4k, cfg, 0, [uhd_ok])[0] == "transcode"  # > MAX_HEIGHT=1080
+    # Funnel budget still converts when remote copies would exceed FUNNEL_BUDGET_KBPS.
+    assert decide_mode(sdr8, cfg, 2, [main_ok])[0] == "copy"
+    assert decide_mode(sdr8, cfg, 6, [main_ok])[0] == "transcode"
+
+    session = MediaSession(cfg, MediaSource(kind="file", url="x.mkv", title="x", size=1, media_key="k"),
+                           sdr10, remote=2, viewers_hevc=[ten_ok, main_ok])
+    session.stream = _Stream(session)
+    assert session.mode == "transcode" and session.hevc_blocker == "Erkin"
+    assert session.set_viewers_hevc([ten_ok]) and session.mode == "copy" and session.hevc_blocker is None
+    assert session.plan_for(2) == ("copy", None) and session.plan_for(5) == ("transcode", 1500)
+
+
+def test_hevc_copy_produces_hvc1_hls_stream(tmp_path):
+    from pathlib import PurePath
+    from server.media import build_command
+
+    film = tmp_path / "Sample.x265.mkv"
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24",
+        "-f", "lavfi", "-i", "sine=frequency=330:sample_rate=48000",
+        "-t", "6", "-c:v", "libx265", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+        "-x265-params", "open-gop=0:keyint=48", "-c:a", "aac", "-b:a", "96k", str(film),
+    ], check=True)
+
+    cfg = get_settings()
+
+    async def run():
+        info = await probe(cfg, str(film))
+        cmd = build_command(cfg, str(film), PurePath("out"), 0, "copy", info, info.audio[0])
+        assert cmd[cmd.index("-c:v") + 1] == "copy"
+        assert cmd[cmd.index("-tag:v") + 1] == "hvc1"
+        assert "-hwaccel" not in cmd and "-vf" not in cmd
+        source = MediaSource(kind="file", url=str(film), title=film.name, size=info.size, media_key="hevc1")
+        session = MediaSession(cfg, source, info, viewers_hevc=[{"name": "Erkin", "main": True}])
+        assert session.mode == "copy"
+        await session.start_at(0)
+        try:
+            await _wait_finished(session)
+            assert session.stream.ended()
+            assert b"hvc1" in (session.stream.out_dir / "init.mp4").read_bytes()
+            assert _stream_codecs(session.stream.playlist_path) == {"hevc", "aac,2"}
+        finally:
+            session.stop()
+
+    asyncio.run(run())

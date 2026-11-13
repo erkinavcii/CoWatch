@@ -125,7 +125,7 @@
     bufferingSent: false, waitTimer: null, dragging: false, isHost: false, canLibrary: false, libraryConfigured: false, canChangeMedia: true, cohost: null, autoplayBlocked: false,
     torrent: null, downloadThrottled: false,
     palette: ['#ff6b6b', '#4dabf7', '#51cf66', '#fcc419', '#cc5de8', '#ff922b', '#22b8cf', '#f06595'],
-    penMode: false, eraser: false, iceServers: [],
+    penMode: false, eraser: false, iceServers: [], hevcFailed: false, hevcStreamFailed: null, sentHevc: null,
   };
 
   // ---------------------------------------------------------------- helpers
@@ -393,6 +393,81 @@
     el.loaderCancel.disabled = false;
   });
 
+  // ---------------------------------------------------------------- HEVC capability
+  const HEVC_FAIL_KEY = 'cowatch.hevcFailed.v1';
+  const HEVC_TTL_SHORT_MS = 7 * 86400 * 1000;
+  const HEVC_TTL_LONG_MS = 30 * 86400 * 1000;
+  const HEVC_PROBES = {
+    main: 'video/mp4; codecs="hvc1.1.6.L123.90"',
+    main10: 'video/mp4; codecs="hvc1.2.4.L123.90"',
+    uhd: 'video/mp4; codecs="hvc1.2.4.L153.90"',
+  };
+  function browserMajor () {
+    const ua = navigator.userAgent || '';
+    for (const re of [
+      /\b(Edg(?:iOS|A)?)\/(\d+)/, /\b(OPR|YaBrowser)\/(\d+)/,
+      /\b(Firefox|FxiOS)\/(\d+)/, /\b(CriOS)\/(\d+)/,
+      /\b(Version)\/(\d+).*Safari\//, /\b(Chrome)\/(\d+)/,
+    ]) {
+      const m = ua.match(re);
+      if (m) return `${m[1]}/${m[2]}`;
+    }
+    return ua.slice(0, 60);
+  }
+  function readHevcFail () {
+    try {
+      const rec = JSON.parse(localStorage.getItem(HEVC_FAIL_KEY) || 'null');
+      if (!rec || rec.browser !== browserMajor()) {
+        if (rec) localStorage.removeItem(HEVC_FAIL_KEY);
+        return null;
+      }
+      return rec;
+    } catch { return null; }
+  }
+  function hevcBlocked () {
+    if (S.hevcFailed) return true;
+    const rec = readHevcFail();
+    return !!(rec && Date.now() < rec.until);
+  }
+  function recordHevcFail () {
+    const browser = browserMajor();
+    const prev = readHevcFail();
+    const fails = prev ? (prev.fails || 0) + 1 : 1;
+    const ttl = fails >= 2 ? HEVC_TTL_LONG_MS : HEVC_TTL_SHORT_MS;
+    try {
+      localStorage.setItem(HEVC_FAIL_KEY, JSON.stringify({ browser, fails, until: Date.now() + ttl }));
+    } catch { /* private mode */ }
+  }
+  function codecSupport () {
+    const empty = { main: false, main10: false, uhd: false };
+    if (hevcBlocked()) return empty;
+    const ms = window.ManagedMediaSource || window.MediaSource;
+    let check = null;
+    if (window.Hls && Hls.isSupported() && ms && typeof ms.isTypeSupported === 'function') {
+      check = (c) => ms.isTypeSupported(c);
+    } else if (video.canPlayType && video.canPlayType('application/vnd.apple.mpegurl')) {
+      check = (c) => !!video.canPlayType(c);
+    }
+    if (!check) return empty;
+    try {
+      return {
+        main: !!check(HEVC_PROBES.main),
+        main10: !!check(HEVC_PROBES.main10),
+        uhd: !!check(HEVC_PROBES.uhd),
+      };
+    } catch { return empty; }
+  }
+  const isHevcCopy = () => !!(S.media && S.media.mode === 'copy' && S.media.videoCodec === 'hevc');
+  const claimedHevc = () => !!(S.sentHevc && (S.sentHevc.main || S.sentHevc.main10 || S.sentHevc.uhd));
+  function failHevcCodec (detail) {
+    if (!isHevcCopy() || S.hevcStreamFailed === S.streamId) return;
+    S.hevcStreamFailed = S.streamId;
+    if (!S.joined || !claimedHevc()) return; // already sent hevc:false or still on join screen
+    S.hevcFailed = true;
+    recordHevcFail();
+    report('codec_failed', detail);
+  }
+
   // ---------------------------------------------------------------- player
   function applyMedia (media) {
     const changedFilm = (S.media && S.media.mediaKey) !== (media && media.mediaKey);
@@ -446,6 +521,13 @@
       });
       const mediaErrors = [];
       hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (isHevcCopy() && data && (data.details === 'bufferAddCodecError'
+            || (Hls.ErrorDetails && data.details === Hls.ErrorDetails.BUFFER_ADD_CODEC_ERROR))) {
+          const detail = `${data.type} ${data.details}${data.error ? `: ${data.error.message || data.error}` : ''}`;
+          if (S.joined && claimedHevc()) report('hls_error', detail);
+          failHevcCodec(detail);
+          return;
+        }
         if (!data.fatal) return;
         report('hls_error', `${data.type} ${data.details}${data.error ? `: ${data.error.message || data.error}` : ''}`);
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
@@ -558,17 +640,32 @@
   // stream is loaded afresh; after that it only reports, for two minutes. A hidden tab is left
   // alone (the browser may stop its picture on purpose), and so is the first while after it shows again.
   const FRAME_STALL_S = 4;
-  const frameWatch = { frames: -1, time: 0, stalled: 0, lastFix: 0, step: 0, calmUntil: 0, fixes: 0, reloads: 0 };
+  const frameWatch = {
+    frames: -1, time: 0, stalled: 0, lastFix: 0, step: 0, calmUntil: 0,
+    fixes: 0, reloads: 0, hevcKey: '', hevcStalls: 0, hevcClearedKey: '',
+  };
   function watchFrames () {
     const now = performance.now();
     const quality = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
     const watching = S.joined && S.media && S.media.width && S.streamId && !video.paused && !video.seeking &&
       video.readyState >= 3 && (!!PIP.win || !document.hidden) && !el.stage.classList.contains('sharing');
     if (!quality || !watching || now < frameWatch.calmUntil) { frameWatch.frames = -1; frameWatch.stalled = 0; return; }
+    if (S.media.mediaKey !== frameWatch.hevcKey) {
+      frameWatch.hevcKey = S.media.mediaKey;
+      frameWatch.hevcStalls = 0;
+    }
     const frames = quality.totalVideoFrames;
     const time = video.currentTime;
-    if (frameWatch.frames < 0 || frames !== frameWatch.frames) frameWatch.stalled = 0;
-    else if (time > frameWatch.time) frameWatch.stalled += time - frameWatch.time;
+    if (frameWatch.frames < 0 || frames !== frameWatch.frames) {
+      frameWatch.stalled = 0;
+      if (isHevcCopy() && frames >= 120 && frameWatch.hevcClearedKey !== S.media.mediaKey) {
+        frameWatch.hevcClearedKey = S.media.mediaKey;
+        const rec = readHevcFail();
+        if (rec && Date.now() >= rec.until) {
+          try { localStorage.removeItem(HEVC_FAIL_KEY); } catch { /* private mode */ }
+        }
+      }
+    } else if (time > frameWatch.time) frameWatch.stalled += time - frameWatch.time;
     frameWatch.frames = frames;
     frameWatch.time = time;
     if (frameWatch.stalled < FRAME_STALL_S) return;
@@ -578,6 +675,13 @@
     frameWatch.lastFix = now;
     frameWatch.step += 1;
     const detail = `no new frame for ${FRAME_STALL_S} s at ${frames} frames`;
+    if (isHevcCopy()) {
+      frameWatch.hevcStalls += 1;
+      if (frameWatch.hevcStalls >= 2) {
+        failHevcCodec(`${detail} (HEVC stall #${frameWatch.hevcStalls})`);
+        return;
+      }
+    }
     if (frameWatch.step === 1) {
       frameWatch.fixes += 1;
       report('frames_stalled', `${detail}; seeking`);
@@ -1666,7 +1770,11 @@
   const speaking = new Set();
 
   function sendHello () {
-    send({ type: 'hello', name: prefs.name, color: prefs.color, animal: myAnimal(), mic: !!voice.mic, cam: !!voice.cam });
+    S.sentHevc = codecSupport();
+    send({
+      type: 'hello', name: prefs.name, color: prefs.color, animal: myAnimal(),
+      mic: !!voice.mic, cam: !!voice.cam, hevc: S.sentHevc,
+    });
   }
   const sendAv = () => send({ type: 'av', mic: !!voice.mic, cam: !!voice.cam });
   const sendRtc = (to, data) => send({ type: 'rtc', to, data });
@@ -4685,8 +4793,15 @@
     const m = S.media;
     el.mediaInfo.replaceChildren();
     if (!m) return;
+    const modeText = m.videoCodec === 'hevc' && m.mode === 'copy'
+      ? t('hevc_copy')
+      : (m.hevcBlocker
+        ? [t('hevc_blocker', { name: m.hevcBlocker }), encoderText(m.encoder)].filter(Boolean).join(' ')
+        : (m.mode === 'copy'
+          ? t('mode_copy')
+          : [t('mode_transcode'), encoderText(m.encoder)].filter(Boolean).join(' ')));
     const parts = [
-      m.mode === 'copy' ? t('mode_copy') : [t('mode_transcode'), encoderText(m.encoder)].filter(Boolean).join(' '),
+      modeText,
       `${(m.videoCodec || '').toUpperCase()} ${m.width || '?'}×${m.height || '?'}`,
       // An HDR film: converted to normal colours, or sent as it is (it looks pale then).
       m.hdr && m.mode === 'transcode' ? t(m.toneMap ? 'hdr_converted' : 'hdr_unconverted') : '',
@@ -5030,7 +5145,7 @@
   // For the browser console: cowatchDebug() shows the sync numbers.
   window.cowatchDebug = () => ({
     filmTime: filmTime(), expected: expectedPosition(), drift: filmTime() - expectedPosition(),
-    room: S.room, media: S.media, clockOffset: S.clock.offset, rate: video.playbackRate,
+    room: S.room, media: S.media, hevc: codecSupport(), clockOffset: S.clock.offset, rate: video.playbackRate,
     readyState: video.readyState, primary: S.primary, secondary: S.secondary, align: prefs.align,
     frameWatch: { fixes: frameWatch.fixes, reloads: frameWatch.reloads },
     lumaWatch: { step: lumaWatch.step, luma: pictureLuma() },

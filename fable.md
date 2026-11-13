@@ -183,7 +183,7 @@ Ortak kurallar (her ajanın brifine girer): `CLAUDE.md`'deki kurallar geçerli. 
 **İP-9. Telefon: Wake Lock ve Media Session (Ö3, Ö4).** Sadece `web/app.js`; gerçek telefonda ya da emülatörde denenmeli (`CLAUDE.md`, "Android emülatörü").
 
 **İP-10. Araştırma: HEVC'yi çevirmeden yollama.** Kod değil, rapor: hangi tarayıcılar, fMP4'te `hvc1` etiketi, karma odada geri dönüş, HDR. Sonucuna göre ayrı bir plan.
-- Rapor (12 Kasım): [docs/hevc-arastirma.md](docs/hevc-arastirma.md). **Kodlanmadı, eksik kaldı.** Kodlanırken kullanıcıya soru ya da ayar olmayacak; karar kendiliğinden. Sonuç koşullu evet: Chrome ve Edge bu bilgisayarda `hvc1` kopyasını oynattı, akış ≈ 2,6 kat küçük; adımlar (İP-10a–e) raporda.
+- Rapor (12 Kasım): [docs/hevc-arastirma.md](docs/hevc-arastirma.md). **İP-10a–10d kodlandı (13 Kasım):** kullanıcıya soru ya da ayar yok; tarayıcılar kendi desteğini bildiriyor, herkes oynatabiliyorsa SDR HEVC `-c:v copy -tag:v hvc1` ile gidiyor, desteksiz izleyici gelince ya da çözücü hata verince canlı olarak çevirmeye dönülüyor (`localStorage` tarayıcı ana sürümüne bağlı 7/30 gün ömürlü). Yalnız gerçek film gecesi (`İP-10e`) ve HDR HEVC denemeleri kaldı.
 
 Altyazı hizalama paneli (Ö5) kendi planından yürür: `docs/altyazi-hizalama-plani.md`, 2. adım.
 
@@ -210,7 +210,7 @@ Bu dosyanın commit'inden (`921ff81`) sonra plan uygulandı:
 | Ö6 Otomatik hizalama | Altyazıdan altyazıya, saf Python (`server/align.py`); filmin sesine göre hizalama yok, sırada |
 | Ö7 İlerleme çubuğunda küçük resim | Kodlandı (`server/thumbs.py`); HDR filmlerin resimleri renk çevrilmeden |
 | Ö9 Sürüm denetimi | Kodlandı; etiketle kurulum dosyası derleyen iş akışı (`.github/workflows/release.yml`) hiç çalıştırılmadı |
-| İP-10 HEVC'yi çevirmeden yollama | **Eksik kaldı:** sadece araştırma ([docs/hevc-arastirma.md](docs/hevc-arastirma.md)); kodlanınca soru ve ayar olmayacak |
+| İP-10 HEVC'yi çevirmeden yollama | **İP-10a–10d kodlandı (13 Kasım):** SDR HEVC herkeste oynuyorsa `-c:v copy -tag:v hvc1`, karma odada/hatada canlı çevirmeye dönüş (soru/ayar yok; `localStorage` 7/30 gün + ana sürüm ömürlü). Kalan: gerçek film gecesi ve HDR HEVC denemesi (`İP-10e`, [docs/hevc-arastirma.md](docs/hevc-arastirma.md)) |
 | G4, Ö8 | Proje sahibinin kararıyla yapılmadı |
 
 Denenmeyenler: gerçek Funnel bağlantısı ve birkaç arkadaş, gerçek telefonlar ve iPhone, arkadaşın tarayıcıları (Yandex Browser, Opera GX), gerçek bir Rusça/Türkçe altyazı çifti, sonraki bölüm için gerçek bir torrent paketi.

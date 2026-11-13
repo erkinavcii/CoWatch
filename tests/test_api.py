@@ -677,3 +677,95 @@ def test_closing_media_stops_thumbnail_job(monkeypatch):
         assert client.post("/api/media/close").status_code == 200
         assert calls == [True]
     assert calls == [True, True]  # lifespan stop() on shutdown too
+
+
+def test_hevc_copy_switches_when_unsupported_viewer_joins_or_fails(monkeypatch, tmp_path):
+    """HEVC copy falls back to transcode live when an unsupported viewer joins or sends codec_failed,
+    stays transcoded if they remain, and returns to copy on the next seek after they leave."""
+    import dataclasses
+    from server import main
+    from server.media import MediaSession, MediaSource, ProbeInfo
+
+    _clear_log()
+    monkeypatch.setattr(main, "cfg", dataclasses.replace(main.cfg, data_dir=tmp_path))
+    info = ProbeInfo(duration=1440, size=1, start_time=0, format_name="matroska", bitrate_kbps=1100,
+                     video={"codec_name": "hevc", "index": 0, "pix_fmt": "yuv420p", "profile": "Main",
+                            "width": 1920, "height": 1080, "bit_rate": "1000000"},
+                     audio=[{"index": 1, "codec_name": "aac", "channels": 2}])
+    host_caps = {"main": True, "main10": True, "uhd": False}
+
+    class Stream:
+        seq = 0
+
+        def __init__(self, session):
+            Stream.seq += 1
+            self.mode, self.kbps, self.audio = session.mode, session.target_kbps, session.audio
+            self.id, self.running = f"{Stream.seq:012x}", False
+            self.out_dir = tmp_path / self.id
+
+        def produced(self):
+            return 100.0
+
+        def ended(self):
+            return True
+
+        def stop(self):
+            pass
+
+    session = MediaSession(main.cfg, MediaSource(kind="file", url="ep.mkv", title="Ep", size=1, media_key="hevc"),
+                           info, viewers_hevc=[{"name": "Host", **host_caps}])
+
+    async def start_at(target):
+        session.stream = Stream(session)
+        session.stream_start = 0.0
+
+    session.stream = Stream(session)
+    monkeypatch.setattr(session, "start_at", start_at)
+    monkeypatch.setattr(main.ctl, "session", session)
+
+    def peer(n):
+        return {"cookie": f"cw_key={KEY}; cw_viewer=hevc-peer-{n}", "host": "localhost:8000"}
+
+    def wait_media(ws, mode):
+        return next_of(ws, "media", lambda m: m["media"]["mode"] == mode)["media"]
+
+    with TestClient(app, base_url="http://localhost:8000", client=("127.0.0.1", 5)) as client:
+        with client.websocket_connect("/ws", headers=peer(0)) as hws:
+            hws.receive_json()
+            hws.send_json({"type": "hello", "name": "Host", "hevc": host_caps})
+            with client.websocket_connect("/ws", headers=peer(1)) as f1:
+                f1.receive_json()
+                f1.send_json({"type": "hello", "name": "One", "hevc": {"main": True, "main10": "yes", "uhd": False}})
+                next_of(hws, "members", lambda m: len(m["members"]) == 2 and all(x["joined"] for x in m["members"]))
+                one = next(c for c in main.ctl.room.clients.values() if c.name == "One")
+                assert session.mode == "copy" and one.hevc == {"main": True, "main10": False, "uhd": False}
+
+                with client.websocket_connect("/ws", headers=peer(2)) as f2:
+                    f2.receive_json()
+                    f2.send_json({"type": "hello", "name": "Two", "hevc": False})
+                    note = next_of(hws, "status", lambda m: m["key"] == "hevc_fallback")
+                    assert note["params"]["name"] == "Two"
+                    m = wait_media(hws, "transcode")
+                    assert m["hevcBlocker"] == "Two"
+                # Two left: stays transcoded until next seek, then returns to copy.
+                next_of(hws, "members", lambda m: len(m["members"]) == 2)
+                assert session.mode == "transcode"
+                hws.send_json({"type": "seek", "position": 20})
+                m = wait_media(hws, "copy")
+                assert m["hevcBlocker"] is None
+
+                # One lies (supports Main in hello, fails at decode time): switches immediately and remembers until leave.
+                f1.send_json({"type": "report", "kind": "codec_failed", "detail": "bufferAddCodecError"})
+                assert next_of(hws, "status", lambda m: m["key"] == "hevc_fallback")["params"]["name"] == "One"
+                m = wait_media(hws, "transcode")
+                assert m["hevcBlocker"] == "One"
+                # Seeking while One is still there stays transcoded.
+                next_of(hws, "state", lambda s: not s["loading"])
+                hws.send_json({"type": "seek", "position": 35})
+                assert next_of(hws, "state")["position"] == 35.0
+                assert session.mode == "transcode"
+
+            next_of(hws, "members", lambda m: len(m["members"]) == 1)
+            hws.send_json({"type": "seek", "position": 45})
+            assert wait_media(hws, "copy")["mode"] == "copy"
+    assert any("[hevc]" in line and "main=1 main10=0 uhd=0" in line for line in _log_lines("hevc"))

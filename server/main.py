@@ -40,8 +40,8 @@ from .stremio import StremioError
 from .media import (MediaError, MediaSession, MediaSource, clean_title, clear_hls_dir, extract_subtitles,
                     prepare_converting, probe)
 from .oshash import CHUNK, hash_file, hash_from_chunks
-from .presence import (ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, erase_message, netstat_values, pick_color,
-                       playback_report, point, stroke_message)
+from .presence import (ANIMALS, PALETTE, POKE_INTERVAL_S, chat_text, erase_message, hevc_caps, netstat_values,
+                       no_hevc, pick_color, playback_report, point, stroke_message)
 from .presence import REPAIR_INTERVAL_S, LumaTrack, black_viewers, describe_luma, luma_sample, number
 from .room import Client, Room, now_ms
 from .signaling import ice_servers, rtc_data
@@ -134,6 +134,7 @@ class Controller:
         self.briefs: dict[tuple[str, str], str] = {}  # (film, source subtitle) -> its brief, for the next language
         self.luma: dict[str, LumaTrack] = {}  # client id -> brightness samples, for the black picture check
         self.net_noticed: dict[str, float] = {}  # viewer -> when the host last heard they keep stalling
+        self.hevc_logged: dict[str, tuple[bool, bool, bool]] = {}  # viewer -> last logged HEVC capabilities
         self.last_jump = -math.inf  # monotonic: the last seek, after which everyone loads for a moment
         self.next_item: Optional[dict] = None  # the next episode of the film playing (find_next)
         self.positions = PositionStore(cfg.data_dir / "positions.json")  # where each film was left
@@ -383,8 +384,11 @@ class Controller:
             self._relay(None, out)
         elif kind == "report":
             report = playback_report(msg)
-            if report is not None and client.report_bucket.take(time.monotonic()):
-                self.log_report(client, report)
+            if report is not None:
+                if client.report_bucket.take(time.monotonic()):
+                    self.log_report(client, report)
+                if report["kind"] == "codec_failed":
+                    await self.on_codec_failed(client)
         elif kind == "luma" and client.joined:
             self.note_luma(client, msg)
         elif kind == "color":  # the colour, the animal, or both
@@ -449,11 +453,15 @@ class Controller:
             client.name = clean_name(msg.get("name"))
             client.joined = True
             client.animal = msg.get("animal") if msg.get("animal") in ANIMALS else "ball"
+            client.hevc = hevc_caps(msg.get("hevc"))
             self._set_av(client, msg)
             taken = {c.color for c in self.room.clients.values() if c is not client and c.color}
             client.color = pick_color(msg.get("color"), taken)
+            if "hevc" in msg:
+                self.log_hevc(client)
             await self.room.broadcast(self.room.members_msg())
             await self.check_remote()
+            await self.check_codecs(who=client)
         elif kind == "netstat":
             self.on_netstat(client, msg)
         elif kind == "buffering":
@@ -517,6 +525,7 @@ class Controller:
             self.restart_target = target  # picked up when the current restart finishes
             await self.broadcast_state()
             return
+        session.set_viewers_hevc(self.joined_hevc())  # if an unsupported viewer left, next seek can return to copy
         if session.can_serve(target):
             await self.broadcast_state()
             return
@@ -591,6 +600,39 @@ class Controller:
             return False
         await self.seek(self.room.current_position())
         return True
+
+    # ---- HEVC copy capability & live fallback ------------------------------------
+    def joined_hevc(self) -> list[dict]:
+        """Joined viewers' HEVC capabilities (host included), with names for the film card."""
+        return [{"name": c.name, **c.hevc} for c in self.room.clients.values() if c.joined]
+
+    def log_hevc(self, client: Client) -> None:
+        who = client.viewer or client.id
+        sig = (client.hevc["main"], client.hevc["main10"], client.hevc["uhd"])
+        if self.hevc_logged.get(who) == sig:
+            return
+        self.hevc_logged[who] = sig
+        detail = " ".join(f"{k}={int(client.hevc[k])}" for k in ("main", "main10", "uhd"))
+        self.log_report(client, {"kind": "hevc", "detail": detail})
+
+    async def on_codec_failed(self, client: Client) -> None:
+        if not client.joined:
+            return
+        client.hevc = no_hevc()
+        await self.check_codecs(who=client)
+
+    async def check_codecs(self, who: Optional[Client] = None) -> None:
+        """Switch an active HEVC copy stream to transcode right away if any joined viewer
+        cannot play it."""
+        session = self.session
+        if not self.ready or session is None:
+            return
+        was_hevc_copy = session.mode == "copy" and session.info.video_codec == "hevc"
+        need_restart = session.set_viewers_hevc(self.joined_hevc())
+        if was_hevc_copy and session.mode == "transcode" and need_restart:
+            if who is not None:
+                await self.status("hevc_fallback", name=who.name)
+            await self.seek(self.room.current_position())
 
     # ---- opening media ------------------------------------------------------------
     async def _addon_torrent(self, stream: dict) -> dict:
@@ -671,7 +713,8 @@ class Controller:
                 info = await probe(cfg, source.url, timeout=240)
                 if audio is None and audio_lang:
                     audio = same_language_audio(info, audio_lang)
-                session = MediaSession(cfg, source, info, audio, remote=self.remote_viewers())
+                session = MediaSession(cfg, source, info, audio, remote=self.remote_viewers(),
+                                       viewers_hevc=self.joined_hevc())
                 self.note_position()  # the same film opened again: from where it is now
                 resume = self.positions.resume_at(source.media_key, session.duration)
                 await self.status("stream_starting", mode=session.mode, reason=session.mode_reason)
@@ -695,6 +738,9 @@ class Controller:
             old, self.session = self.session, session
             if old is not None:
                 old.stop()
+            if session.info.video_codec == "hevc" and session.set_viewers_hevc(self.joined_hevc()):
+                session.set_remote(self.remote_viewers())
+                await session.start_at(resume or 0.0)
             self.restart_target = None
             self.download_throttled = False
             self.room.reset()

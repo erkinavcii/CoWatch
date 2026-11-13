@@ -23,7 +23,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
-from typing import Optional
+from typing import Iterable, Optional
 
 from .addons import subtitle_lang
 from .config import Settings
@@ -31,6 +31,8 @@ from .config import Settings
 log = logging.getLogger("cowatch.media")
 
 BROWSER_PIX_FMTS = {"yuv420p", "yuvj420p"}
+HEVC_10BIT_PIX_FMTS = {"yuv420p10le", "yuv420p10be"}
+HEVC_PIX_FMTS = BROWSER_PIX_FMTS | HEVC_10BIT_PIX_FMTS
 # Subtitles inside a video file that are text (MKV's SRT and ASS, MP4's mov_text): these become
 # tracks. Picture subtitles (Blu-ray PGS, DVD) cannot be turned into text.
 TEXT_SUBTITLE_CODECS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text"}
@@ -341,20 +343,98 @@ def tonemap_for(info: ProbeInfo, kind: Optional[str]) -> Optional[str]:
     return kind
 
 
-def decide_mode(info: ProbeInfo, cfg: Settings, remote: int = 0) -> tuple[str, str]:
+def hevc_need(info: ProbeInfo) -> Optional[tuple[str, Optional[str]]]:
+    """For HEVC video: `(needed_profile, hdr_kind)` where `needed_profile` is 'main', 'main10',
+    'uhd', or 'unsupported'. None for non-HEVC video."""
+    if info.video_codec != "hevc":
+        return None
+    hdr = hdr_kind(info)
+    pix_fmt = str(info.video.get("pix_fmt") or "")
+    profile = str(info.video.get("profile") or "").strip().lower()
+    if profile and profile not in ("main", "main 10", "main10"):
+        return "unsupported", hdr
+    if pix_fmt and pix_fmt not in HEVC_PIX_FMTS:
+        return "unsupported", hdr
+    is10 = (pix_fmt in HEVC_10BIT_PIX_FMTS) or (profile in ("main 10", "main10"))
+    width = int(info.video.get("width") or 0)
+    height = int(info.video.get("height") or 0)
+    if width > 1920 or height > 1080:
+        return "uhd", hdr
+    return ("main10" if is10 else "main"), hdr
+
+
+def _viewer_supports_hevc(caps: dict, info: ProbeInfo, profile: str) -> bool:
+    if not isinstance(caps, dict):
+        return False
+    if profile == "main":
+        return caps.get("main") is True
+    if profile == "main10":
+        return caps.get("main10") is True
+    if profile == "uhd":
+        pix_fmt = str(info.video.get("pix_fmt") or "")
+        kind = str(info.video.get("profile") or "").strip().lower()
+        is10 = (pix_fmt in HEVC_10BIT_PIX_FMTS) or (kind in ("main 10", "main10"))
+        return caps.get("uhd") is True and (caps.get("main10") is True if is10 else caps.get("main") is True)
+    return False
+
+
+def _bitrate_reason(info: ProbeInfo, cfg: Settings, remote: int) -> Optional[str]:
+    if cfg.max_copy_kbps > 0 and info.bitrate_kbps > cfg.max_copy_kbps:
+        return f"{info.bitrate_kbps} kbps is above MAX_COPY_KBPS={cfg.max_copy_kbps}"
+    if cfg.funnel_budget_kbps > 0 and remote > 0 and info.bitrate_kbps * remote > cfg.funnel_budget_kbps:
+        return (f"{remote} × {info.bitrate_kbps} kbps is above "
+                f"FUNNEL_BUDGET_KBPS={cfg.funnel_budget_kbps}")
+    return None
+
+
+def _hevc_base_gate(info: ProbeInfo, cfg: Settings, remote: int) -> tuple[str, Optional[str]]:
+    """Checks an HEVC file before asking the joined browsers: returns `(profile, transcode_reason)`."""
+    profile, hdr = hevc_need(info) or ("unsupported", None)
+    if hdr is not None:
+        return profile, f"HDR HEVC ({hdr}) is converted"
+    height = int(info.video.get("height") or 0)
+    if cfg.max_height > 0 and height > cfg.max_height:
+        return profile, f"HEVC {height}p is above MAX_HEIGHT={cfg.max_height}"
+    if profile == "unsupported":
+        label = info.video.get("profile") or info.video.get("pix_fmt") or "?"
+        return profile, f"HEVC format {label} does not copy"
+    return profile, _bitrate_reason(info, cfg, remote)
+
+
+def _hevc_blocker_names(info: ProbeInfo, profile: str, viewers: list[dict]) -> list[str]:
+    return list(dict.fromkeys(
+        str(v.get("name") or "").strip()
+        for v in viewers
+        if not _viewer_supports_hevc(v, info, profile)
+        and str(v.get("name") or "").strip() not in ("", "?")
+    ))
+
+
+def decide_mode(info: ProbeInfo, cfg: Settings, remote: int = 0,
+                viewers: Optional[Iterable[dict]] = None) -> tuple[str, str]:
     """Copy or convert, and why (the film card shows the reason). `remote`: the viewers coming
-    over Funnel, who share its relay (`funnel_share`)."""
+    over Funnel, who share its relay (`funnel_share`). `viewers`: the joined viewers' HEVC maps."""
     codec = info.video_codec
+    if codec == "hevc":
+        profile, reason = _hevc_base_gate(info, cfg, remote)
+        if reason is not None:
+            return "transcode", reason
+        viewer_list = list(viewers or ())
+        if not viewer_list:
+            return "transcode", "no viewers joined yet to check HEVC support"
+        if any(not _viewer_supports_hevc(v, info, profile) for v in viewer_list):
+            names = _hevc_blocker_names(info, profile, viewer_list)
+            who = ", ".join(names) if names else "a viewer"
+            return "transcode", f"{who} cannot play HEVC"
+        return "copy", "HEVC, everyone can play it, sent without re-encoding"
     if codec != "h264":
         return "transcode", f"video codec {codec or '?'} is not H.264"
     pix_fmt = info.video.get("pix_fmt")
     if pix_fmt and pix_fmt not in BROWSER_PIX_FMTS:
         return "transcode", f"pixel format {pix_fmt} does not play in browsers"
-    if cfg.max_copy_kbps > 0 and info.bitrate_kbps > cfg.max_copy_kbps:
-        return "transcode", f"{info.bitrate_kbps} kbps is above MAX_COPY_KBPS={cfg.max_copy_kbps}"
-    if cfg.funnel_budget_kbps > 0 and remote > 0 and info.bitrate_kbps * remote > cfg.funnel_budget_kbps:
-        return "transcode", (f"{remote} × {info.bitrate_kbps} kbps is above "
-                             f"FUNNEL_BUDGET_KBPS={cfg.funnel_budget_kbps}")
+    limit = _bitrate_reason(info, cfg, remote)
+    if limit is not None:
+        return "transcode", limit
     return "copy", "H.264 source, sent without re-encoding"
 
 
@@ -410,6 +490,8 @@ def funnel_share(cfg: Settings, remote: int) -> int:
 def _video_args(cfg: Settings, mode: str, encoder: str = SOFTWARE_ENCODER, info: Optional[ProbeInfo] = None,
                 tonemap: Optional[str] = None, kbps: Optional[int] = None) -> list[str]:
     if mode == "copy":
+        if info is not None and info.video_codec == "hevc":
+            return ["-c:v", "copy", "-tag:v", "hvc1"]
         return ["-c:v", "copy"]
     extra, pix_fmt = ENCODER_PRESETS.get(encoder, ([], "yuv420p"))
     kbps = kbps or target_kbps(cfg, info)
@@ -650,14 +732,15 @@ class MediaSession:
     """The open film: its probe info and the HLS stream currently being produced."""
 
     def __init__(self, cfg: Settings, source: MediaSource, info: ProbeInfo, audio_index: Optional[int] = None,
-                 remote: int = 0):
+                 remote: int = 0, viewers_hevc: Optional[Iterable[dict]] = None):
         self.cfg = cfg
         self.source = source
         self.info = info
         # The viewers over Funnel the next stream is made for (set_remote); the stream running
         # keeps the mode and bitrate it was started with until it is restarted.
         self.remote = max(0, remote)
-        self.mode, self.mode_reason = decide_mode(info, cfg, self.remote)
+        self.viewers_hevc: list[dict] = [dict(v) for v in viewers_hevc] if viewers_hevc else []
+        self.mode, self.mode_reason = decide_mode(info, cfg, self.remote, self.viewers_hevc)
         self.notified_remote = self.remote  # the host was asked about this many (main.Controller.check_remote)
         self.audio = choose_audio(info, audio_index)
         self.stream: Optional[HlsStream] = None
@@ -758,20 +841,38 @@ class MediaSession:
 
     def plan_for(self, remote: int) -> tuple[str, Optional[int]]:
         """The mode and bitrate a stream for `remote` viewers over Funnel would have."""
-        mode, _ = decide_mode(self.info, self.cfg, remote)
+        mode, _ = decide_mode(self.info, self.cfg, remote, self.viewers_hevc)
         return mode, target_kbps(self.cfg, self.info, remote) if mode == "transcode" else None
 
     def stream_fits(self) -> bool:
         """The stream running has the mode and bitrate the session wants now."""
-        return self.stream is None or (self.stream.mode, self.stream.kbps) == (self.mode, self.target_kbps)
+        return self.stream is None or (self.stream.mode, getattr(self.stream, "kbps", None)) == (
+            self.mode, self.target_kbps
+        )
 
     def set_remote(self, remote: int) -> bool:
         """The next stream is made for `remote` viewers over Funnel. True if that differs from
         the stream running (a restart at the current position gives everyone the new one)."""
         self.remote = max(0, remote)
         self.notified_remote = max(self.notified_remote, self.remote)
-        self.mode, self.mode_reason = decide_mode(self.info, self.cfg, self.remote)
+        self.mode, self.mode_reason = decide_mode(self.info, self.cfg, self.remote, self.viewers_hevc)
         return not self.stream_fits()
+
+    def set_viewers_hevc(self, viewers: Iterable[dict]) -> bool:
+        """The next stream sees these joined viewers' HEVC maps. True if the running stream
+        no longer matches what the session wants now."""
+        self.viewers_hevc = [dict(v) for v in viewers]
+        self.mode, self.mode_reason = decide_mode(self.info, self.cfg, self.remote, self.viewers_hevc)
+        return not self.stream_fits()
+
+    @property
+    def hevc_blocker(self) -> Optional[str]:
+        if self.mode != "transcode" or self.info.video_codec != "hevc" or not self.viewers_hevc:
+            return None
+        profile, reason = _hevc_base_gate(self.info, self.cfg, self.remote)
+        if reason is not None:
+            return None
+        return ", ".join(_hevc_blocker_names(self.info, profile, self.viewers_hevc)) or None
 
     @property
     def audio_index(self) -> Optional[int]:
@@ -799,6 +900,7 @@ class MediaSession:
             if self.source.content_id else None,
             "mode": self.mode,
             "modeReason": self.mode_reason,
+            "hevcBlocker": self.hevc_blocker,
             # The number of viewers over Funnel when it lowered the bitrate or made it convert, else None.
             "funnelViewers": self.remote if self.remote and self.plan_for(self.remote) != self.plan_for(0) else None,
             "encoder": self.encoder if self.mode == "transcode" else None,
