@@ -769,3 +769,151 @@ def test_hevc_copy_switches_when_unsupported_viewer_joins_or_fails(monkeypatch, 
             hws.send_json({"type": "seek", "position": 45})
             assert wait_media(hws, "copy")["mode"] == "copy"
     assert any("[hevc]" in line and "main=1 main10=0 uhd=0" in line for line in _log_lines("hevc"))
+
+
+def test_check_progress_handles_media_closed_during_await_without_locking_loading(monkeypatch):
+    import asyncio
+    from server import main
+    from server.media import MediaSession, MediaSource, ProbeInfo
+
+    info = ProbeInfo(duration=120.0, size=1, start_time=0.0, format_name="matroska", bitrate_kbps=2000,
+                     video={"codec_name": "h264", "index": 0, "pix_fmt": "yuv420p"}, audio=[])
+
+    class DeadStream:
+        id = "dead00000001"
+        running = False
+        returncode = 1
+        audio = None
+
+        def read_playlist(self):
+            return [("seg_00000.m4s", 4.0)], False
+
+        def log_tail(self, _n=3):
+            return "boom"
+
+        def stop(self):
+            pass
+
+    async def run():
+        ctl = main.Controller()
+        session = MediaSession(main.cfg, MediaSource(kind="file", url="x.mkv", title="X", size=1, media_key="k"), info)
+        session.stream = DeadStream()
+        ctl.session = session
+
+        async def close_mid_status(key, *_a, **_kw):
+            if key == "stream_recovering":
+                ctl.session = None
+                session.stream = None
+
+        monkeypatch.setattr(ctl, "status", close_mid_status)
+        await ctl._check_progress()
+        assert ctl.room.loading is False
+        assert ctl.restart_task is None
+
+    asyncio.run(run())
+
+
+def test_open_media_cancel_during_find_next_stops_new_stream_and_close_drops_torrent(monkeypatch):
+    import asyncio
+    from server import main
+    from server.media import MediaSession, MediaSource, ProbeInfo
+
+    info = ProbeInfo(duration=120.0, size=1, start_time=0.0, format_name="matroska", bitrate_kbps=2000,
+                     video={"codec_name": "h264", "index": 0, "pix_fmt": "yuv420p"}, audio=[])
+
+    async def run():
+        ctl = main.Controller()
+        stopped = []
+        removed = []
+        opening_in_find_next = []
+        in_find_next = asyncio.Event()
+
+        async def fake_resolve(_torrent, _path, _stream):
+            return MediaSource(kind="torrent", url="http://127.0.0.1/f", title="Film", size=100,
+                               media_key="m1", info_hash="aa" * 20, file_index=0)
+
+        async def fake_probe(_cfg, _url, timeout=240):
+            return info
+
+        async def fake_start_at(self, _target):
+            self.stream = type("S", (), {"id": "s1", "stop": lambda _self: stopped.append(self.source.media_key)})()
+
+        def fake_stop(self):
+            stopped.append(self.source.media_key)
+            self.stream = None
+
+        async def slow_find_next(_session):
+            opening_in_find_next.append(ctl.opening)
+            in_find_next.set()
+            await asyncio.sleep(10)
+            return None
+
+        async def fake_remove(h):
+            removed.append(h)
+
+        monkeypatch.setattr(ctl, "_resolve_source", fake_resolve)
+        monkeypatch.setattr(main, "probe", fake_probe)
+        monkeypatch.setattr(MediaSession, "start_at", fake_start_at)
+        monkeypatch.setattr(MediaSession, "stop", fake_stop)
+        monkeypatch.setattr(ctl, "find_next", slow_find_next)
+        monkeypatch.setattr(ctl.helper, "remove", fake_remove)
+
+        ctl.start_open(path="x.mkv")
+        await in_find_next.wait()
+        assert opening_in_find_next == [True]
+        await ctl.cancel_open()
+        assert stopped == ["m1"]
+        assert ctl.session is None and not ctl.opening
+
+        # Now test close_media cancels active restart_task and stops downloading the closed torrent.
+        session = MediaSession(main.cfg, MediaSource(kind="torrent", url="http://127.0.0.1/f", title="Film",
+                                                     size=100, media_key="m2", info_hash="bb" * 20, file_index=0), info)
+        ctl.session = session
+        restart_cancelled = asyncio.Event()
+
+        async def hanging_restart():
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                restart_cancelled.set()
+                raise
+
+        ctl.restart_task = asyncio.create_task(hanging_restart())
+        await asyncio.sleep(0)
+        await ctl.close_media()
+        await asyncio.wait_for(restart_cancelled.wait(), timeout=2)
+        assert ctl.session is None and ctl.restart_task is None
+        assert "bb" * 20 in removed
+
+    asyncio.run(run())
+
+
+def test_torrent_hash_reads_head_and_tail_in_parallel(monkeypatch):
+    import asyncio
+    from server import main
+
+    async def run():
+        ctl = main.Controller()
+        active = 0
+        peak = 0
+        both_started = asyncio.Event()
+
+        async def fake_prepare(info_hash, index):
+            return {"files": [{"index": index, "name": "Film.mkv", "length": 200_000}]}
+
+        async def fake_read_range(_h, _i, _s, _e, timeout=90):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            if active >= 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=2)
+            active -= 1
+            return b"\x01" * 65536
+
+        monkeypatch.setattr(ctl.helper, "prepare", fake_prepare)
+        monkeypatch.setattr(ctl.helper, "read_range", fake_read_range)
+        src = await ctl._resolve_source({"infoHash": "cc" * 20, "fileIndex": 0}, None, None)
+        assert peak == 2 and src.moviehash is not None
+
+    asyncio.run(run())

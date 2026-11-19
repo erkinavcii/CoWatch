@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Awaitable, Callable, Optional
 
@@ -33,6 +34,8 @@ CONTEXT = 8  # lines before a chunk sent along as context
 PARALLEL = 3  # requests at a time
 MAX_LINES = 3000  # a broken file should not run up the bill
 MAX_MISSING = 0.2  # more lines than this missing: the translation is not kept
+BRIEF_MAX_LINES = 240  # sampled lines sent to BRIEF_PROMPT (keeps local/small-context LLMs fast)
+BRIEF_HEAD_LINES = 80  # contiguous opening lines kept in full for character introductions
 BR = "<br>"
 SAMPLE = [(0.0, 1.0, "Where are you going?"), (1.0, 2.0, "Home.\nIt's late.")]  # the settings' "Try"
 
@@ -97,7 +100,9 @@ LANGUAGE_NOTES = {
            '"usted" where the brief says the speakers are formal.'],
 }
 
-_LINE = re.compile(r"^#(\d+)[ \t:.)-]*(.*)$")
+# Match "#12 text", "#12: text", "#12. text", "#12) text" or "#12- text", without
+# swallowing leading dialogue dashes ("#12 - Hello") or ellipses ("#12 ...").
+_LINE = re.compile(r"^#(\d+)(?:[ \t]*(?::|\)|\.(?!\.))[ \t]*|-[ \t]+|[ \t]+)(.*)$")
 _THINK = re.compile(r"<think>.*?</think>", re.S | re.I)  # reasoning models served by Ollama or LM Studio
 _BREAK = re.compile(r"\s*<br\s*/?>\s*", re.I)
 
@@ -126,6 +131,23 @@ def numbered(lines: list[str], first: int) -> str:
     return "\n".join(f"#{first + i} {line}" for i, line in enumerate(lines))
 
 
+def _brief_sample(lines: list[str], limit: int = BRIEF_MAX_LINES, head: int = BRIEF_HEAD_LINES) -> str:
+    """Keep all lines for short subtitles; for long films, keep the opening `head` lines
+    contiguously and evenly sample the rest through the final line with original #numbers."""
+    if len(lines) <= limit:
+        return numbered(lines, 1)
+    head = min(head, limit)
+    rest = limit - head
+    picked = list(range(head))
+    if rest == 1:
+        picked.append(len(lines) - 1)
+    elif rest > 1:
+        span = len(lines) - head
+        step = (span - 1) / (rest - 1)
+        picked.extend(head + round(k * step) for k in range(rest))
+    return "\n".join(f"#{i + 1} {lines[i]}" for i in picked)
+
+
 def parse_lines(text: str, wanted: set[int]) -> dict[int, str]:
     """The numbered lines of an answer; anything else (fences, notes, other numbers) is left out."""
     found: dict[int, str] = {}
@@ -148,10 +170,11 @@ class OpenAIModel:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
+        self._http: Optional[httpx.AsyncClient] = None
 
     async def _send(self, method: str, path: str, **kwargs) -> dict:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-        return await _call_json(method, self.base_url + path, headers=headers, **kwargs)
+        return await _call_json(method, self.base_url + path, headers=headers, client=self._http, **kwargs)
 
     async def complete(self, system: str, prompt: str) -> str:
         data = await self._send("POST", "/chat/completions", json={
@@ -169,14 +192,41 @@ class OpenAIModel:
         return sorted({str(m["id"]) for m in items or [] if isinstance(m, dict) and m.get("id")})
 
 
-async def _call_json(method: str, url: str, errors: Optional[dict[int, str]] = None, **kwargs):
+def _new_http_client() -> httpx.AsyncClient:
+    # A model on this computer can take minutes for a chunk; a far one should not.
+    return httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10), transport=TRANSPORT, verify=tls())
+
+
+@asynccontextmanager
+async def _http_session(model):
+    """Reuse one keep-alive httpx.AsyncClient across all requests of a translate() run."""
+    if isinstance(model, (OpenAIModel, MTService)):
+        async with _new_http_client() as http:
+            prev = model._http
+            model._http = http
+            try:
+                yield
+            finally:
+                model._http = prev
+    elif isinstance(model, AnthropicModel) and model._owns_http:
+        try:
+            yield
+        finally:
+            await model.client.close()
+    else:
+        yield
+
+
+async def _call_json(method: str, url: str, errors: Optional[dict[int, str]] = None,
+                     client: Optional[httpx.AsyncClient] = None, **kwargs):
     """One HTTP call with JSON back; rate limits and server errors are tried twice more."""
     for attempt in range(3):
         try:
-            # A model on this computer can take minutes for a chunk; a far one should not.
-            async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10), transport=TRANSPORT,
-                                         verify=tls()) as http:
-                resp = await http.request(method, url, **kwargs)
+            if client is not None:
+                resp = await client.request(method, url, **kwargs)
+            else:
+                async with _new_http_client() as http:
+                    resp = await http.request(method, url, **kwargs)
         except httpx.TimeoutException:
             error = TranslateError("the provider did not answer in time", "ai_timeout")
         except httpx.HTTPError as exc:
@@ -226,6 +276,7 @@ class AnthropicModel:
         self.anthropic = anthropic
         self.model = model
         self.official = not base_url or base_url.rstrip("/") == "https://api.anthropic.com"
+        self._owns_http = ANTHROPIC_HTTP is None
         self.client = anthropic.AsyncAnthropic(api_key=api_key, base_url=None if self.official else base_url,
                                                max_retries=2, timeout=600, http_client=ANTHROPIC_HTTP)
 
@@ -291,6 +342,10 @@ class MTService:
         self.base_url = (base_url or "").rstrip("/")
         self.api_key = api_key
         self.extra = extra  # Microsoft: the Azure resource's region
+        self._http: Optional[httpx.AsyncClient] = None
+
+    async def _call(self, method: str, url: str, errors: Optional[dict[int, str]] = None, **kwargs):
+        return await _call_json(method, url, errors=errors, client=self._http, **kwargs)
 
     async def models(self) -> list[str]:
         return []  # a service, not a choice of models
@@ -311,7 +366,7 @@ class DeepL(MTService):
 
     async def translate_lines(self, lines, source, target):
         base = self.base_url or ("https://api-free.deepl.com" if self.api_key.endswith(":fx") else "https://api.deepl.com")
-        data = await _call_json("POST", base + "/v2/translate", errors={456: "ai_quota", 403: "ai_auth"},
+        data = await self._call("POST", base + "/v2/translate", errors={456: "ai_quota", 403: "ai_auth"},
                                 headers={"Authorization": f"DeepL-Auth-Key {self.api_key}"},
                                 json={"text": lines, "target_lang": _code(target, self.TARGET).upper(),
                                       "source_lang": source.split("-")[0].upper()})
@@ -328,7 +383,7 @@ class Microsoft(MTService):
         if self.extra:
             headers["Ocp-Apim-Subscription-Region"] = self.extra
         base = self.base_url or "https://api.cognitive.microsofttranslator.com"
-        data = await _call_json("POST", base + "/translate", errors={403: "ai_quota"}, headers=headers,
+        data = await self._call("POST", base + "/translate", errors={403: "ai_quota"}, headers=headers,
                                 params={"api-version": "3.0", "from": _code(source, self.CODES),
                                         "to": _code(target, self.CODES)},
                                 json=[{"Text": line} for line in lines])
@@ -345,7 +400,7 @@ class Google(MTService):
 
     async def translate_lines(self, lines, source, target):
         base = self.base_url or "https://translation.googleapis.com"
-        data = await _call_json("POST", base + "/language/translate/v2", params={"key": self.api_key},
+        data = await self._call("POST", base + "/language/translate/v2", params={"key": self.api_key},
                                 json={"q": lines, "source": _code(source, self.CODES),
                                       "target": _code(target, self.CODES), "format": "text"})
         return _pick(((data or {}).get("data") or {}).get("translations"), "translatedText", len(lines))
@@ -359,7 +414,7 @@ class LibreTranslate(MTService):
         body = {"q": lines, "source": _code(source, self.CODES), "target": _code(target, self.CODES), "format": "text"}
         if self.api_key:
             body["api_key"] = self.api_key
-        data = await _call_json("POST", self.base_url + "/translate", json=body)
+        data = await self._call("POST", self.base_url + "/translate", json=body)
         out = (data or {}).get("translatedText")
         if not isinstance(out, list) or len(out) != len(lines):
             raise TranslateError("the service gave back a different number of lines", "ai_bad_output")
@@ -383,7 +438,7 @@ class MyMemory(MTService):
         params = {"q": lines[0], "langpair": f"{_code(source, self.CODES)}|{_code(target, self.CODES)}"}
         if "@" in self.api_key:
             params["de"] = self.api_key
-        data = await _call_json("GET", (self.base_url or "https://api.mymemory.translated.net") + "/get", params=params)
+        data = await self._call("GET", (self.base_url or "https://api.mymemory.translated.net") + "/get", params=params)
         text = str(((data or {}).get("responseData") or {}).get("translatedText") or "")
         status = str((data or {}).get("responseStatus", "200"))
         if status == "429" or "MYMEMORY WARNING" in text.upper():
@@ -451,38 +506,39 @@ async def translate(model, cues: list[Cue], source: str, target: str, title: str
         if progress is not None:
             await progress(done, total)
 
-    if brief is None:
-        brief = (await model.complete(SYSTEM, BRIEF_PROMPT.format(
-            title=title or "an unnamed film", lines=numbered(lines, 1), **names))).strip()
-        brief = _THINK.sub("", brief).strip() or "(none)"
-        await step()
-    notes = "".join(f"\n- {note}" for note in LANGUAGE_NOTES.get(target.lower(), []))
-    done_lines: dict[int, str] = {}
-    gate = asyncio.Semaphore(PARALLEL)
+    async with _http_session(model):
+        if brief is None:
+            brief = (await model.complete(SYSTEM, BRIEF_PROMPT.format(
+                title=title or "an unnamed film", lines=_brief_sample(lines), **names))).strip()
+            brief = _THINK.sub("", brief).strip() or "(none)"
+            await step()
+        notes = "".join(f"\n- {note}" for note in LANGUAGE_NOTES.get(target.lower(), []))
+        done_lines: dict[int, str] = {}
+        gate = asyncio.Semaphore(PARALLEL)
 
-    async def run(chunk: range) -> None:
-        start = max(0, chunk.start - CONTEXT)
-        context = numbered(lines[start:chunk.start], start + 1) or "(none)"
-        todo = list(chunk)
-        async with gate:
-            for _attempt in range(2):  # once more for the lines that came back missing
-                prompt = CHUNK_PROMPT.format(brief=brief, notes=notes, context=context,
-                                             lines="\n".join(f"#{i + 1} {lines[i]}" for i in todo), **names)
-                got = parse_lines(await model.complete(SYSTEM, prompt), {i + 1 for i in todo})
-                for number, text in got.items():
-                    done_lines[number] = text
-                todo = [i for i in todo if i + 1 not in done_lines]
-                if not todo:
-                    break
-        await step()
+        async def run(chunk: range) -> None:
+            start = max(0, chunk.start - CONTEXT)
+            context = numbered(lines[start:chunk.start], start + 1) or "(none)"
+            todo = list(chunk)
+            async with gate:
+                for _attempt in range(2):  # once more for the lines that came back missing
+                    prompt = CHUNK_PROMPT.format(brief=brief, notes=notes, context=context,
+                                                 lines="\n".join(f"#{i + 1} {lines[i]}" for i in todo), **names)
+                    got = parse_lines(await model.complete(SYSTEM, prompt), {i + 1 for i in todo})
+                    for number, text in got.items():
+                        done_lines[number] = text
+                    todo = [i for i in todo if i + 1 not in done_lines]
+                    if not todo:
+                        break
+            await step()
 
-    try:
-        async with asyncio.TaskGroup() as group:
-            for chunk in chunks:
-                group.create_task(run(chunk))
-    except BaseExceptionGroup as group_error:  # the first failure stops the rest
-        first = group_error.exceptions[0]
-        raise first if isinstance(first, TranslateError) else TranslateError(str(first)) from None
+        try:
+            async with asyncio.TaskGroup() as group:
+                for chunk in chunks:
+                    group.create_task(run(chunk))
+        except BaseExceptionGroup as group_error:  # the first failure stops the rest
+            first = group_error.exceptions[0]
+            raise first if isinstance(first, TranslateError) else TranslateError(str(first)) from None
 
     out: list[Cue] = []
     missing = 0
@@ -517,13 +573,14 @@ async def _translate_lines(service: MTService, cues: list[Cue], source: str, tar
         if progress is not None:
             await progress(done, len(batches))
 
-    try:
-        async with asyncio.TaskGroup() as group:
-            for batch in batches:
-                group.create_task(run(batch))
-    except BaseExceptionGroup as group_error:
-        first = group_error.exceptions[0]
-        raise first if isinstance(first, TranslateError) else TranslateError(str(first)) from None
+    async with _http_session(service):
+        try:
+            async with asyncio.TaskGroup() as group:
+                for batch in batches:
+                    group.create_task(run(batch))
+        except BaseExceptionGroup as group_error:
+            first = group_error.exceptions[0]
+            raise first if isinstance(first, TranslateError) else TranslateError(str(first)) from None
     out = [(start, end, got[i] or text) for i, (start, end, text) in enumerate(cues)]
     missing = sum(1 for text in got if not text)
     if missing > MAX_MISSING * len(cues):

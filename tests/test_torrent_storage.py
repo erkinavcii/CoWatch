@@ -68,10 +68,14 @@ def test_the_helper_measures_and_empties_the_download_folder(tmp_path):
                     break
                 await asyncio.sleep(0.1)
             assert await helper.storage([seed["hash"]]) == {"total": 46000, "kept": 40000}
+            # Seek Range (start > 0) exercises seek critical piece prioritisation and returns exact bytes.
+            chunk = await helper.read_range(seed["hash"], 0, 16384, 16415)
+            assert len(chunk) == 32
             done = await helper.cleanup([seed["hash"]])
             assert done == {"freed": 6000, "failed": 0, "total": 40000, "kept": 40000}
             # Without it in the list, the film goes too.
             assert (await helper.cleanup([]))["freed"] == 40000
+            await helper.aclose()
 
         asyncio.run(run())
         assert folder.is_dir() and list(folder.iterdir()) == []

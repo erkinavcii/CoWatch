@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -506,11 +507,21 @@ def _video_args(cfg: Settings, mode: str, encoder: str = SOFTWARE_ENCODER, info:
     ]
 
 
-def _audio_args(cfg: Settings) -> list[str]:
+# Preserve the center (dialogue) channel when downmixing 5.1 / 7.1 surround to stereo.
+# Using '<' normalises present input channel weights to <= 1.0 to avoid clipping across
+# 5.1 (back), 5.1(side), 7.1 and 3.0 layouts.
+SURROUND_DOWNMIX = "pan=stereo|FL<0.5*FC+0.707*FL+0.5*BL+0.5*SL|FR<0.5*FC+0.707*FR+0.5*BR+0.5*SR"
+
+
+def _audio_args(cfg: Settings, audio: Optional[dict] = None) -> list[str]:
     args = ["-c:a", "aac", "-b:a", f"{cfg.audio_kbps}k", "-ac", "2"]
+    channels = int((audio or {}).get("channels") or 0)
+    downmix = SURROUND_DOWNMIX if channels > 2 else "aformat=channel_layouts=stereo"
     if cfg.audio_filter:
         # Downmix to stereo first, then normalise the final mix.
-        args += ["-af", f"aformat=channel_layouts=stereo,{cfg.audio_filter}"]
+        args += ["-af", f"{downmix},{cfg.audio_filter}"]
+    elif channels > 2:
+        args += ["-af", downmix]
     return args
 
 
@@ -541,7 +552,7 @@ def build_command(
     cmd += ["-sn", "-dn", "-map_metadata", "-1", "-map_chapters", "-1"]
     cmd += _video_args(cfg, mode, encoder, info, tonemap if mode == "transcode" else None, kbps)
     if audio is not None:
-        cmd += _audio_args(cfg)
+        cmd += _audio_args(cfg, audio)
     cmd += [
         "-copyts",
         "-max_muxing_queue_size", "4096",
@@ -556,6 +567,174 @@ def build_command(
         _ffmpeg_out(out_dir / "index.m3u8"),
     ]
     return cmd
+
+
+def _iter_mp4_boxes(data: bytes, start: int = 0, end: Optional[int] = None):
+    """Yield (box_type, payload_start, payload_end) for top-level MP4/fMP4 boxes in a slice."""
+    limit = len(data) if end is None else min(end, len(data))
+    pos = start
+    while pos + 8 <= limit:
+        size, box_type = struct.unpack_from(">I4s", data, pos)
+        header = 8
+        if size == 1:
+            if pos + 16 > limit:
+                break
+            size = struct.unpack_from(">Q", data, pos + 8)[0]
+            header = 16
+        elif size == 0:
+            size = limit - pos
+        if size < header or pos + size > limit:
+            break
+        yield box_type, pos + header, pos + size
+        pos += size
+
+
+def _read_fmp4_start_time(init_bytes: bytes, seg_bytes: bytes) -> Optional[float]:
+    """Read the earliest presentation timestamp (seconds) of the first fMP4 segment directly
+    in Python without spawning ffprobe.
+
+    Checks `sidx` boxes in the segment first (`earliest_presentation_time / timescale`, written
+    by ffmpeg's fMP4 HLS muxer with `-copyts`), and falls back to `moov` (`mvhd` + `elst` +
+    `mdhd`) combined with `moof/traf` (`tfdt` + `trun` composition time offset). Returns None
+    if the boxes cannot be parsed so callers can fall back to ffprobe."""
+    sidx_starts: list[float] = []
+    for btype, s0, e0 in _iter_mp4_boxes(seg_bytes):
+        if btype == b"sidx" and e0 - s0 >= 16:
+            ver = seg_bytes[s0]
+            _ref_id, ts = struct.unpack_from(">II", seg_bytes, s0 + 4)
+            if ts > 0:
+                if ver == 1 and e0 - s0 >= 20:
+                    ept = struct.unpack_from(">Q", seg_bytes, s0 + 12)[0]
+                    sidx_starts.append(ept / ts)
+                elif ver == 0:
+                    ept = struct.unpack_from(">I", seg_bytes, s0 + 12)[0]
+                    sidx_starts.append(ept / ts)
+        elif btype == b"moof" and sidx_starts:
+            break
+    if sidx_starts:
+        return min(sidx_starts)
+
+    movie_ts: Optional[int] = None
+    tracks: dict[int, tuple[int, float]] = {}  # track_id -> (timescale, elst_empty_offset_s)
+    for btype, s0, e0 in _iter_mp4_boxes(init_bytes):
+        if btype != b"moov":
+            continue
+        for ttype, s1, e1 in _iter_mp4_boxes(init_bytes, s0, e0):
+            if ttype == b"mvhd" and e1 - s1 >= 16:
+                ver = init_bytes[s1]
+                off = s1 + (20 if ver == 1 else 12)
+                if off + 4 <= e1:
+                    movie_ts = struct.unpack_from(">I", init_bytes, off)[0] or None
+        for ttype, s1, e1 in _iter_mp4_boxes(init_bytes, s0, e0):
+            if ttype != b"trak":
+                continue
+            track_id: Optional[int] = None
+            timescale: Optional[int] = None
+            elst_offset = 0.0
+            for ctype, s2, e2 in _iter_mp4_boxes(init_bytes, s1, e1):
+                if ctype == b"tkhd" and e2 - s2 >= 16:
+                    ver = init_bytes[s2]
+                    off = s2 + (20 if ver == 1 else 12)
+                    if off + 4 <= e2:
+                        track_id = struct.unpack_from(">I", init_bytes, off)[0]
+                elif ctype == b"edts" and movie_ts:
+                    for etype, s3, e3 in _iter_mp4_boxes(init_bytes, s2, e2):
+                        if etype == b"elst" and e3 - s3 >= 8:
+                            ver = init_bytes[s3]
+                            count = struct.unpack_from(">I", init_bytes, s3 + 4)[0]
+                            if count >= 1:
+                                if ver == 1 and e3 - s3 >= 24:
+                                    seg_dur, media_time = struct.unpack_from(">Qq", init_bytes, s3 + 8)
+                                    if media_time == -1:
+                                        elst_offset = seg_dur / movie_ts
+                                elif ver == 0 and e3 - s3 >= 16:
+                                    seg_dur, media_time = struct.unpack_from(">Ii", init_bytes, s3 + 8)
+                                    if media_time == -1:
+                                        elst_offset = seg_dur / movie_ts
+                elif ctype == b"mdia":
+                    for mtype, s3, e3 in _iter_mp4_boxes(init_bytes, s2, e2):
+                        if mtype == b"mdhd" and e3 - s3 >= 16:
+                            ver = init_bytes[s3]
+                            off = s3 + (20 if ver == 1 else 12)
+                            if off + 4 <= e3:
+                                timescale = struct.unpack_from(">I", init_bytes, off)[0]
+            if track_id is not None and timescale and timescale > 0:
+                tracks[track_id] = (timescale, elst_offset)
+    if not tracks:
+        return None
+
+    starts: list[float] = []
+    for btype, s0, e0 in _iter_mp4_boxes(seg_bytes):
+        if btype != b"moof":
+            continue
+        for ttype, s1, e1 in _iter_mp4_boxes(seg_bytes, s0, e0):
+            if ttype != b"traf":
+                continue
+            track_id = None
+            decode_time: Optional[int] = None
+            default_dur = 0
+            trun_box: Optional[tuple[int, int]] = None
+            for ctype, s2, e2 in _iter_mp4_boxes(seg_bytes, s1, e1):
+                if ctype == b"tfhd" and e2 - s2 >= 8:
+                    flags = (seg_bytes[s2 + 1] << 16) | (seg_bytes[s2 + 2] << 8) | seg_bytes[s2 + 3]
+                    track_id = struct.unpack_from(">I", seg_bytes, s2 + 4)[0]
+                    p = s2 + 8
+                    if flags & 0x000001:
+                        p += 8
+                    if flags & 0x000002:
+                        p += 4
+                    if (flags & 0x000008) and p + 4 <= e2:
+                        default_dur = struct.unpack_from(">I", seg_bytes, p)[0]
+                elif ctype == b"tfdt" and e2 - s2 >= 8:
+                    ver = seg_bytes[s2]
+                    if ver == 1 and e2 - s2 >= 12:
+                        decode_time = struct.unpack_from(">Q", seg_bytes, s2 + 4)[0]
+                    elif ver == 0:
+                        decode_time = struct.unpack_from(">I", seg_bytes, s2 + 4)[0]
+                elif ctype == b"trun" and trun_box is None and e2 - s2 >= 8:
+                    trun_box = (s2, e2)
+            if track_id not in tracks or decode_time is None:
+                continue
+            ts, elst_offset = tracks[track_id]
+            min_pts = decode_time
+            if trun_box is not None:
+                ts0, te0 = trun_box
+                ver = seg_bytes[ts0]
+                flags = (seg_bytes[ts0 + 1] << 16) | (seg_bytes[ts0 + 2] << 8) | seg_bytes[ts0 + 3]
+                sample_count = struct.unpack_from(">I", seg_bytes, ts0 + 4)[0]
+                p = ts0 + 8
+                if flags & 0x000001:
+                    p += 4
+                if flags & 0x000004:
+                    p += 4
+                if sample_count > 0 and (flags & 0x000800):
+                    cur_dts = decode_time
+                    best: Optional[int] = None
+                    for _ in range(min(sample_count, 8)):
+                        dur = default_dur
+                        if flags & 0x000100:
+                            if p + 4 > te0:
+                                break
+                            dur = struct.unpack_from(">I", seg_bytes, p)[0]
+                            p += 4
+                        if flags & 0x000200:
+                            p += 4
+                        if flags & 0x000400:
+                            p += 4
+                        if p + 4 > te0:
+                            break
+                        cto = struct.unpack_from(">i" if ver == 1 else ">I", seg_bytes, p)[0]
+                        p += 4
+                        pts = cur_dts + cto
+                        if best is None or pts < best:
+                            best = pts
+                        cur_dts += dur
+                    if best is not None:
+                        min_pts = best
+            starts.append(elst_offset + min_pts / ts)
+        if starts:
+            break
+    return min(starts) if starts else None
 
 
 class HlsStream:
@@ -603,7 +782,13 @@ class HlsStream:
                 creationflags=flags,
             )
         except FileNotFoundError as exc:
+            self._log_file.close()
+            self._log_file = None
             raise MediaError(f"ffmpeg not found: {self.cfg.ffmpeg}") from exc
+        except OSError:
+            self._log_file.close()
+            self._log_file = None
+            raise
 
     @property
     def running(self) -> bool:
@@ -677,35 +862,44 @@ class HlsStream:
             return ""
         return "\n".join(text.strip().splitlines()[-lines:])
 
-    async def wait_ready(self, timeout: float) -> None:
+    async def wait_ready(self, timeout: float) -> str:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             segments, _ = self.read_playlist()
             if segments:
-                return
+                return segments[0][0]
             if self.proc is not None and self.proc.poll() is not None:
-                if self.read_playlist()[0]:
-                    return
+                segments, _ = self.read_playlist()
+                if segments:
+                    return segments[0][0]
                 raise MediaError("ffmpeg stopped: " + (self.log_tail(6) or f"exit code {self.proc.poll()}"))
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.05)
         raise MediaError("timed out waiting for the first video segment")
 
-    async def measure_first_pts(self) -> float:
-        """Start time of the first segment in source timestamps (thanks to -copyts)."""
-        segments, _ = self.read_playlist()
-        if not segments:
-            raise MediaError("no segment to measure")
+    async def measure_first_pts(self, first_segment: Optional[str] = None) -> float:
+        """Start time of the first segment in source timestamps (thanks to -copyts).
+        Reads fMP4 boxes in Python first (zero subprocess overhead) and falls back to ffprobe."""
+        seg_name = first_segment
+        if not seg_name:
+            segments, _ = self.read_playlist()
+            if not segments:
+                raise MediaError("no segment to measure")
+            seg_name = segments[0][0]
         init = self.out_dir / "init.mp4"
-        first = self.out_dir / segments[0][0]
-        sample = self.out_dir / "probe-start.mp4"
-        sample.write_bytes(init.read_bytes() + first.read_bytes())
-        try:
-            cmd = [self.cfg.ffprobe, "-v", "error", "-show_entries", "format=start_time",
-                   "-of", "default=nw=1:nk=1", str(sample)]
-            proc = await asyncio.to_thread(_run, cmd, 30)
-        finally:
-            sample.unlink(missing_ok=True)
-        value = _float((proc.stdout or "").strip())
+        first = self.out_dir / seg_name
+        init_bytes = await asyncio.to_thread(init.read_bytes)
+        first_bytes = await asyncio.to_thread(first.read_bytes)
+        value = _read_fmp4_start_time(init_bytes, first_bytes)
+        if value is None:
+            sample = self.out_dir / "probe-start.mp4"
+            await asyncio.to_thread(sample.write_bytes, init_bytes + first_bytes)
+            try:
+                cmd = [self.cfg.ffprobe, "-v", "error", "-show_entries", "format=start_time",
+                       "-of", "default=nw=1:nk=1", str(sample)]
+                proc = await asyncio.to_thread(_run, cmd, 30)
+            finally:
+                sample.unlink(missing_ok=True)
+            value = _float((proc.stdout or "").strip())
         if value is None:
             raise MediaError("could not read the stream start time")
         self.first_pts = value
@@ -755,6 +949,36 @@ class MediaSession:
     def duration(self) -> float:
         return self.info.duration
 
+    def _fallback_candidates(self, zscale_ok: bool) -> list[tuple[str, Optional[str], Optional[str]]]:
+        """Fallback (encoder, hwaccel, tonemap) profiles to try if the initial transcode run fails.
+        Tries dropping hwaccel or switching libplacebo -> zscale first, then switching to CPU
+        encoding WHILE PRESERVING working HDR tonemap, and only drops tonemap as a last resort."""
+        enc = self.encoder or SOFTWARE_ENCODER
+        hw = self.hwaccel
+        tm = self.tonemap
+        alt_tm = tonemap_for(self.info, "zscale") if tm == "libplacebo" and zscale_ok else None
+        raw: list[tuple[str, Optional[str], Optional[str]]] = []
+        if hw:
+            raw.append((enc, None, tm))
+        if alt_tm:
+            raw.append((enc, hw, alt_tm))
+            if hw:
+                raw.append((enc, None, alt_tm))
+        if enc != SOFTWARE_ENCODER:
+            raw.append((SOFTWARE_ENCODER, None, tm))
+            if alt_tm:
+                raw.append((SOFTWARE_ENCODER, None, alt_tm))
+        if tm:
+            raw.append((SOFTWARE_ENCODER, None, None))
+        initial = (enc, hw, tm)
+        seen: set[tuple[str, Optional[str], Optional[str]]] = {initial}
+        out: list[tuple[str, Optional[str], Optional[str]]] = []
+        for cand in raw:
+            if cand not in seen:
+                seen.add(cand)
+                out.append(cand)
+        return out
+
     async def start_at(self, target: float) -> None:
         """Start a new ffmpeg run at `target` seconds and switch to it once it has a segment."""
         target = max(0.0, min(target, max(0.0, self.duration - 1.0)))
@@ -768,41 +992,55 @@ class MediaSession:
                 self.hwaccel = await asyncio.to_thread(pick_hwaccel, self.cfg, self.encoder)
             if hdr_kind(self.info):
                 self.tonemap = tonemap_for(self.info, await asyncio.to_thread(pick_tonemap, self.cfg))
+        initial = (self.encoder or SOFTWARE_ENCODER, self.hwaccel, self.tonemap)
+        fallbacks: Optional[list[tuple[str, Optional[str], Optional[str]]]] = None
+        cand_idx = 0
+        enc, hw, tm = initial
         while True:
             out_dir = self.cfg.hls_dir / uuid.uuid4().hex[:12]
             stream = HlsStream(self.cfg, self.source.url, out_dir, target, self.mode, self.info, self.audio,
-                               self.encoder or SOFTWARE_ENCODER, self.hwaccel, self.tonemap, self.target_kbps)
-            stream.start_process()
+                               enc, hw, tm, self.target_kbps)
             try:
-                await stream.wait_ready(timeout=240)
-                first_pts = await stream.measure_first_pts()
+                stream.start_process()
+                first_seg = await stream.wait_ready(timeout=240)
+                first_pts = await stream.measure_first_pts(first_seg)
                 break
             except BaseException as exc:  # a cancelled open too: no ffmpeg may be left running
-                if not isinstance(exc, Exception):
-                    stream.stop()
-                    shutil.rmtree(out_dir, ignore_errors=True)
-                    raise
+                still_running = stream.running
                 stream.stop()
                 tail = stream.log_tail(3)
                 shutil.rmtree(out_dir, ignore_errors=True)
-                # The graphics card can still fail on a real film (a size or format it does not
-                # take): once more without its decoder, then with the next HDR filter, then
-                # encoding on the CPU.
-                if self.mode == "transcode" and self.hwaccel:
-                    log.warning("decoding with %s failed, on the CPU instead: %s", self.hwaccel, tail)
-                    give_up_on_hwaccel(self.cfg, self.encoder or SOFTWARE_ENCODER)
-                    self.hwaccel = None
-                    continue
-                if self.mode == "transcode" and self.tonemap:
-                    nxt = await asyncio.to_thread(give_up_on_tonemap, self.cfg, self.tonemap)
-                    log.warning("HDR with %s failed, %s instead: %s", self.tonemap, nxt or "unconverted", tail)
-                    self.tonemap = tonemap_for(self.info, nxt)
-                    continue
-                if self.mode != "transcode" or self.encoder in (None, SOFTWARE_ENCODER):
+                if not isinstance(exc, Exception):
                     raise
-                log.warning("%s failed, converting with %s instead: %s", self.encoder, SOFTWARE_ENCODER, tail)
-                give_up_on(self.cfg, self.encoder)
-                self.encoder = SOFTWARE_ENCODER
+                # A live ffmpeg that timed out waiting for bytes (slow torrent / network) is not a
+                # GPU failure: do not retry other GPU combinations or poison global GPU caches.
+                if self.mode != "transcode" or still_running:
+                    raise
+                if fallbacks is None:
+                    zscale_ok = False
+                    if initial[2] == "libplacebo" and tonemap_for(self.info, "zscale"):
+                        zscale_ok = await asyncio.to_thread(tonemap_works, self.cfg.ffmpeg, "zscale")
+                    fallbacks = self._fallback_candidates(zscale_ok)
+                if cand_idx >= len(fallbacks):
+                    raise
+                nxt = fallbacks[cand_idx]
+                cand_idx += 1
+                log.warning("transcode (%s, hw=%s, hdr=%s) failed, trying (%s, hw=%s, hdr=%s): %s",
+                            enc, hw or "cpu", tm or "none", nxt[0], nxt[1] or "cpu", nxt[2] or "none", tail)
+                enc, hw, tm = nxt
+        # Only update global GPU caches after a fallback actually succeeded, and only for the
+        # component(s) that had to be dropped — never poison working caches on a broken source.
+        if self.mode == "transcode" and (enc, hw, tm) != initial:
+            init_enc, init_hw, init_tm = initial
+            if enc != init_enc and init_enc != SOFTWARE_ENCODER:
+                give_up_on(self.cfg, init_enc)
+            elif init_hw and not hw:
+                give_up_on_hwaccel(self.cfg, init_enc)
+            if init_tm and tm != init_tm:
+                await asyncio.to_thread(give_up_on_tonemap, self.cfg, init_tm)
+                if tm is None and init_tm == "libplacebo":
+                    await asyncio.to_thread(give_up_on_tonemap, self.cfg, "zscale")
+            self.encoder, self.hwaccel, self.tonemap = enc, hw, tm
         old = self.stream
         self.stream = stream
         self.stream_start = max(0.0, first_pts - self.info.start_time)
@@ -821,6 +1059,15 @@ class MediaSession:
             return 0.0
         return self.stream_start + self.stream.produced()
 
+    def _stream_progress(self) -> tuple[float, bool]:
+        stream = self.stream
+        if stream is None:
+            return 0.0, False
+        if hasattr(stream, "read_playlist"):
+            segments, ended = stream.read_playlist()
+            return self.stream_start + sum(d for _, d in segments), ended
+        return self.stream_start + stream.produced(), stream.ended()
+
     def can_serve(self, target: float, slack: float = 10.0) -> bool:
         """True if seeking to `target` works without restarting ffmpeg. A target slightly
         past the produced part is fine (ffmpeg gets there soon); further away, restarting
@@ -829,10 +1076,10 @@ class MediaSession:
             return False
         if not self.stream_fits():
             return False  # made for another number of viewers over Funnel (set_remote)
-        end = self.produced_end()
+        end, ended = self._stream_progress()
         if target <= end:
             return True
-        return self.stream.running and not self.stream.ended() and target <= end + slack
+        return self.stream.running and not ended and target <= end + slack
 
     @property
     def target_kbps(self) -> Optional[int]:
@@ -928,10 +1175,13 @@ class MediaSession:
 
     def progress(self) -> dict:
         stream = self.stream
+        if stream is None:
+            return {"streamId": None, "producedEnd": 0.0, "ended": False}
+        end, ended = self._stream_progress()
         return {
-            "streamId": stream.id if stream else None,
-            "producedEnd": round(self.produced_end(), 2),
-            "ended": bool(stream and stream.ended()),
+            "streamId": stream.id,
+            "producedEnd": round(end, 2),
+            "ended": ended,
         }
 
 

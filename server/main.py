@@ -531,10 +531,17 @@ class Controller:
             return
         session.set_remote(self.remote_viewers())  # restarting anyway: made for whoever is here now
         self.room.set_loading(True)
-        await self.broadcast_state()
-        await self.status("restarting", at=round(target))
         self.restart_target = target
         self.restart_task = asyncio.create_task(self._restart_loop(session))
+        await self.broadcast_state()
+        await self.status("restarting", at=round(target))
+
+    def _cancel_restart(self) -> None:
+        self.restart_target = None
+        task = self.restart_task
+        if task is not None and not task.done():
+            task.cancel()
+        self.restart_task = None
 
     async def set_audio(self, index: int) -> None:
         """Another sound track: the stream starts again where the room is, with it."""
@@ -680,8 +687,10 @@ class Controller:
             moviehash = None
             try:
                 await self.status("reading_hash")
-                head = await self.helper.read_range(info_hash, index, 0, min(CHUNK, size) - 1, timeout=180)
-                tail = await self.helper.read_range(info_hash, index, max(0, size - CHUNK), size - 1, timeout=180)
+                head, tail = await asyncio.gather(
+                    self.helper.read_range(info_hash, index, 0, min(CHUNK, size) - 1, timeout=180),
+                    self.helper.read_range(info_hash, index, max(0, size - CHUNK), size - 1, timeout=180),
+                )
                 moviehash = hash_from_chunks(size, head, tail)
             except HelperError as exc:
                 log.warning("could not hash torrent file: %s", exc)
@@ -704,6 +713,7 @@ class Controller:
                          audio_lang: Optional[str] = None, content: Optional[dict] = None) -> None:
         async with self.open_lock:
             self.opening = True
+            session: Optional[MediaSession] = None
             try:
                 await self.status("opening")
                 source = await self._resolve_source(torrent, path, stream)
@@ -719,13 +729,21 @@ class Controller:
                 resume = self.positions.resume_at(source.media_key, session.duration)
                 await self.status("stream_starting", mode=session.mode, reason=session.mode_reason)
                 await session.start_at(resume or 0.0)
+                upcoming = await self.find_next(session)  # before the switch: the room waits for nothing
+                if session.info.video_codec == "hevc" and session.set_viewers_hevc(self.joined_hevc()):
+                    session.set_remote(self.remote_viewers())
+                    await session.start_at(resume or 0.0)
             except (MediaError, HelperError, OSError, ValueError) as exc:
+                if session is not None:
+                    session.stop()
                 log.warning("open failed: %s", exc)
                 await self.status("open_failed", "error", detail=str(exc)[:300])
                 await self._drop_opening_torrent()
                 return
             except asyncio.CancelledError:
                 # Cancelled, or another film was opened instead: the film playing so far goes on.
+                if session is not None:
+                    session.stop()
                 log.info("open cancelled")
                 await self.status("open_cancelled")
                 await self._drop_opening_torrent()
@@ -733,15 +751,12 @@ class Controller:
             finally:
                 self.opening = False
                 self.opening_hash = None
-            upcoming = await self.find_next(session)  # before the switch: the room waits for nothing
             self.note_position(flush=True)  # where the film playing so far was left
+            self._cancel_restart()
             old, self.session = self.session, session
             if old is not None:
                 old.stop()
-            if session.info.video_codec == "hevc" and session.set_viewers_hevc(self.joined_hevc()):
-                session.set_remote(self.remote_viewers())
-                await session.start_at(resume or 0.0)
-            self.restart_target = None
+                await self._drop_torrent(old.source.info_hash, keep=source.info_hash)
             self.download_throttled = False
             self.room.reset()
             if resume:
@@ -901,6 +916,15 @@ class Controller:
             task.cancel()
             await asyncio.wait([task], timeout=15)
 
+    async def _drop_torrent(self, info_hash: Optional[str], keep: Optional[str] = None) -> None:
+        """Stop downloading a torrent that is no longer needed (files stay on disk until cleanup)."""
+        if not info_hash or info_hash == keep or info_hash == self.opening_hash:
+            return
+        try:
+            await self.helper.remove(info_hash)
+        except HelperError:
+            pass
+
     async def _drop_opening_torrent(self) -> None:
         """A torrent that did not open stops downloading, unless the film playing is that torrent."""
         playing = self.session.source.info_hash if self.session is not None else None
@@ -911,12 +935,18 @@ class Controller:
                 pass
 
     async def close_media(self) -> None:
+        await self.cancel_open()
+        self._cancel_restart()
         self.note_position(flush=True)
         self.next_item = None
         self.thumbs.stop()
+        old_hash = None
         if self.session is not None:
+            old_hash = self.session.source.info_hash
             self.session.stop()
             self.session = None
+        if old_hash:
+            await self._drop_torrent(old_hash)
         self.room.reset()
         await self.broadcast_media()
         await self.broadcast_state()
@@ -1110,11 +1140,15 @@ class Controller:
             self.room.pause()
             self.room.seek(session.duration)
             await self.broadcast_state()
+            if session is not self.session or session.stream is None:
+                return
         self.note_position()
         progress = session.progress()
         if progress != self.last_progress:
             self.last_progress = progress
             await self.room.broadcast({"type": "progress", **progress})
+            if session is not self.session or session.stream is None:
+                return
         stream = session.stream
         restarting = self.restart_task is not None and not self.restart_task.done()
         if stream.running or progress["ended"] or restarting:
@@ -1125,11 +1159,15 @@ class Controller:
             target = self.room.current_position()
             log.warning("ffmpeg exited (%s), restarting at %.1f", stream.returncode, target)
             await self.status("stream_recovering", "error", detail=stream.log_tail(3))
+            if session is not self.session or session.stream is None:
+                return
+            if self.restart_task is not None and not self.restart_task.done():
+                return
             self.room.seek(target)
             self.room.set_loading(True)
-            await self.broadcast_state()
             self.restart_target = target
             self.restart_task = asyncio.create_task(self._restart_loop(session))
+            await self.broadcast_state()
         elif session.auto_restarts == 3:
             session.auto_restarts += 1
             await self.status("stream_error", "error", detail=stream.log_tail(4))
@@ -1312,11 +1350,16 @@ async def lifespan(_app: FastAPI):
     yield
     ctl.note_position(flush=True)
     ctl.thumbs.stop()
+    ctl._cancel_restart()
+    if ctl.open_task is not None and not ctl.open_task.done():
+        ctl.open_task.cancel()
     encoder_check.cancel()
     for task in ctl.tasks:
         task.cancel()
     if ctl.session is not None:
         ctl.session.stop()
+    await ctl.helper.aclose()
+    await ctl.addons.aclose()
 
 
 app = FastAPI(title="Co-Watch", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

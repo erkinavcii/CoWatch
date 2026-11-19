@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 import httpx
@@ -16,11 +17,25 @@ class HelperError(Exception):
 class TorrentHelper:
     def __init__(self, base_url: str):
         self.base = base_url.rstrip("/")
+        self._http: Optional[httpx.AsyncClient] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def _client(self) -> httpx.AsyncClient:
+        loop = asyncio.get_running_loop()
+        if self._http is None or self._http.is_closed or self._loop is not loop:
+            self._http = httpx.AsyncClient(verify=False)  # plain http on this computer
+            self._loop = loop
+        return self._http
+
+    async def aclose(self) -> None:
+        if self._http is not None and not self._http.is_closed:
+            await self._http.aclose()
+        self._http = None
+        self._loop = None
 
     async def _request(self, method: str, path: str, timeout: float = 15, **kwargs) -> dict:
         try:
-            async with httpx.AsyncClient(timeout=timeout, verify=False) as http:  # plain http on this computer
-                resp = await http.request(method, f"{self.base}{path}", **kwargs)
+            resp = await self._client().request(method, f"{self.base}{path}", timeout=timeout, **kwargs)
         except httpx.TimeoutException as exc:
             raise HelperError("torrent helper timed out", 504) from exc
         except httpx.HTTPError as exc:
@@ -58,9 +73,8 @@ class TorrentHelper:
     async def read_range(self, info_hash: str, file_index: int, start: int, end: int,
                          timeout: float = 90) -> bytes:
         try:
-            async with httpx.AsyncClient(timeout=timeout, verify=False) as http:  # plain http on this computer
-                resp = await http.get(self.file_url(info_hash, file_index),
-                                      headers={"Range": f"bytes={start}-{end}"})
+            resp = await self._client().get(self.file_url(info_hash, file_index),
+                                            headers={"Range": f"bytes={start}-{end}"}, timeout=timeout)
         except httpx.HTTPError as exc:
             raise HelperError(f"range read failed: {exc}", 504) from exc
         if resp.status_code not in (200, 206):

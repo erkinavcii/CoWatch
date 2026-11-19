@@ -189,8 +189,9 @@ def run(headed: bool) -> None:
               const k = 'cowatch.hevcFailed.v1';
               const initial = {DBG}.hevc.main;
               const ua = navigator.userAgent;
-              const m = ua.match(/\\b(Edg(?:iOS|A)?|Chrome)\\/(\\d+)/);
-              const br = m ? m[1] + '/' + m[2] : ua.slice(0, 60);
+              const order = [/\\b(Edg(?:iOS|A)?)\\/(\\d+)/, /\\b(OPR|Opera)\\/(\\d+)/, /\\b(YaBrowser)\\/(\\d+)/, /\\b(Firefox|FxiOS)\\/(\\d+)/, /\\b(Chrome|CriOS)\\/(\\d+)/];
+              let br = ua.slice(0, 60);
+              for (const rx of order) {{ const m = ua.match(rx); if (m) {{ br = m[1] + '/' + m[2]; break; }} }}
               localStorage.setItem(k, JSON.stringify({{ browser: br, fails: 1, until: now + 3600000 }}));
               const blockedActive = {DBG}.hevc.main;
               localStorage.setItem(k, JSON.stringify({{ browser: br, fails: 1, until: now - 1000 }}));

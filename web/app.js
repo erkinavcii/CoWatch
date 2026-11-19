@@ -461,8 +461,18 @@
   const claimedHevc = () => !!(S.sentHevc && (S.sentHevc.main || S.sentHevc.main10 || S.sentHevc.uhd));
   function failHevcCodec (detail) {
     if (!isHevcCopy() || S.hevcStreamFailed === S.streamId) return;
+    if (!S.joined) {
+      // Join-screen preview hit a codec error: if this browser claimed HEVC support,
+      // record the failure now so sendHello() sends hevc:false when the user clicks Join.
+      const caps = codecSupport();
+      if (caps.main || caps.main10 || caps.uhd) {
+        S.hevcFailed = true;
+        recordHevcFail();
+      }
+      return;
+    }
+    if (!claimedHevc()) return; // already sent hevc:false
     S.hevcStreamFailed = S.streamId;
-    if (!S.joined || !claimedHevc()) return; // already sent hevc:false or still on join screen
     S.hevcFailed = true;
     recordHevcFail();
     report('codec_failed', detail);

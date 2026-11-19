@@ -503,3 +503,108 @@ def test_hevc_copy_produces_hvc1_hls_stream(tmp_path):
             session.stop()
 
     asyncio.run(run())
+
+
+def test_fmp4_start_time_matches_ffprobe_for_copy_and_transcode(sample, monkeypatch):
+    from server import media
+
+    cfg = get_settings()
+
+    async def run():
+        info = await probe(cfg, str(sample))
+        source = MediaSource(kind="file", url=str(sample), title=sample.name, size=info.size, media_key="pts")
+        for mode, target in (("copy", 0.0), ("copy", 13.0), ("transcode", 7.0)):
+            session = MediaSession(cfg, source, info)
+            session.mode = mode
+            # Verify measure_first_pts does not spawn ffprobe when fMP4 boxes parse cleanly.
+            orig_run = media._run
+            ffprobe_calls = []
+
+            def spy_run(cmd, timeout=30):
+                if cmd and cmd[0] == cfg.ffprobe:
+                    ffprobe_calls.append(cmd)
+                return orig_run(cmd, timeout)
+
+            monkeypatch.setattr(media, "_run", spy_run)
+            try:
+                await session.start_at(target)
+                assert ffprobe_calls == []
+                out_dir = session.stream.out_dir
+                segs, _ = session.stream.read_playlist()
+                init_b = (out_dir / "init.mp4").read_bytes()
+                seg_b = (out_dir / segs[0][0]).read_bytes()
+                py_pts = media._read_fmp4_start_time(init_b, seg_b)
+                comb = out_dir / "verify.mp4"
+                comb.write_bytes(init_b + seg_b)
+                probe_out = subprocess.check_output(
+                    [cfg.ffprobe, "-v", "error", "-show_entries", "format=start_time",
+                     "-of", "default=nw=1:nk=1", str(comb)], text=True).strip()
+                assert py_pts == pytest.approx(float(probe_out), abs=0.005)
+            finally:
+                session.stop()
+                monkeypatch.setattr(media, "_run", orig_run)
+
+    asyncio.run(run())
+
+
+def test_surround_audio_uses_dialogue_preserving_downmix_and_stereo_does_not():
+    from pathlib import PurePath
+    from server.media import ProbeInfo, SURROUND_DOWNMIX, build_command
+
+    cfg = get_settings()
+    info = ProbeInfo(duration=60, size=1, start_time=0, format_name="matroska", bitrate_kbps=3000,
+                     video={"index": 0, "codec_name": "h264", "pix_fmt": "yuv420p"}, audio=[])
+    stereo = {"index": 1, "codec_name": "aac", "channels": 2}
+    surround = {"index": 1, "codec_name": "eac3", "channels": 6}
+
+    cmd_stereo = build_command(cfg, "in.mkv", PurePath("out"), 0.0, "copy", info, stereo)
+    af_stereo = cmd_stereo[cmd_stereo.index("-af") + 1]
+    assert "pan=stereo" not in af_stereo and af_stereo.startswith("aformat=channel_layouts=stereo,")
+
+    cmd_51 = build_command(cfg, "in.mkv", PurePath("out"), 0.0, "copy", info, surround)
+    af_51 = cmd_51[cmd_51.index("-af") + 1]
+    assert af_51.startswith(SURROUND_DOWNMIX + ",") and "0.5*FC" in af_51
+
+
+def test_failing_gpu_encoder_on_hdr_preserves_tonemap_and_broken_source_does_not_poison_caches(hdr_sample, tmp_path, monkeypatch):
+    from server import media
+
+    cfg = get_settings()
+    if not media.tonemap_works(cfg.ffmpeg, "zscale"):
+        pytest.skip("zscale not available")
+
+    monkeypatch.setattr(media, "_encoders", {cfg.ffmpeg: "h264_no_such_card"})
+    monkeypatch.setattr(media, "_hwaccels", {(cfg.ffmpeg, "h264_no_such_card"): "cuda"})
+    monkeypatch.setattr(media, "_tonemaps", {cfg.ffmpeg: "zscale"})
+    monkeypatch.setattr(media, "pick_encoder", lambda _cfg: "h264_no_such_card")
+    monkeypatch.setattr(media, "pick_hwaccel", lambda _cfg, _enc: "cuda")
+    monkeypatch.setattr(media, "pick_tonemap", lambda _cfg: "zscale")
+
+    async def run():
+        info = await probe(cfg, str(hdr_sample))
+        source = MediaSource(kind="file", url=str(hdr_sample), title=hdr_sample.name, size=info.size, media_key="hdr-fb")
+        session = MediaSession(cfg, source, info)
+        await session.start_at(0)
+        try:
+            # GPU encoder failed -> fell back to libx264 WHILE preserving zscale HDR tonemapping.
+            assert session.encoder == "libx264"
+            assert session.tonemap == "zscale"
+            assert media._tonemaps[cfg.ffmpeg] == "zscale"
+            assert media._encoders[cfg.ffmpeg] == "libx264"
+        finally:
+            session.stop()
+
+        # Broken source: all attempts fail, global caches must NOT be wiped.
+        monkeypatch.setattr(media, "_encoders", {cfg.ffmpeg: "h264_nvenc"})
+        monkeypatch.setattr(media, "_hwaccels", {(cfg.ffmpeg, "h264_nvenc"): "cuda"})
+        monkeypatch.setattr(media, "_tonemaps", {cfg.ffmpeg: "zscale"})
+        monkeypatch.setattr(media, "pick_encoder", lambda _cfg: "h264_nvenc")
+        broken = MediaSource(kind="file", url=str(tmp_path / "missing.mkv"), title="missing", size=1, media_key="bad")
+        bad_session = MediaSession(cfg, broken, info)
+        with pytest.raises(media.MediaError):
+            await bad_session.start_at(0)
+        assert media._encoders[cfg.ffmpeg] == "h264_nvenc"
+        assert media._hwaccels[(cfg.ffmpeg, "h264_nvenc")] == "cuda"
+        assert media._tonemaps[cfg.ffmpeg] == "zscale"
+
+    asyncio.run(run())

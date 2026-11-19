@@ -11,6 +11,7 @@ request arbitrary URLs."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -161,6 +162,26 @@ class AddonStore:
     _manifests: dict = field(default_factory=dict)  # url -> (time, manifest or None, error)
     _cache: dict = field(default_factory=dict)  # url -> (time, data)
     refs: "OrderedDict[str, dict]" = field(default_factory=OrderedDict)  # ref -> stream or subtitle
+    _http: Optional[httpx.AsyncClient] = field(default=None, init=False, repr=False)
+    _http_loop: Optional[asyncio.AbstractEventLoop] = field(default=None, init=False, repr=False)
+    _http_transport: Optional[httpx.AsyncBaseTransport] = field(default=None, init=False, repr=False)
+
+    def _client(self) -> httpx.AsyncClient:
+        loop = asyncio.get_running_loop()
+        if (self._http is None or self._http.is_closed
+                or self._http_loop is not loop or self._http_transport is not self.transport):
+            self._http = httpx.AsyncClient(follow_redirects=True, transport=self.transport, verify=tls(),
+                                           headers={"User-Agent": "CoWatch"})
+            self._http_loop = loop
+            self._http_transport = self.transport
+        return self._http
+
+    async def aclose(self) -> None:
+        if self._http is not None and not self._http.is_closed:
+            await self._http.aclose()
+        self._http = None
+        self._http_loop = None
+        self._http_transport = None
 
     # ---- the list ----------------------------------------------------------------
     def user_urls(self) -> list[str]:
@@ -184,17 +205,16 @@ class AddonStore:
         return out
 
     async def addons(self) -> list[Addon]:
-        out = []
-        for url, builtin in self.urls():
-            manifest, _error = await self._manifest(url)
-            if manifest is not None:
-                out.append(Addon(url, manifest, builtin))
-        return out
+        pairs = self.urls()
+        results = await asyncio.gather(*(self._manifest(url) for url, _ in pairs))
+        return [Addon(url, manifest, builtin)
+                for (url, builtin), (manifest, _error) in zip(pairs, results) if manifest is not None]
 
     async def listing(self) -> list[dict]:
+        pairs = self.urls()
+        results = await asyncio.gather(*(self._manifest(url) for url, _ in pairs))
         out = []
-        for url, builtin in self.urls():
-            manifest, error = await self._manifest(url)
+        for (url, builtin), (manifest, error) in zip(pairs, results):
             if manifest is None:
                 out.append({"url": url, "id": "", "name": url, "builtin": builtin, "error": error,
                             "resources": [], "catalogs": []})
@@ -252,9 +272,7 @@ class AddonStore:
     # ---- requests -------------------------------------------------------------------
     async def _fetch(self, url: str) -> dict:
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True, transport=self.transport, verify=tls(),
-                                         headers={"User-Agent": "CoWatch"}) as http:
-                resp = await http.get(url)
+            resp = await self._client().get(url, timeout=15)
         except httpx.HTTPError as exc:
             raise AddonError(f"request failed: {exc.__class__.__name__}", "addon_unreachable") from None
         if resp.status_code != 200:
@@ -338,14 +356,19 @@ class AddonStore:
             "rating": _text(meta.get("imdbRating"), 6),
         }
 
+    async def _get_optional(self, addon: Addon, resource: str, kind: str, item_id: str,
+                            extra: Optional[dict] = None) -> Optional[dict]:
+        try:
+            return await self._get(addon, resource, kind, item_id, extra)
+        except AddonError:
+            return None
+
     async def meta(self, kind: str, item_id: str) -> Optional[dict]:
         self._check(kind, item_id)
-        for addon in await self.addons():
-            if not addon.supports("meta", kind, item_id):
-                continue
-            try:
-                data = await self._get(addon, "meta", kind, item_id)
-            except AddonError:
+        candidates = [a for a in await self.addons() if a.supports("meta", kind, item_id)]
+        results = await asyncio.gather(*(self._get_optional(a, "meta", kind, item_id) for a in candidates))
+        for data in results:
+            if data is None:
                 continue
             meta = data.get("meta")
             if not isinstance(meta, dict):
@@ -375,13 +398,11 @@ class AddonStore:
         """Every playable stream any add-on knows for this film or episode. Each comes back
         with a `ref` for opening it; the address itself stays on the server."""
         self._check(kind, item_id)
+        candidates = [a for a in await self.addons() if a.supports("stream", kind, item_id)]
+        results = await asyncio.gather(*(self._get_optional(a, "stream", kind, item_id) for a in candidates))
         out = []
-        for addon in await self.addons():
-            if not addon.supports("stream", kind, item_id):
-                continue
-            try:
-                data = await self._get(addon, "stream", kind, item_id)
-            except AddonError:
+        for addon, data in zip(candidates, results):
+            if data is None:
                 continue
             for stream in (data.get("streams") or [])[:200]:
                 item = self._playable(stream)
@@ -420,12 +441,10 @@ class AddonStore:
         self._check(kind, item_id)
         out = []
         extra = {"videoHash": video_hash or "", "videoSize": video_size or 0, "filename": _text(filename, 200)}
-        for addon in await self.addons():
-            if not addon.supports("subtitles", kind, item_id):
-                continue
-            try:
-                data = await self._get(addon, "subtitles", kind, item_id, extra)
-            except AddonError:
+        candidates = [a for a in await self.addons() if a.supports("subtitles", kind, item_id)]
+        results = await asyncio.gather(*(self._get_optional(a, "subtitles", kind, item_id, extra) for a in candidates))
+        for addon, data in zip(candidates, results):
+            if data is None:
                 continue
             found = []
             for sub in (data.get("subtitles") or [])[:300]:
@@ -445,9 +464,7 @@ class AddonStore:
 
     async def download(self, url: str, limit: int) -> bytes:
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True, transport=self.transport, verify=tls(),
-                                         headers={"User-Agent": "CoWatch"}) as http:
-                resp = await http.get(url)
+            resp = await self._client().get(url, timeout=30)
         except httpx.HTTPError as exc:
             raise AddonError(f"download failed: {exc.__class__.__name__}", "addon_unreachable") from None
         if resp.status_code != 200:

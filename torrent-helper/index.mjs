@@ -22,6 +22,7 @@ const UPLOAD_LIMIT = kbToRate(process.env.TORRENT_UPLOAD_LIMIT, 64)
 const DOWNLOAD_LIMIT = kbToRate(process.env.TORRENT_DOWNLOAD_LIMIT, 0)
 const METADATA_TIMEOUT_MS = 120_000
 const HEAD_TAIL_BYTES = 2 * 1024 * 1024
+const SEEK_CRITICAL_BYTES = 4 * 1024 * 1024
 
 const VIDEO_EXT = new Set(['.mkv', '.mp4', '.m4v', '.avi', '.mov', '.webm', '.ts', '.m2ts', '.wmv', '.mpg', '.mpeg', '.flv'])
 
@@ -145,10 +146,24 @@ async function storage (keep) {
   return { total, kept, others }
 }
 
+// webtorrent's async client.remove() resolves before torrent.destroy() finishes closing
+// its chunk store; await the callback so Windows file handles are released before fs.rm().
+function removeTorrent (torrentOrHash) {
+  return new Promise((resolve) => {
+    client.remove(torrentOrHash, { destroyStore: false }, (err) => {
+      if (err) log('remove error:', err?.message || err)
+      resolve()
+    }).catch((err) => {
+      log('remove error:', err?.message || err)
+      resolve()
+    })
+  })
+}
+
 async function cleanup (keep) {
   const wanted = new Set(keep)
   for (const t of [...client.torrents]) {
-    if (!wanted.has(t.infoHash)) await client.remove(t.infoHash, { destroyStore: false })
+    if (!wanted.has(t.infoHash)) await removeTorrent(t.infoHash)
   }
   const { others } = await storage(keep)
   let freed = 0
@@ -175,6 +190,7 @@ async function addTorrent (body) {
   if (!MAGNET_RE.test(magnet)) throw new HttpError(400, 'invalid magnet link')
 
   let t = await client.get(magnet)
+  const fresh = !t
   if (!t) {
     t = client.add(magnet, { path: DOWNLOAD_DIR, deselect: true })
     t.on('error', (err) => log('torrent error:', err?.message || err))
@@ -187,7 +203,12 @@ async function addTorrent (body) {
     if (t.infoHash) addPeers()
     else t.once('infoHash', addPeers)
   }
-  await waitReady(t, METADATA_TIMEOUT_MS)
+  try {
+    await waitReady(t, METADATA_TIMEOUT_MS)
+  } catch (err) {
+    if (fresh) await removeTorrent(t)
+    throw err
+  }
   log('ready:', t.name, `(${t.files.length} files)`)
   return torrentInfo(t)
 }
@@ -252,6 +273,15 @@ async function streamFile (t, fileIndex, req, res) {
   res.writeHead(range ? 206 : 200, headers)
   if (req.method === 'HEAD' || size === 0) return res.end()
 
+  // Prioritise the first 4 MB at the seek offset so ffmpeg gets its first segment quickly.
+  if (start > 0 && t.pieceLength > 0) {
+    const pl = t.pieceLength
+    const critEnd = Math.min(size - 1, start + SEEK_CRITICAL_BYTES - 1)
+    const pieceStart = Math.floor((f.offset + start) / pl)
+    const pieceEnd = Math.floor((f.offset + critEnd) / pl)
+    t.critical(pieceStart, pieceEnd)
+  }
+
   if (end === 0) {
     // webtorrent treats end=0 as "until the end of the file", so read two bytes and trim.
     const buf = new Uint8Array(await f.arrayBuffer({ start: 0, end: 1 }))
@@ -296,7 +326,7 @@ async function route (req, res) {
 
     if (parts.length === 2 && req.method === 'GET') return json(res, 200, torrentInfo(t))
     if (parts.length === 2 && req.method === 'DELETE') {
-      await client.remove(t.infoHash, { destroyStore: false })
+      await removeTorrent(t.infoHash)
       return json(res, 200, { ok: true })
     }
     if (parts[2] === 'prepare' && req.method === 'POST') {

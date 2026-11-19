@@ -342,3 +342,52 @@ def test_services_need_no_model_and_say_so_in_the_label(monkeypatch, tmp_path):
         assert config.AI_PRESETS["deepl"]["account"] and "account" not in config.AI_PRESETS["mymemory"]
     finally:
         get_settings.cache_clear()
+
+
+def test_parse_lines_preserves_dialogue_dashes_and_ellipses():
+    dialogue = "#1 - Merhaba.<br>- Selam.\n#2 ...bekle\n#3 ...\n#4: - Evet\n#5- Tamam"
+    assert parse_lines(dialogue, {1, 2, 3, 4, 5}) == {
+        1: "- Merhaba.<br>- Selam.",
+        2: "...bekle",
+        3: "...",
+        4: "- Evet",
+        5: "Tamam",
+    }
+
+
+def test_brief_prompt_samples_long_subtitles_and_reuses_http_client(monkeypatch):
+    # 1,000-line subtitle: BRIEF_PROMPT receives at most BRIEF_MAX_LINES (head + sampled tail).
+    model = FakeModel()
+    asyncio.run(translate.translate(model, cues(1000), "en", "tr", title="Long Film"))
+    brief_prompt = model.prompts[0]
+    sub_block = brief_prompt.split("Subtitles:\n", 1)[1].splitlines()
+    assert len(sub_block) == translate.BRIEF_MAX_LINES
+    assert sub_block[0] == "#1 Line 1<br>second"
+    assert sub_block[translate.BRIEF_HEAD_LINES - 1].startswith(f"#{translate.BRIEF_HEAD_LINES} ")
+    assert sub_block[-1] == "#1000 Line 1000"
+
+    # Shared httpx.AsyncClient across all requests inside one translate() run.
+    created = 0
+    orig_client = translate._new_http_client
+
+    def count_client():
+        nonlocal created
+        created += 1
+        return orig_client()
+
+    def handler(request):
+        body = json.loads(request.content)
+        prompt = body["messages"][1]["content"]
+        if prompt.startswith("Below are the subtitles"):
+            text = "Summary: ok."
+        else:
+            lines = prompt.split("Lines to translate:\n", 1)[1].splitlines()
+            text = "\n".join(f"{ln.split(' ', 1)[0]} TR" for ln in lines)
+        return httpx.Response(200, json={"choices": [{"message": {"content": text}}]})
+
+    monkeypatch.setattr(translate, "TRANSPORT", httpx.MockTransport(handler))
+    monkeypatch.setattr(translate, "_new_http_client", count_client)
+    monkeypatch.setattr(translate, "CHUNK", 5)
+    om = translate.make_model("openai", "https://llm.example/v1", "k", "m")
+    asyncio.run(translate.translate(om, cues(15), "en", "tr"))
+    assert created == 1  # 1 brief + 3 chunks shared a single AsyncClient

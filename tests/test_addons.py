@@ -160,3 +160,38 @@ def test_only_the_host_changes_the_list(monkeypatch, tmp_path):
     with TestClient(app, base_url="http://localhost:8000", cookies={"cw_key": KEY}, client=("127.0.0.1", 5)) as host:
         assert host.post("/api/addons", json={"url": STREAMS}).json()["name"] == "Streams"
         assert host.get("/api/addons").json()["canEdit"] is True
+
+
+def test_addon_queries_run_in_parallel(tmp_path, monkeypatch):
+    s1 = "https://s1.example/manifest.json"
+    s2 = "https://s2.example/manifest.json"
+    monkeypatch.setattr(addons, "DEFAULT_ADDONS", (s1, s2))
+
+    async def run():
+        in_flight = 0
+        peak = 0
+        both = asyncio.Event()
+
+        async def async_handler(request: httpx.Request) -> httpx.Response:
+            nonlocal in_flight, peak
+            host, path = request.url.host, request.url.raw_path.decode()
+            if path == "/manifest.json":
+                return httpx.Response(200, json={
+                    "id": host, "name": host, "types": ["movie"], "resources": ["stream"], "catalogs": [],
+                })
+            in_flight += 1
+            peak = max(peak, in_flight)
+            if in_flight >= 2:
+                both.set()
+            await asyncio.wait_for(both.wait(), timeout=2)
+            in_flight -= 1
+            return httpx.Response(200, json={"streams": [{"name": host, "url": f"https://{host}/v.mp4"}]})
+
+        store = AddonStore(tmp_path / "a.json", transport=httpx.MockTransport(async_handler))
+        try:
+            got = await store.streams("movie", "tt0012349", "Film")
+            assert peak == 2 and [s["addon"] for s in got] == ["s1.example", "s2.example"]
+        finally:
+            await store.aclose()
+
+    asyncio.run(run())
