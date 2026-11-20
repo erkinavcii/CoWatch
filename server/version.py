@@ -3,4 +3,4 @@ line (the installer's name and version), the settings page and the tray menu sho
 server/updates.py compares it with GitHub's latest release. A release tag (v0.3.0) must match it;
 the release workflow checks that."""
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
