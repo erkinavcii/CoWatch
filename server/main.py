@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal, Optional
 
+import anyio
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -2121,4 +2122,5 @@ async def ws_endpoint(ws: WebSocket):
         if WebSocketState.DISCONNECTED not in (ws.client_state, ws.application_state):
             log.exception("websocket error")
     finally:
-        await ctl.leave(client)
+        with anyio.move_on_after(5, shield=True):
+            await ctl.leave(client)

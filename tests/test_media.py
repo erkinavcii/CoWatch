@@ -547,6 +547,41 @@ def test_fmp4_start_time_matches_ffprobe_for_copy_and_transcode(sample, monkeypa
     asyncio.run(run())
 
 
+def test_read_fmp4_start_time_uses_elst_when_sidx_ept_is_zero():
+    import struct
+    from server.media import _read_fmp4_start_time
+
+    def box(btype: bytes, payload: bytes) -> bytes:
+        return struct.pack(">I4s", 8 + len(payload), btype) + payload
+
+    # Replicate FFmpeg 6.x output: moov/trak/edts/elst carries a 12.0s empty edit followed
+    # by media_time=1024, while sidx reports earliest_presentation_time=0 in media time.
+    mvhd = box(b"mvhd", b"\x00" * 12 + struct.pack(">II", 1000, 0))
+    tkhd = box(b"tkhd", b"\x00" * 12 + struct.pack(">II", 1, 0))
+    elst = box(
+        b"elst",
+        b"\x00" * 4
+        + struct.pack(">I", 2)
+        + struct.pack(">Iihh", 12000, -1, 1, 0)
+        + struct.pack(">Iihh", 0, 1024, 1, 0),
+    )
+    edts = box(b"edts", elst)
+    mdhd = box(b"mdhd", b"\x00" * 12 + struct.pack(">II", 12288, 0))
+    mdia = box(b"mdia", mdhd)
+    init_bytes = box(b"moov", mvhd + box(b"trak", tkhd + edts + mdia))
+
+    sidx = box(b"sidx", b"\x00" * 4 + struct.pack(">IIII", 1, 12288, 0, 0))
+    tfhd = box(b"tfhd", b"\x00" * 4 + struct.pack(">I", 1))
+    tfdt = box(b"tfdt", b"\x00" * 4 + struct.pack(">I", 0))
+    trun = box(b"trun", struct.pack(">III", 0x000800, 1, 1024))
+    moof = box(b"moof", box(b"traf", tfhd + tfdt + trun))
+    seg_bytes = sidx + moof
+
+    assert _read_fmp4_start_time(init_bytes, seg_bytes) == pytest.approx(12.0, abs=1e-6)
+    # Also confirm sidx-only fallback adds the elst empty edit when ept is in track time.
+    assert _read_fmp4_start_time(init_bytes, sidx) == pytest.approx(12.0, abs=1e-6)
+
+
 def test_surround_audio_uses_dialogue_preserving_downmix_and_stereo_does_not():
     from pathlib import PurePath
     from server.media import ProbeInfo, SURROUND_DOWNMIX, build_command

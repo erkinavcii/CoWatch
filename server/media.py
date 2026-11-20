@@ -593,29 +593,13 @@ def _read_fmp4_start_time(init_bytes: bytes, seg_bytes: bytes) -> Optional[float
     """Read the earliest presentation timestamp (seconds) of the first fMP4 segment directly
     in Python without spawning ffprobe.
 
-    Checks `sidx` boxes in the segment first (`earliest_presentation_time / timescale`, written
-    by ffmpeg's fMP4 HLS muxer with `-copyts`), and falls back to `moov` (`mvhd` + `elst` +
-    `mdhd`) combined with `moof/traf` (`tfdt` + `trun` composition time offset). Returns None
-    if the boxes cannot be parsed so callers can fall back to ffprobe."""
-    sidx_starts: list[float] = []
-    for btype, s0, e0 in _iter_mp4_boxes(seg_bytes):
-        if btype == b"sidx" and e0 - s0 >= 16:
-            ver = seg_bytes[s0]
-            _ref_id, ts = struct.unpack_from(">II", seg_bytes, s0 + 4)
-            if ts > 0:
-                if ver == 1 and e0 - s0 >= 20:
-                    ept = struct.unpack_from(">Q", seg_bytes, s0 + 12)[0]
-                    sidx_starts.append(ept / ts)
-                elif ver == 0:
-                    ept = struct.unpack_from(">I", seg_bytes, s0 + 12)[0]
-                    sidx_starts.append(ept / ts)
-        elif btype == b"moof" and sidx_starts:
-            break
-    if sidx_starts:
-        return min(sidx_starts)
-
+    Parses `moov` (`mvhd` + `edts/elst` + `mdhd`) combined with `moof/traf` (`tfhd` + `tfdt`
+    + `trun` composition time offset) first so `sidx` boxes written in track media time
+    without `elst` offsets (e.g. FFmpeg 6.x) are handled accurately, and keeps `sidx` as a
+    fallback if `moof` yields no timestamps. Returns None if the boxes cannot be parsed so
+    callers can fall back to ffprobe."""
     movie_ts: Optional[int] = None
-    tracks: dict[int, tuple[int, float]] = {}  # track_id -> (timescale, elst_empty_offset_s)
+    tracks: dict[int, tuple[int, float, int]] = {}  # track_id -> (timescale, elst_empty_s, elst_media_time)
     for btype, s0, e0 in _iter_mp4_boxes(init_bytes):
         if btype != b"moov":
             continue
@@ -630,7 +614,8 @@ def _read_fmp4_start_time(init_bytes: bytes, seg_bytes: bytes) -> Optional[float
                 continue
             track_id: Optional[int] = None
             timescale: Optional[int] = None
-            elst_offset = 0.0
+            elst_empty_s = 0.0
+            elst_media_time = 0
             for ctype, s2, e2 in _iter_mp4_boxes(init_bytes, s1, e1):
                 if ctype == b"tkhd" and e2 - s2 >= 16:
                     ver = init_bytes[s2]
@@ -642,15 +627,24 @@ def _read_fmp4_start_time(init_bytes: bytes, seg_bytes: bytes) -> Optional[float
                         if etype == b"elst" and e3 - s3 >= 8:
                             ver = init_bytes[s3]
                             count = struct.unpack_from(">I", init_bytes, s3 + 4)[0]
-                            if count >= 1:
-                                if ver == 1 and e3 - s3 >= 24:
-                                    seg_dur, media_time = struct.unpack_from(">Qq", init_bytes, s3 + 8)
-                                    if media_time == -1:
-                                        elst_offset = seg_dur / movie_ts
-                                elif ver == 0 and e3 - s3 >= 16:
-                                    seg_dur, media_time = struct.unpack_from(">Ii", init_bytes, s3 + 8)
-                                    if media_time == -1:
-                                        elst_offset = seg_dur / movie_ts
+                            entry_fmt = ">Qq" if ver == 1 else ">Ii"
+                            entry_size = 20 if ver == 1 else 12
+                            min_entry = 16 if ver == 1 else 8
+                            p = s3 + 8
+                            elst_empty_s = 0.0
+                            elst_media_time = 0
+                            for _ in range(count):
+                                if p + min_entry > e3:
+                                    break
+                                seg_dur, media_time = struct.unpack_from(entry_fmt, init_bytes, p)
+                                if media_time == -1:
+                                    elst_empty_s += seg_dur / movie_ts
+                                elif media_time >= 0:
+                                    elst_media_time = media_time
+                                    break
+                                else:
+                                    break
+                                p += entry_size
                 elif ctype == b"mdia":
                     for mtype, s3, e3 in _iter_mp4_boxes(init_bytes, s2, e2):
                         if mtype == b"mdhd" and e3 - s3 >= 16:
@@ -659,82 +653,102 @@ def _read_fmp4_start_time(init_bytes: bytes, seg_bytes: bytes) -> Optional[float
                             if off + 4 <= e3:
                                 timescale = struct.unpack_from(">I", init_bytes, off)[0]
             if track_id is not None and timescale and timescale > 0:
-                tracks[track_id] = (timescale, elst_offset)
-    if not tracks:
-        return None
+                tracks[track_id] = (timescale, elst_empty_s, elst_media_time)
 
-    starts: list[float] = []
-    for btype, s0, e0 in _iter_mp4_boxes(seg_bytes):
-        if btype != b"moof":
-            continue
-        for ttype, s1, e1 in _iter_mp4_boxes(seg_bytes, s0, e0):
-            if ttype != b"traf":
+    if tracks:
+        starts: list[float] = []
+        for btype, s0, e0 in _iter_mp4_boxes(seg_bytes):
+            if btype != b"moof":
                 continue
-            track_id = None
-            decode_time: Optional[int] = None
-            default_dur = 0
-            trun_box: Optional[tuple[int, int]] = None
-            for ctype, s2, e2 in _iter_mp4_boxes(seg_bytes, s1, e1):
-                if ctype == b"tfhd" and e2 - s2 >= 8:
-                    flags = (seg_bytes[s2 + 1] << 16) | (seg_bytes[s2 + 2] << 8) | seg_bytes[s2 + 3]
-                    track_id = struct.unpack_from(">I", seg_bytes, s2 + 4)[0]
-                    p = s2 + 8
+            for ttype, s1, e1 in _iter_mp4_boxes(seg_bytes, s0, e0):
+                if ttype != b"traf":
+                    continue
+                track_id = None
+                decode_time: Optional[int] = None
+                default_dur = 0
+                trun_box: Optional[tuple[int, int]] = None
+                for ctype, s2, e2 in _iter_mp4_boxes(seg_bytes, s1, e1):
+                    if ctype == b"tfhd" and e2 - s2 >= 8:
+                        flags = (seg_bytes[s2 + 1] << 16) | (seg_bytes[s2 + 2] << 8) | seg_bytes[s2 + 3]
+                        track_id = struct.unpack_from(">I", seg_bytes, s2 + 4)[0]
+                        p = s2 + 8
+                        if flags & 0x000001:
+                            p += 8
+                        if flags & 0x000002:
+                            p += 4
+                        if (flags & 0x000008) and p + 4 <= e2:
+                            default_dur = struct.unpack_from(">I", seg_bytes, p)[0]
+                    elif ctype == b"tfdt" and e2 - s2 >= 8:
+                        ver = seg_bytes[s2]
+                        if ver == 1 and e2 - s2 >= 12:
+                            decode_time = struct.unpack_from(">Q", seg_bytes, s2 + 4)[0]
+                        elif ver == 0:
+                            decode_time = struct.unpack_from(">I", seg_bytes, s2 + 4)[0]
+                    elif ctype == b"trun" and trun_box is None and e2 - s2 >= 8:
+                        trun_box = (s2, e2)
+                if track_id not in tracks or decode_time is None:
+                    continue
+                ts, elst_empty_s, elst_media_time = tracks[track_id]
+                min_pts = decode_time
+                if trun_box is not None:
+                    ts0, te0 = trun_box
+                    ver = seg_bytes[ts0]
+                    flags = (seg_bytes[ts0 + 1] << 16) | (seg_bytes[ts0 + 2] << 8) | seg_bytes[ts0 + 3]
+                    sample_count = struct.unpack_from(">I", seg_bytes, ts0 + 4)[0]
+                    p = ts0 + 8
                     if flags & 0x000001:
-                        p += 8
-                    if flags & 0x000002:
                         p += 4
-                    if (flags & 0x000008) and p + 4 <= e2:
-                        default_dur = struct.unpack_from(">I", seg_bytes, p)[0]
-                elif ctype == b"tfdt" and e2 - s2 >= 8:
-                    ver = seg_bytes[s2]
-                    if ver == 1 and e2 - s2 >= 12:
-                        decode_time = struct.unpack_from(">Q", seg_bytes, s2 + 4)[0]
-                    elif ver == 0:
-                        decode_time = struct.unpack_from(">I", seg_bytes, s2 + 4)[0]
-                elif ctype == b"trun" and trun_box is None and e2 - s2 >= 8:
-                    trun_box = (s2, e2)
-            if track_id not in tracks or decode_time is None:
-                continue
-            ts, elst_offset = tracks[track_id]
-            min_pts = decode_time
-            if trun_box is not None:
-                ts0, te0 = trun_box
-                ver = seg_bytes[ts0]
-                flags = (seg_bytes[ts0 + 1] << 16) | (seg_bytes[ts0 + 2] << 8) | seg_bytes[ts0 + 3]
-                sample_count = struct.unpack_from(">I", seg_bytes, ts0 + 4)[0]
-                p = ts0 + 8
-                if flags & 0x000001:
-                    p += 4
-                if flags & 0x000004:
-                    p += 4
-                if sample_count > 0 and (flags & 0x000800):
-                    cur_dts = decode_time
-                    best: Optional[int] = None
-                    for _ in range(min(sample_count, 8)):
-                        dur = default_dur
-                        if flags & 0x000100:
+                    if flags & 0x000004:
+                        p += 4
+                    if sample_count > 0 and (flags & 0x000800):
+                        cur_dts = decode_time
+                        best: Optional[int] = None
+                        for _ in range(min(sample_count, 8)):
+                            dur = default_dur
+                            if flags & 0x000100:
+                                if p + 4 > te0:
+                                    break
+                                dur = struct.unpack_from(">I", seg_bytes, p)[0]
+                                p += 4
+                            if flags & 0x000200:
+                                p += 4
+                            if flags & 0x000400:
+                                p += 4
                             if p + 4 > te0:
                                 break
-                            dur = struct.unpack_from(">I", seg_bytes, p)[0]
+                            cto = struct.unpack_from(">i" if ver == 1 else ">I", seg_bytes, p)[0]
                             p += 4
-                        if flags & 0x000200:
-                            p += 4
-                        if flags & 0x000400:
-                            p += 4
-                        if p + 4 > te0:
-                            break
-                        cto = struct.unpack_from(">i" if ver == 1 else ">I", seg_bytes, p)[0]
-                        p += 4
-                        pts = cur_dts + cto
-                        if best is None or pts < best:
-                            best = pts
-                        cur_dts += dur
-                    if best is not None:
-                        min_pts = best
-            starts.append(elst_offset + min_pts / ts)
-        if starts:
+                            pts = cur_dts + cto
+                            if best is None or pts < best:
+                                best = pts
+                            cur_dts += dur
+                        if best is not None:
+                            min_pts = best
+                starts.append(elst_empty_s + (min_pts - elst_media_time) / ts)
+            if starts:
+                return min(starts)
+
+    sidx_starts: list[float] = []
+    for btype, s0, e0 in _iter_mp4_boxes(seg_bytes):
+        if btype == b"sidx" and e0 - s0 >= 16:
+            ver = seg_bytes[s0]
+            ref_id, ts = struct.unpack_from(">II", seg_bytes, s0 + 4)
+            if ts > 0:
+                ept: Optional[int] = None
+                if ver == 1 and e0 - s0 >= 20:
+                    ept = struct.unpack_from(">Q", seg_bytes, s0 + 12)[0]
+                elif ver == 0:
+                    ept = struct.unpack_from(">I", seg_bytes, s0 + 12)[0]
+                if ept is not None:
+                    start_s = ept / ts
+                    if ref_id in tracks:
+                        _track_ts, elst_empty_s, _elst_media_time = tracks[ref_id]
+                        if elst_empty_s > 0 and start_s < elst_empty_s:
+                            start_s += elst_empty_s
+                    sidx_starts.append(start_s)
+        elif btype == b"moof" and sidx_starts:
             break
-    return min(starts) if starts else None
+    return min(sidx_starts) if sidx_starts else None
 
 
 class HlsStream:
